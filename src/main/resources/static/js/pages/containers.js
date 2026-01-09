@@ -8,7 +8,7 @@ import {
     getContainerStats, deployCompose,
     getHostDrift, checkContainerDrift
 } from '../api/docker.js';
-import { listTemplates, getCategories } from '../api/templates.js';
+import { listTemplates, getTemplate, getCategories } from '../api/templates.js';
 import { showToast } from '../components/toast.js';
 import { openModal, closeModal } from '../components/modal.js';
 import { confirmDelete, showConfirm } from '../components/confirm-dialog.js';
@@ -234,6 +234,20 @@ volumes:
 
 // Initialize
 export async function init() {
+    // Check if we were redirected from templates page with a template to use
+    const selectedTemplateId = sessionStorage.getItem('selectedTemplateId');
+    if (selectedTemplateId) {
+        sessionStorage.removeItem('selectedTemplateId');
+        await showCreateView();
+        try {
+            const template = await getTemplate(selectedTemplateId);
+            selectTemplate(template);
+        } catch (e) {
+            showToast('Failed to load template', 'error');
+        }
+        return;
+    }
+
     currentView = 'list';
     await initListView();
 }
