@@ -1121,7 +1121,10 @@ function renderTemplateCard(template) {
     return `
         <div class="template-card" data-template-id="${template.id}">
             <div class="template-card-header">
-                <span class="material-symbols-outlined template-icon">${template.logo || 'apps'}</span>
+                ${template.logo
+                    ? `<img src="${template.logo}" alt="" class="template-logo" onerror="this.style.display='none'">`
+                    : `<span class="material-symbols-outlined template-icon">${isCompose ? 'widgets' : 'deployed_code'}</span>`
+                }
                 <div class="template-card-meta">
                     <span class="template-type ${isCompose ? 'compose' : 'container'}">
                         <span class="material-symbols-outlined">${typeIcon}</span>
