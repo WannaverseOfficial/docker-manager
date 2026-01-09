@@ -1,0 +1,25 @@
+package com.wannaverse.persistence;
+
+public enum Resource {
+    DOCKER_HOSTS,
+    CONTAINERS,
+    IMAGES,
+    VOLUMES,
+    NETWORKS,
+    GIT_REPOS,
+    DEPLOYMENTS,
+    USERS,
+    USER_GROUPS,
+    AUDIT_LOGS,
+    NOTIFICATIONS,
+    DOCKER_OPERATIONS,
+    STATE_SNAPSHOTS,
+    COMPOSE_DEPLOYMENTS,
+    ROLLBACK,
+    IMAGE_POLICIES,
+    REGISTRIES,
+    INGRESS,
+    INGRESS_ROUTES,
+    INGRESS_CERTIFICATES,
+    TEMPLATES
+}

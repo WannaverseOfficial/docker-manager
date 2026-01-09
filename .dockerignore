@@ -1,0 +1,50 @@
+# Git
+.git
+.gitignore
+
+# IDE
+.idea
+*.iml
+.vscode
+*.swp
+*.swo
+
+# Build outputs
+build/
+out/
+target/
+bin/
+
+# Gradle
+.gradle/
+
+# Database
+database/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Git repos (runtime data)
+git-repos/
+
+# Node modules (website development)
+website/node_modules/
+node_modules/
+
+# Logs
+*.log
+logs/
+
+# Documentation
+*.md
+LICENSE
+
+# Docker
+Dockerfile
+docker-compose*.yml
+.dockerignore
+
+# OS files
+.DS_Store
+Thumbs.db

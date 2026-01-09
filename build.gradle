@@ -1,0 +1,56 @@
+plugins {
+    alias(libs.plugins.java)
+    alias(libs.plugins.spotless)
+    alias(libs.plugins.spring.boot)
+    alias(libs.plugins.spring.dependency.management)
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation platform(libs.slf4j.bom)
+    implementation platform(libs.jackson.bom)
+    implementation libs.bundles.jackson
+    implementation libs.spring.openapi
+    implementation libs.spring.boot
+    implementation libs.spring.boot.web
+    implementation libs.spring.boot.jpa
+    implementation libs.spring.boot.validation
+
+    implementation libs.sqlite
+    implementation libs.hibernate.community.dialects
+    implementation libs.bundles.docker
+    implementation libs.bundles.jgit
+    implementation libs.jasypt
+    implementation libs.bundles.jjwt
+    implementation libs.caffeine
+    implementation libs.spring.boot.cache
+    implementation libs.spring.boot.security
+    implementation libs.spring.boot.mail
+    implementation libs.bundles.acme4j
+
+    compileOnly libs.lombok
+    annotationProcessor libs.lombok
+}
+
+spotless {
+    java {
+        importOrder()
+        googleJavaFormat()
+                .aosp()
+                .reflowLongStrings()
+                .formatJavadoc(true)
+                .reorderImports(true)
+                .groupArtifact('com.google.googlejavaformat:google-java-format')
+        trimTrailingWhitespace()
+        leadingTabsToSpaces()
+        endWithNewline()
+    }
+    groovyGradle {
+        trimTrailingWhitespace()
+        leadingTabsToSpaces()
+        endWithNewline()
+    }
+}

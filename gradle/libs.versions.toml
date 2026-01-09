@@ -1,0 +1,63 @@
+[versions]
+springDependencyManagement = "1.1.7"
+springBoot = "4.0.1"
+spotless = "8.1.0"
+slf4j = "2.0.17"
+jackson = "3.0.3"
+springDoc = "3.0.0"
+sqlite = "3.51.0.0"
+hibernateDialects = "6.6.33.Final"
+docker = "3.7.0"
+jgit = "7.2.0.202503040940-r"
+jasypt = "3.0.5"
+jjwt = "0.12.6"
+caffeine = "3.1.8"
+acme4j = "3.5.0"
+
+[libraries]
+spring-boot = { group = "org.springframework.boot", name = "spring-boot-starter" }
+spring-boot-web = { group = "org.springframework.boot", name = "spring-boot-starter-web" }
+spring-boot-jpa = { group = "org.springframework.boot", name = "spring-boot-starter-data-jpa" }
+spring-boot-validation = { group = "org.springframework.boot", name = "spring-boot-starter-validation" }
+spring-openapi = { group = "org.springdoc", name = "springdoc-openapi-starter-webmvc-ui", version.ref = "springDoc" }
+
+sqlite = { group = "org.xerial", name = "sqlite-jdbc", version.ref = "sqlite" }
+hibernate-community-dialects = { group = "org.hibernate.orm", name = "hibernate-community-dialects", version.ref = "hibernateDialects" }
+
+slf4j-bom = { group = "org.slf4j", name = "slf4j-bom", version.ref = "slf4j" }
+
+jackson-bom = { group = "tools.jackson", name = "jackson-bom", version.ref = "jackson" }
+jackson-core = { group = "tools.jackson.core", name = "jackson-core" }
+jackson-databind = { group = "tools.jackson.core", name = "jackson-databind" }
+jackson-annotations = { group = "com.fasterxml.jackson.core", name = "jackson-annotations" }
+lombok = { group = "org.projectlombok", name = "lombok" }
+
+docker-java = { group = "com.github.docker-java", name = "docker-java", version.ref = "docker" }
+docker-java-httpclient = { group = "com.github.docker-java", name = "docker-java-transport-httpclient5", version.ref = "docker" }
+
+jgit = { group = "org.eclipse.jgit", name = "org.eclipse.jgit", version.ref = "jgit" }
+jgit-ssh = { group = "org.eclipse.jgit", name = "org.eclipse.jgit.ssh.apache", version.ref = "jgit" }
+jasypt = { group = "com.github.ulisesbocchio", name = "jasypt-spring-boot-starter", version.ref = "jasypt" }
+
+jjwt-api = { group = "io.jsonwebtoken", name = "jjwt-api", version.ref = "jjwt" }
+jjwt-impl = { group = "io.jsonwebtoken", name = "jjwt-impl", version.ref = "jjwt" }
+jjwt-jackson = { group = "io.jsonwebtoken", name = "jjwt-jackson", version.ref = "jjwt" }
+caffeine = { group = "com.github.ben-manes.caffeine", name = "caffeine", version.ref = "caffeine" }
+spring-boot-cache = { group = "org.springframework.boot", name = "spring-boot-starter-cache" }
+spring-boot-security = { group = "org.springframework.boot", name = "spring-boot-starter-security" }
+spring-boot-mail = { group = "org.springframework.boot", name = "spring-boot-starter-mail" }
+
+acme4j-client = { group = "org.shredzone.acme4j", name = "acme4j-client", version.ref = "acme4j" }
+
+[bundles]
+jackson = ["jackson-annotations", "jackson-core", "jackson-databind"]
+docker = ["docker-java", "docker-java-httpclient"]
+jgit = ["jgit", "jgit-ssh"]
+jjwt = ["jjwt-api", "jjwt-impl", "jjwt-jackson"]
+acme4j = ["acme4j-client"]
+
+[plugins]
+java = { id = "java" }
+spotless = { id = "com.diffplug.spotless", version.ref = "spotless" }
+spring-boot = { id = "org.springframework.boot", version.ref = "springBoot" }
+spring-dependency-management = { id = "io.spring.dependency-management", version.ref = "springDependencyManagement" }

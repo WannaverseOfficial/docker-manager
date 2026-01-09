@@ -1,0 +1,55 @@
+spring:
+  application:
+    name: docker-manager-starter
+
+  datasource:
+    url: jdbc:sqlite:database/data.db?journal_mode=WAL&busy_timeout=30000&synchronous=NORMAL
+    driver-class-name: org.sqlite.JDBC
+    username:
+    password:
+    hikari:
+      maximum-pool-size: 1
+      minimum-idle: 1
+      connection-timeout: 30000
+
+  jpa:
+    database-platform: org.hibernate.community.dialect.SQLiteDialect
+    hibernate.ddl-auto: update
+    properties:
+      hibernate:
+        connection:
+          handling_mode: DELAYED_ACQUISITION_AND_RELEASE_AFTER_TRANSACTION
+
+server:
+  port: 8080
+  tomcat:
+    max-http-form-post-size: 10MB
+    max-swallow-size: 10MB
+
+logging:
+  level:
+    root: ${LOG_LEVEL:INFO}
+    com.wannaverse: ${LOG_LEVEL:TRACE}
+
+app:
+  encryption:
+    key: ${ENCRYPTION_KEY:change-this-in-production-32chars}
+  base-url: ${BASE_URL:http://localhost:8080}
+  cors:
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:8080,http://localhost:63342,http://127.0.0.1:8080,http://127.0.0.1:63342}
+  git:
+    clone-dir: ${GIT_CLONE_DIR:git-repos}
+  jwt:
+    access-secret: ${JWT_ACCESS_SECRET:change-this-access-secret-32chars}
+    refresh-secret: ${JWT_REFRESH_SECRET:change-this-refresh-secret-32chars}
+    access-expiration-ms: ${JWT_ACCESS_EXP:900000}
+    refresh-expiration-ms: ${JWT_REFRESH_EXP:604800000}
+
+docker:
+  health:
+    monitor:
+      enabled: ${DOCKER_HEALTH_MONITOR_ENABLED:true}
+      interval: ${DOCKER_HEALTH_MONITOR_INTERVAL:30000}
+      restart-loop-threshold: ${DOCKER_HEALTH_RESTART_THRESHOLD:3}
+      restart-loop-window: ${DOCKER_HEALTH_RESTART_WINDOW:300000}
+      notification-cooldown: ${DOCKER_HEALTH_NOTIFICATION_COOLDOWN:3600000}
