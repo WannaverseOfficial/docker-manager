@@ -1,6 +1,7 @@
 package com.wannaverse.controllers;
 
 import com.github.dockerjava.api.command.*;
+import com.github.dockerjava.api.exception.NotFoundException;
 import com.github.dockerjava.api.model.*;
 import com.github.dockerjava.api.model.Statistics;
 import com.wannaverse.dto.ComposeDeployRequest;
@@ -264,6 +265,22 @@ public class DockerController {
         // Validate image against policies before creating container
         imagePolicyService.validateImageForContainerCreation(request.getImageName());
 
+        // Pull image if it doesn't exist locally
+        DockerAPI dockerAPI = getDockerAPI(hostId);
+        try {
+            dockerAPI.inspectImage(request.getImageName());
+        } catch (NotFoundException e) {
+            // Image doesn't exist locally, pull it first
+            try {
+                var authConfig = registryService.getAuthConfig(request.getImageName());
+                dockerAPI.pullImage(request.getImageName(), authConfig);
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                throw new ResponseStatusException(
+                        HttpStatus.INTERNAL_SERVER_ERROR, "Image pull was interrupted");
+            }
+        }
+
         DockerOperation operation =
                 trackingService.beginOperation(
                         hostId,
@@ -273,8 +290,7 @@ public class DockerController {
 
         try {
             CreateContainerResponse response =
-                    getDockerAPI(hostId)
-                            .createContainer(
+                    dockerAPI.createContainer(
                                     request.getImageName(),
                                     request.getContainerName(),
                                     request.getEnvironmentVariables(),
