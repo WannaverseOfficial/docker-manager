@@ -16,3 +16,6 @@ The default username is `admin` and the password will be printed to the containe
 ```
 docker logs docker-manager
 ```
+
+Screenshot:
+<img width="1000" alt="image" src="https://github.com/user-attachments/assets/75d668d6-2f5b-495d-bc78-5cda425999a2" />
