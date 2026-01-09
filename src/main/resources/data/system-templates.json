@@ -607,18 +607,6 @@
       "documentation": "https://ghost.org/docs/"
     },
     {
-      "name": "Strapi",
-      "description": "Open-source headless CMS. Manage any content, publish anywhere.",
-      "category": "CMS",
-      "logo": "https://strapi.io/assets/favicon-32x32.png",
-      "type": "CONTAINER",
-      "imageName": "strapi/strapi:latest",
-      "defaultPorts": "1337:1337",
-      "defaultVolumes": "strapi_data:/srv/app",
-      "platform": "linux",
-      "documentation": "https://docs.strapi.io/"
-    },
-    {
       "name": "Watchtower",
       "description": "A container-based solution for automating Docker container base image updates.",
       "category": "Docker Tools",
@@ -677,19 +665,8 @@
       "documentation": "https://httpbin.org/"
     },
     {
-      "name": "MailHog",
-      "description": "Web and API based SMTP testing. Catch and view emails sent from your application.",
-      "category": "Testing",
-      "logo": "https://raw.githubusercontent.com/mailhog/MailHog-UI/master/assets/images/hog.png",
-      "type": "CONTAINER",
-      "imageName": "mailhog/mailhog:latest",
-      "defaultPorts": "1025:1025,8025:8025",
-      "platform": "linux",
-      "documentation": "https://github.com/mailhog/MailHog"
-    },
-    {
       "name": "Mailpit",
-      "description": "Modern alternative to MailHog. Email and SMTP testing tool with API.",
+      "description": "Email and SMTP testing tool with API. Catch and view emails sent from your application.",
       "category": "Testing",
       "logo": "https://raw.githubusercontent.com/axllent/mailpit/develop/server/ui-src/assets/mailpit.svg",
       "type": "CONTAINER",
