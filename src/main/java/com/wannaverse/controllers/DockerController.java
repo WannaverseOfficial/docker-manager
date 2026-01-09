@@ -291,14 +291,14 @@ public class DockerController {
         try {
             CreateContainerResponse response =
                     dockerAPI.createContainer(
-                                    request.getImageName(),
-                                    request.getContainerName(),
-                                    request.getEnvironmentVariables(),
-                                    request.getPortBindings(),
-                                    request.getVolumeBindings(),
-                                    request.getNetworkName(),
-                                    null, // extraHosts
-                                    request.getUser());
+                            request.getImageName(),
+                            request.getContainerName(),
+                            request.getEnvironmentVariables(),
+                            request.getPortBindings(),
+                            request.getVolumeBindings(),
+                            request.getNetworkName(),
+                            null, // extraHosts
+                            request.getUser());
 
             operation.setResourceId(response.getId());
             trackingService.captureContainerState(
