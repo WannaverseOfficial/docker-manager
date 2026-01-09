@@ -1,5 +1,5 @@
 # Build stage
-FROM eclipse-temurin:25-jdk AS builder
+FROM --platform=$BUILDPLATFORM eclipse-temurin:25-jdk AS builder
 
 WORKDIR /app
 
@@ -20,7 +20,7 @@ COPY src/ src/
 RUN ./gradlew build -x test --no-daemon
 
 # Runtime stage
-FROM eclipse-temurin:25-jre
+FROM --platform=$BUILDPLATFORM eclipse-temurin:25-jre
 
 LABEL org.opencontainers.image.title="Docker Manager"
 LABEL org.opencontainers.image.description="A modern web interface for managing Docker containers"

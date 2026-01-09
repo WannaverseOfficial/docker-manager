@@ -10,3 +10,9 @@ docker run -d \
   -v /var/run/docker.sock:/var/run/docker.sock \
   wannaverse/docker-manager
 ```
+
+The default username is `admin` and the password will be printed to the container logs.
+
+```
+docker logs docker-manager
+```
