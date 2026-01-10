@@ -463,6 +463,67 @@ html, body {
     width: 100%;
 }
 
+/* Quick Connect Options */
+.quick-connect-options {
+    display: flex;
+    gap: var(--spacing-md);
+}
+
+.quick-connect-btn {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--spacing-xs);
+    padding: var(--spacing-lg) var(--spacing-md);
+    background: var(--md-sys-color-surface-container-high);
+    border: 2px solid transparent;
+    border-radius: var(--radius-lg);
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.quick-connect-btn:hover {
+    background: var(--md-sys-color-surface-container-highest);
+    border-color: var(--md-sys-color-primary);
+}
+
+.quick-connect-btn .material-symbols-outlined {
+    font-size: 32px;
+    color: var(--md-sys-color-primary);
+}
+
+.quick-connect-label {
+    font-weight: 500;
+    color: var(--md-sys-color-on-surface);
+}
+
+.quick-connect-hint {
+    font-size: 11px;
+    color: var(--md-sys-color-on-surface-variant);
+    font-family: 'JetBrains Mono', monospace;
+}
+
+.divider-text {
+    display: flex;
+    align-items: center;
+    text-align: center;
+    color: var(--md-sys-color-on-surface-variant);
+    font-size: 12px;
+    margin: var(--spacing-sm) 0;
+}
+
+.divider-text::before,
+.divider-text::after {
+    content: '';
+    flex: 1;
+    border-bottom: 1px solid var(--md-sys-color-outline-variant);
+}
+
+.divider-text span {
+    padding: 0 var(--spacing-md);
+}
+
 /* Cards */
 .card {
     background: var(--md-sys-color-surface-container);

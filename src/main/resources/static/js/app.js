@@ -161,6 +161,27 @@ function showSplash() {
 
 // Initialize splash screen
 function initSplash() {
+    // Handle quick connect buttons
+    document.querySelectorAll('.quick-connect-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const url = btn.dataset.url;
+            if (!url) return;
+
+            btn.disabled = true;
+            try {
+                const { addHost } = await import('./api/docker.js');
+                await addHost(url);
+                showToast('Host added successfully', 'success');
+                hideSplash();
+                startApp();
+            } catch (error) {
+                showToast('Failed to connect: ' + error.message, 'error');
+                btn.disabled = false;
+            }
+        });
+    });
+
+    // Handle manual form submission
     const form = document.getElementById('splash-add-host-form');
     form.addEventListener('submit', async (e) => {
         e.preventDefault();
@@ -193,6 +214,13 @@ function updateHostSelector(hosts) {
             <span slot="headline">${host.dockerHostUrl}</span>
         </md-select-option>
     `).join('');
+
+    // Set the value programmatically after rendering (required for md-select)
+    setTimeout(() => {
+        if (state.currentHostId) {
+            select.value = state.currentHostId;
+        }
+    }, 0);
 
     select.addEventListener('change', async () => {
         const newHostId = select.value;

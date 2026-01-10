@@ -133,13 +133,26 @@
                     <div id="hosts-list-container"></div>
                 </div>
                 <div class="add-host-section">
-                    <h3>Add New Host</h3>
+                    <h3>Quick Connect</h3>
+                    <div class="quick-connect-options">
+                        <button type="button" class="quick-connect-btn" data-url="unix:///var/run/docker.sock">
+                            <span class="material-symbols-outlined">home</span>
+                            <span class="quick-connect-label">Local Socket</span>
+                            <span class="quick-connect-hint">unix:///var/run/docker.sock</span>
+                        </button>
+                        <button type="button" class="quick-connect-btn" data-url="tcp://localhost:2375">
+                            <span class="material-symbols-outlined">lan</span>
+                            <span class="quick-connect-label">Local TCP</span>
+                            <span class="quick-connect-hint">tcp://localhost:2375</span>
+                        </button>
+                    </div>
+                    <div class="divider-text"><span>or enter manually</span></div>
                     <form id="splash-add-host-form">
                         <md-filled-text-field
                             id="splash-host-url"
                             label="Docker Host URL"
                             type="text"
-                            placeholder="tcp://localhost:2375"
+                            placeholder="tcp://192.168.1.100:2375"
                             required>
                         </md-filled-text-field>
                         <md-filled-button type="submit" class="full-width">
