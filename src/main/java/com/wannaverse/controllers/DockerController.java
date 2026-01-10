@@ -32,12 +32,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 
 @RestController
 @RequestMapping("/api/docker")
@@ -901,17 +896,22 @@ public class DockerController {
         DockerAPI api = getDockerAPI(hostId);
         List<Container> runningContainers = api.listRunningContainers();
 
-        List<ContainerStatsResponse> statsList = new ArrayList<>();
-        for (Container container : runningContainers) {
-            try {
-                Statistics stats = api.getContainerStats(container.getId());
-                if (stats != null) {
-                    statsList.add(buildContainerStatsResponse(container, stats));
-                }
-            } catch (Exception e) {
-                // Skip containers that fail to get stats
-            }
-        }
+        List<ContainerStatsResponse> statsList =
+                runningContainers.parallelStream()
+                        .map(
+                                container -> {
+                                    try {
+                                        Statistics stats = api.getContainerStats(container.getId());
+                                        if (stats != null) {
+                                            return buildContainerStatsResponse(container, stats);
+                                        }
+                                    } catch (Exception e) {
+                                        // Skip containers that fail to get stats
+                                    }
+                                    return null;
+                                })
+                        .filter(Objects::nonNull)
+                        .toList();
 
         return ResponseEntity.ok(statsList);
     }

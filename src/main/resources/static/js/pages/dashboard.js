@@ -208,24 +208,22 @@ async function loadDashboardData() {
     }
 
     try {
-        // Load all data in parallel
-        const [stats, hostInfo, containerStats] = await Promise.all([
+        // Load basic stats and host info first (fast)
+        const [stats, hostInfo] = await Promise.all([
             getDashboardStats(state.currentHostId),
             getHostInfo(state.currentHostId).catch(() => null),
-            getContainerStats(state.currentHostId).catch(() => []),
         ]);
 
         // Check if we're still on the dashboard (user may have navigated away)
         if (!document.getElementById('stat-containers')) return;
 
+        // Render immediately with basic data
         updateStats(stats);
         renderHostInfo(hostInfo);
-        renderRecentContainers(stats.containers, containerStats);
+        renderRecentContainers(stats.containers, []);
 
-        // Initial chart update
-        if (containerStats && containerStats.length > 0) {
-            previousStats = updateCharts(containerStats, previousStats);
-        }
+        // Load container stats asynchronously (slow - don't block initial render)
+        loadContainerStatsAsync(stats.containers);
     } catch (error) {
         // Only show error if we're still on the dashboard
         if (document.getElementById('stat-containers')) {
@@ -233,6 +231,28 @@ async function loadDashboardData() {
             showToast('Failed to load dashboard data', 'error');
             showEmptyState();
         }
+    }
+}
+
+// Load container stats asynchronously and update UI
+async function loadContainerStatsAsync(containers) {
+    try {
+        const containerStats = await getContainerStats(state.currentHostId);
+
+        // Check if we're still on the dashboard
+        if (!document.getElementById('stat-containers')) return;
+
+        // Update recent containers table with stats
+        if (containers) {
+            renderRecentContainers(containers, containerStats);
+        }
+
+        // Update charts
+        if (containerStats && containerStats.length > 0) {
+            previousStats = updateCharts(containerStats, previousStats);
+        }
+    } catch (error) {
+        console.error('Failed to load container stats:', error);
     }
 }
 

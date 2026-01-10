@@ -357,7 +357,7 @@ public class DockerAPI {
                                     result[0] = stats;
                                 }
                             })
-                    .awaitCompletion(10, TimeUnit.SECONDS);
+                    .awaitCompletion(5, TimeUnit.SECONDS);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
