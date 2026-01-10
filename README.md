@@ -79,7 +79,54 @@ No paid tiers. No hidden costs. Just Docker management done right.
 
 ## 🚀 Running Wannaverse Docker Manager
 
-With Docker installed, run:
+The recommended approach is using a `docker-compose.yml`
+
+Please ensure to change the SECRETS in the file. To generate values you can run the command:
+
+```
+openssl rand -base64 48 | tr -dc 'A-Za-z0-9!@#$%^&*()_+-=' | head -c 32 ; echo
+```
+
+docker-compose.yml
+```
+services:
+  docker-manager:
+    image: wannaverse/docker-manager:latest
+    container_name: docker-manager
+    pull_policy: always
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      # Mount Docker socket for container management
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Persist database
+      - docker_manager_data:/app/database
+      # Persist git repositories
+      - docker_manager_repos:/app/git-repos
+    environment:
+      # Java options
+      - JAVA_OPTS=-Xms256m -Xmx512m
+      # Security - CHANGE THESE IN PRODUCTION
+      - JWT_ACCESS_SECRET=bI4pEE+5oVq9gkWyy/plIsRvaZ8ghj54access
+      - JWT_REFRESH_SECRET=bI4pEE+5oVq9gkWyy/plIsRvaZ8ghj54refresh
+      - ENCRYPTION_KEY=bI4pEE+5oVq9gkWyy/plIsRvaZ8ghj54
+      # Optional: Increase token expiration
+      # - JWT_ACCESS_EXP=900000
+      # - JWT_REFRESH_EXP=604800000
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/auth/login"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  docker_manager_data:
+  docker_manager_repos:
+```
+
+Alternatively, for testing, run:
 ```
 docker run -d \
   -p 8080:8080 \

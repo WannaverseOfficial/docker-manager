@@ -121,13 +121,19 @@ public class NginxConfigGenerator {
             IngressConfig config) {
         StringBuilder sb = new StringBuilder();
 
-        // Check if any route needs HTTPS
+        // Check if any route needs HTTPS AND we have a valid certificate
+        // Without a valid cert, serve HTTP and allow ACME challenge to complete first
+        boolean hasCert =
+                cert != null
+                        && cert.getStatus() == IngressCertificate.CertificateStatus.ACTIVE;
         boolean hasHttps =
-                routes.stream()
-                        .anyMatch(
-                                r ->
-                                        r.getProtocol() == IngressRoute.Protocol.HTTPS
-                                                && r.getTlsMode() != IngressRoute.TlsMode.NONE);
+                hasCert
+                        && routes.stream()
+                                .anyMatch(
+                                        r ->
+                                                r.getProtocol() == IngressRoute.Protocol.HTTPS
+                                                        && r.getTlsMode()
+                                                                != IngressRoute.TlsMode.NONE);
 
         // HTTP server block
         sb.append(
