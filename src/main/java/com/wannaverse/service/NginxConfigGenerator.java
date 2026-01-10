@@ -124,8 +124,7 @@ public class NginxConfigGenerator {
         // Check if any route needs HTTPS AND we have a valid certificate
         // Without a valid cert, serve HTTP and allow ACME challenge to complete first
         boolean hasCert =
-                cert != null
-                        && cert.getStatus() == IngressCertificate.CertificateStatus.ACTIVE;
+                cert != null && cert.getStatus() == IngressCertificate.CertificateStatus.ACTIVE;
         boolean hasHttps =
                 hasCert
                         && routes.stream()

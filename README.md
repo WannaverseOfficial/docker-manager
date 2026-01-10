@@ -114,6 +114,8 @@ services:
       # Optional: Increase token expiration
       # - JWT_ACCESS_EXP=900000
       # - JWT_REFRESH_EXP=604800000
+      # Public URL for webhooks - set to your public domain
+      - BASE_URL=http://your-domain.com
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/api/auth/login"]
       interval: 30s
