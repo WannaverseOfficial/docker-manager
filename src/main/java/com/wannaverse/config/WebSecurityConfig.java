@@ -27,7 +27,7 @@ public class WebSecurityConfig {
 
     private final JwtService jwtService;
 
-    @Value("${app.cors.allowed-origins:http://localhost:8080}")
+    @Value("${app.cors.allowed-origins:*}")
     private String allowedOrigins;
 
     public WebSecurityConfig(JwtService jwtService) {
@@ -85,7 +85,14 @@ public class WebSecurityConfig {
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration configuration = new CorsConfiguration();
-        configuration.setAllowedOrigins(Arrays.asList(allowedOrigins.split(",")));
+
+        // Use allowedOriginPatterns for wildcard support with credentials
+        if ("*".equals(allowedOrigins.trim())) {
+            configuration.setAllowedOriginPatterns(List.of("*"));
+        } else {
+            configuration.setAllowedOriginPatterns(Arrays.asList(allowedOrigins.split(",")));
+        }
+
         configuration.setAllowedMethods(
                 Arrays.asList("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
         configuration.setAllowedHeaders(List.of("*"));
