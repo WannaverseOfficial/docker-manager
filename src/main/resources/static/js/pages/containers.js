@@ -352,14 +352,23 @@ async function loadData() {
     }
 
     try {
-        // Fetch containers, stats, and drift status in parallel
-        const [containerList, stats, drift] = await Promise.all([
-            listContainers(state.currentHostId, true),
+        containers = await listContainers(state.currentHostId, true);
+        renderContainersTable();
+
+        // Load stats and drift asynchronously (don't block initial render)
+        loadStatsAndDrift();
+    } catch (error) {
+        console.error('Failed to load containers:', error);
+        showToast('Failed to load containers', 'error');
+    }
+}
+
+async function loadStatsAndDrift() {
+    try {
+        const [stats, drift] = await Promise.all([
             getContainerStats(state.currentHostId).catch(() => []),
             getHostDrift(state.currentHostId).catch(() => [])
         ]);
-
-        containers = containerList;
 
         // Build stats map for quick lookup
         containerStats.clear();
@@ -369,10 +378,12 @@ async function loadData() {
         containerDrift.clear();
         drift.forEach(d => containerDrift.set(d.containerId, d));
 
-        renderContainersTable();
+        // Re-render table with stats and drift data
+        if (currentView === 'list') {
+            renderContainersTable();
+        }
     } catch (error) {
-        console.error('Failed to load containers:', error);
-        showToast('Failed to load containers', 'error');
+        console.error('Failed to load stats/drift:', error);
     }
 }
 
