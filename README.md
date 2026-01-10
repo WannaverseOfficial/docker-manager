@@ -1,4 +1,4 @@
-<img alt="Wannaverse Logo" src="logo.png" width="288"/>
+<img width="288" alt="wannaverse logo" src="https://github.com/user-attachments/assets/7623d002-539b-42cb-b794-645b9fac471f" />
 
 # Wannaverse Docker Manager
 Wannaverse Docker Manager is a free, open-source, self-hosted web interface for managing Docker environments.
