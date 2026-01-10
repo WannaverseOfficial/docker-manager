@@ -1,7 +1,7 @@
 // Docker Registries API Module
 import { apiCall } from './client.js';
 
-const REGISTRIES_API = 'http://localhost:8080/api/registries';
+const REGISTRIES_API = '/api/registries';
 
 // Get all registries
 export async function listRegistries() {

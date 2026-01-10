@@ -1,7 +1,7 @@
 // Container Health API Module
 import { apiCall } from './client.js';
 
-const CONTAINER_HEALTH_API = 'http://localhost:8080/api/container-health';
+const CONTAINER_HEALTH_API = '/api/container-health';
 
 // Get all active issues across all hosts
 export async function getActiveIssues() {

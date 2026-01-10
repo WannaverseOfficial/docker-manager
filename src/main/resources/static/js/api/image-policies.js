@@ -1,7 +1,7 @@
 // Image Policies API Module
 import { apiCall } from './client.js';
 
-const IMAGE_POLICIES_API = 'http://localhost:8080/api/image-policies';
+const IMAGE_POLICIES_API = '/api/image-policies';
 
 // Get all policies
 export async function listPolicies() {
