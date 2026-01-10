@@ -15,10 +15,16 @@ import { truncate } from '../utils/format.js';
 
 let repositories = [];
 let jobs = [];
+let hosts = [];
 let currentEventSource = null;
+let currentView = 'list'; // 'list' or 'add'
 
 // Render page
 export function render() {
+    return `<div id="git-repos-page">${renderListView()}</div>`;
+}
+
+function renderListView() {
     return `
         <md-tabs id="git-tabs">
             <md-primary-tab id="tab-repos" aria-controls="panel-repos">Repositories</md-primary-tab>
@@ -57,8 +63,131 @@ export function render() {
     `;
 }
 
+function renderAddRepoView() {
+    const hostOptions = hosts.map(h =>
+        `<md-select-option value="${h.id}">${h.dockerHostUrl}</md-select-option>`
+    ).join('');
+
+    return `
+        <div class="section-header">
+            <div class="section-header-left">
+                <md-icon-button id="back-to-list-btn" title="Back to repositories">
+                    <span class="material-symbols-outlined">arrow_back</span>
+                </md-icon-button>
+                <h2 class="section-title">Add Repository</h2>
+            </div>
+        </div>
+
+        <div class="create-container-page">
+            <div class="create-content">
+                <div class="card" style="max-width: 800px;">
+                    <div class="card-header">
+                        <span class="card-title">Repository Configuration</span>
+                    </div>
+                    <div class="card-content">
+                        <form id="add-repo-form" class="create-form">
+                            <div class="form-row two-col">
+                                <div class="form-field">
+                                    <md-filled-text-field id="repo-name" label="Name *" required style="width: 100%;"></md-filled-text-field>
+                                    <span class="form-hint">A friendly name for this repository</span>
+                                </div>
+                                <div class="form-field">
+                                    <md-filled-text-field id="repo-branch" label="Branch" value="main" style="width: 100%;"></md-filled-text-field>
+                                    <span class="form-hint">Branch to deploy from</span>
+                                </div>
+                            </div>
+
+                            <div class="form-row">
+                                <div class="form-field">
+                                    <md-filled-text-field id="repo-url" label="Repository URL *" placeholder="https://github.com/user/repo.git" required style="width: 100%;"></md-filled-text-field>
+                                    <span class="form-hint">HTTPS or SSH URL to the Git repository</span>
+                                </div>
+                            </div>
+
+                            <div class="form-row two-col">
+                                <div class="form-field">
+                                    <md-filled-select id="repo-auth" label="Authentication" style="width: 100%;">
+                                        <md-select-option value="NONE" selected>None (Public)</md-select-option>
+                                        <md-select-option value="PAT">Personal Access Token</md-select-option>
+                                        <md-select-option value="SSH_KEY">SSH Key</md-select-option>
+                                    </md-filled-select>
+                                    <span class="form-hint">Authentication method for private repos</span>
+                                </div>
+                                <div class="form-field" id="token-field-container" style="display: none;">
+                                    <md-filled-text-field id="repo-token" label="Access Token" type="password" style="width: 100%;"></md-filled-text-field>
+                                    <span class="form-hint">Personal access token or deploy key</span>
+                                </div>
+                            </div>
+
+                            <div class="form-row two-col">
+                                <div class="form-field">
+                                    <md-filled-select id="repo-deploy-type" label="Deployment Type" style="width: 100%;">
+                                        <md-select-option value="DOCKER_COMPOSE" selected>Docker Compose</md-select-option>
+                                        <md-select-option value="DOCKERFILE">Dockerfile</md-select-option>
+                                    </md-filled-select>
+                                    <span class="form-hint">How to deploy this repository</span>
+                                </div>
+                                <div class="form-field">
+                                    <md-filled-text-field id="repo-compose-path" label="Compose File Path" value="docker-compose.yml" style="width: 100%;"></md-filled-text-field>
+                                    <span class="form-hint">Path to docker-compose.yml in repo</span>
+                                </div>
+                            </div>
+
+                            <div class="form-row">
+                                <div class="form-field">
+                                    <md-filled-select id="repo-host" label="Docker Host *" required style="width: 100%;">
+                                        ${hostOptions}
+                                    </md-filled-select>
+                                    <span class="form-hint">Target Docker host for deployment</span>
+                                </div>
+                            </div>
+
+                            <div class="form-row">
+                                <div class="form-field">
+                                    <div class="checkbox-group">
+                                        <label class="checkbox-label">
+                                            <md-checkbox id="repo-webhook"></md-checkbox>
+                                            <span>Enable Webhook</span>
+                                        </label>
+                                        <span class="form-hint">Receive push events from Git provider</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="form-row">
+                                <div class="form-field">
+                                    <div class="checkbox-group">
+                                        <label class="checkbox-label">
+                                            <md-checkbox id="repo-polling"></md-checkbox>
+                                            <span>Enable Polling</span>
+                                        </label>
+                                        <span class="form-hint">Periodically check for new commits</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="form-actions">
+                                <md-outlined-button type="button" id="cancel-add-btn">Cancel</md-outlined-button>
+                                <md-filled-button type="submit" id="submit-repo-btn">
+                                    <span class="material-symbols-outlined" slot="icon">add</span>
+                                    Add Repository
+                                </md-filled-button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
 // Initialize
 export async function init() {
+    currentView = 'list';
+    await initListView();
+}
+
+async function initListView() {
     // Setup tabs
     const tabs = document.getElementById('git-tabs');
     tabs?.addEventListener('change', () => {
@@ -67,7 +196,7 @@ export async function init() {
         document.getElementById('panel-jobs').classList.toggle('hidden', activeTab !== 1);
     });
 
-    document.getElementById('add-repo-btn')?.addEventListener('click', showAddRepoModal);
+    document.getElementById('add-repo-btn')?.addEventListener('click', showAddRepoView);
 
     setupTableActions('repos-table', {
         deploy: handleDeploy,
@@ -84,6 +213,51 @@ export async function init() {
     });
 
     await loadData();
+}
+
+async function showAddRepoView() {
+    currentView = 'add';
+
+    // Pre-fetch hosts
+    try {
+        hosts = await loadHosts();
+    } catch (e) {
+        hosts = [];
+    }
+
+    const page = document.getElementById('git-repos-page');
+    page.innerHTML = renderAddRepoView();
+
+    setupAddRepoListeners();
+}
+
+function showListView() {
+    currentView = 'list';
+    const page = document.getElementById('git-repos-page');
+    page.innerHTML = renderListView();
+    initListView();
+}
+
+function setupAddRepoListeners() {
+    document.getElementById('back-to-list-btn')?.addEventListener('click', showListView);
+    document.getElementById('cancel-add-btn')?.addEventListener('click', showListView);
+
+    document.getElementById('repo-auth')?.addEventListener('change', (e) => {
+        const tokenContainer = document.getElementById('token-field-container');
+        if (tokenContainer) {
+            tokenContainer.style.display = e.target.value === 'PAT' ? '' : 'none';
+        }
+    });
+
+    document.getElementById('add-repo-form')?.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        await handleAddRepo();
+    });
+
+    document.getElementById('submit-repo-btn')?.addEventListener('click', async (e) => {
+        e.preventDefault();
+        await handleAddRepo();
+    });
 }
 
 // Load data
@@ -175,60 +349,6 @@ function renderJobsTable() {
     });
 }
 
-// Show add repo modal
-async function showAddRepoModal() {
-    const hosts = await loadHosts();
-    const hostOptions = hosts.map(h =>
-        `<md-select-option value="${h.id}">${h.dockerHostUrl}</md-select-option>`
-    ).join('');
-
-    const content = `
-        <form id="add-repo-form" class="dialog-form">
-            <md-filled-text-field id="repo-name" label="Name" required></md-filled-text-field>
-            <md-filled-text-field id="repo-url" label="Repository URL" placeholder="https://github.com/user/repo.git" required></md-filled-text-field>
-            <md-filled-text-field id="repo-branch" label="Branch" value="main"></md-filled-text-field>
-
-            <md-filled-select id="repo-auth" label="Authentication">
-                <md-select-option value="NONE" selected>None (Public)</md-select-option>
-                <md-select-option value="PAT">Personal Access Token</md-select-option>
-                <md-select-option value="SSH_KEY">SSH Key</md-select-option>
-            </md-filled-select>
-
-            <md-filled-text-field id="repo-token" label="Access Token" type="password" class="hidden"></md-filled-text-field>
-
-            <md-filled-select id="repo-deploy-type" label="Deployment Type">
-                <md-select-option value="DOCKER_COMPOSE" selected>Docker Compose</md-select-option>
-                <md-select-option value="DOCKERFILE">Dockerfile</md-select-option>
-            </md-filled-select>
-
-            <md-filled-text-field id="repo-compose-path" label="Compose File Path" value="docker-compose.yml"></md-filled-text-field>
-
-            <md-filled-select id="repo-host" label="Docker Host" required>
-                ${hostOptions}
-            </md-filled-select>
-
-            <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 8px;">
-                <label><md-checkbox id="repo-webhook"></md-checkbox> Enable Webhook</label>
-                <label><md-checkbox id="repo-polling"></md-checkbox> Enable Polling</label>
-            </div>
-        </form>
-    `;
-
-    openModal('Add Repository', content, `
-        <md-text-button onclick="document.getElementById('app-dialog').close()">Cancel</md-text-button>
-        <md-filled-button id="add-repo-submit">Add</md-filled-button>
-    `);
-
-    setTimeout(() => {
-        document.getElementById('repo-auth')?.addEventListener('change', (e) => {
-            const tokenField = document.getElementById('repo-token');
-            tokenField.classList.toggle('hidden', e.target.value !== 'PAT');
-        });
-
-        document.getElementById('add-repo-submit')?.addEventListener('click', handleAddRepo);
-    }, 100);
-}
-
 // Handle add repo
 async function handleAddRepo() {
     const data = {
@@ -252,14 +372,14 @@ async function handleAddRepo() {
 
     try {
         const result = await createRepository(data);
-        closeModal();
         showToast('Repository added', 'success');
 
         if (data.webhookEnabled && result.webhookUrl) {
+            showListView();
             showWebhookInfo(result.webhookUrl);
+        } else {
+            showListView();
         }
-
-        await loadData();
     } catch (error) {
         showToast('Failed: ' + error.message, 'error');
     }
@@ -500,4 +620,6 @@ export function cleanup() {
     }
     repositories = [];
     jobs = [];
+    hosts = [];
+    currentView = 'list';
 }
