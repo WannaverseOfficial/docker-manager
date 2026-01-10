@@ -149,6 +149,7 @@ public class IngressService {
         config.setStatus(IngressStatus.ENABLING);
         config.setHttpPort(request.httpPort());
         config.setHttpsPort(request.httpsPort());
+        config.setAcmeProxyPort(request.acmeProxyPort());
         config.setAcmeEmail(request.acmeEmail());
         config.setAcmeEnabled(request.acmeEmail() != null && !request.acmeEmail().isEmpty());
         config.setAcmeDirectoryUrl(
@@ -980,10 +981,11 @@ public class IngressService {
     // ========== DTOs ==========
 
     public record EnableIngressRequest(
-            int httpPort, int httpsPort, String acmeEmail, boolean useStaging) {
+            int httpPort, int httpsPort, int acmeProxyPort, String acmeEmail, boolean useStaging) {
         public EnableIngressRequest {
             if (httpPort <= 0) httpPort = 80;
             if (httpsPort <= 0) httpsPort = 443;
+            if (acmeProxyPort <= 0) acmeProxyPort = 8080;
         }
     }
 

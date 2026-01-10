@@ -39,6 +39,11 @@ public class IngressConfig {
     @Column(nullable = false)
     private int httpsPort = 443;
 
+    // Port where the Docker Manager app is accessible from within Docker containers
+    // Used by nginx to proxy ACME challenges back to the app
+    @Column(nullable = false)
+    private int acmeProxyPort = 8080;
+
     // ACME/Let's Encrypt settings (user must explicitly configure)
     private String acmeEmail;
 

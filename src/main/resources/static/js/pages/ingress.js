@@ -744,6 +744,7 @@ async function showEnableDialog() {
         const preview = await ingressApi.previewEnableIngress(hostId, {
             httpPort: 80,
             httpsPort: 443,
+            acmeProxyPort: 8080,
             acmeEmail: null,
             useStaging: false,
         });
@@ -792,6 +793,14 @@ async function showEnableDialog() {
                     placeholder="admin@example.com"
                     supporting-text="Required for Let's Encrypt certificates">
                 </md-filled-text-field>
+
+                <md-filled-text-field
+                    id="acme-proxy-port"
+                    label="App Port (for Docker deployments)"
+                    type="number"
+                    value="8080"
+                    supporting-text="Port where this app is accessible on the host (e.g., 4001 if using 4001:8080 mapping)">
+                </md-filled-text-field>
             </div>
         `;
         dialog.querySelector('.dialog-actions').innerHTML = `
@@ -803,15 +812,16 @@ async function showEnableDialog() {
 
         document.getElementById('confirm-enable-btn')?.addEventListener('click', async () => {
             const acmeEmail = document.getElementById('acme-email')?.value || null;
+            const acmeProxyPort = parseInt(document.getElementById('acme-proxy-port')?.value) || 8080;
             dialog.close();
-            await handleEnableIngress(acmeEmail);
+            await handleEnableIngress(acmeEmail, acmeProxyPort);
         });
     } catch (error) {
         showToast(`Failed to preview: ${error.message}`, 'error');
     }
 }
 
-async function handleEnableIngress(acmeEmail) {
+async function handleEnableIngress(acmeEmail, acmeProxyPort = 8080) {
     const hostId = state.currentHostId;
 
     try {
@@ -820,6 +830,7 @@ async function handleEnableIngress(acmeEmail) {
         await ingressApi.enableIngress(hostId, {
             httpPort: 80,
             httpsPort: 443,
+            acmeProxyPort: acmeProxyPort,
             acmeEmail: acmeEmail,
             useStaging: false,
         });

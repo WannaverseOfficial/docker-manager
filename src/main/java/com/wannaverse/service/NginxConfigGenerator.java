@@ -97,7 +97,7 @@ public class NginxConfigGenerator {
                 server_name _;
 
                 location /.well-known/acme-challenge/ {
-                    proxy_pass http://host.docker.internal:8080/api/ingress/acme/;
+                    proxy_pass http://host.docker.internal:%d/api/ingress/acme/;
                     proxy_set_header Host $host;
                 }
 
@@ -109,7 +109,8 @@ public class NginxConfigGenerator {
                 .formatted(
                         DATE_FORMATTER.format(Instant.now()),
                         config.getDockerHostId(),
-                        config.getHttpPort());
+                        config.getHttpPort(),
+                        config.getAcmeProxyPort());
     }
 
     /** Generate server block for a hostname with its routes. */
@@ -144,10 +145,11 @@ public class NginxConfigGenerator {
                 """
 
                         location /.well-known/acme-challenge/ {
-                            proxy_pass http://host.docker.internal:8080/api/ingress/acme/;
+                            proxy_pass http://host.docker.internal:%d/api/ingress/acme/;
                             proxy_set_header Host $host;
                         }
-                """);
+                """
+                        .formatted(config.getAcmeProxyPort()));
 
         if (hasHttps) {
             // Redirect HTTP to HTTPS
