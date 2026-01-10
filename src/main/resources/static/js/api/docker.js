@@ -109,6 +109,10 @@ export async function getContainerHealth(hostId, containerId) {
     return normalizeKeys(data);
 }
 
+export async function getContainerLogs(hostId, containerId, tail = 500, timestamps = false) {
+    return dockerApi(`/hosts/${hostId}/containers/${containerId}/logs?tail=${tail}&timestamps=${timestamps}`);
+}
+
 export async function checkContainerRoot(hostId, containerId) {
     return dockerApi(`/hosts/${hostId}/containers/${containerId}/security/root`);
 }

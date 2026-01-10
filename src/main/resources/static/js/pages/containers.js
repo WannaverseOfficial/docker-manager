@@ -5,7 +5,7 @@ import {
     pauseContainer, unpauseContainer, removeContainer, getContainer,
     execContainer, listNetworks, listImages,
     getContainerHealth, checkContainerRoot, checkContainerPrivileged,
-    getContainerStats, deployCompose,
+    getContainerLogs, getContainerStats, deployCompose,
     getHostDrift, checkContainerDrift
 } from '../api/docker.js';
 import { listTemplates, getTemplate, getCategories } from '../api/templates.js';
@@ -944,6 +944,7 @@ async function showDetailsModal(id) {
                 <button class="details-tab active" data-tab="general">General</button>
                 <button class="details-tab" data-tab="network">Network</button>
                 <button class="details-tab" data-tab="security">Security</button>
+                <button class="details-tab" data-tab="logs">Logs</button>
             </div>
 
             <div class="details-panel" id="panel-general">
@@ -998,11 +999,70 @@ async function showDetailsModal(id) {
                     <span class="info-value">${user}</span>
                 </div>
             </div>
+
+            <div class="details-panel hidden" id="panel-logs">
+                <div class="logs-toolbar">
+                    <div class="logs-options">
+                        <md-filled-select id="logs-tail-select" style="width: 140px;">
+                            <md-select-option value="100">Last 100 lines</md-select-option>
+                            <md-select-option value="500" selected>Last 500 lines</md-select-option>
+                            <md-select-option value="1000">Last 1000 lines</md-select-option>
+                            <md-select-option value="5000">Last 5000 lines</md-select-option>
+                        </md-filled-select>
+                        <label class="checkbox-label" style="display: flex; align-items: center; gap: 4px;">
+                            <md-checkbox id="logs-timestamps"></md-checkbox>
+                            <span>Timestamps</span>
+                        </label>
+                    </div>
+                    <div class="logs-actions">
+                        <md-text-button id="logs-refresh-btn">
+                            <span class="material-symbols-outlined" slot="icon">refresh</span>
+                            Refresh
+                        </md-text-button>
+                        <md-text-button id="logs-tail-btn">
+                            <span class="material-symbols-outlined" slot="icon">vertical_align_bottom</span>
+                            <span id="tail-btn-text">Auto-scroll: Off</span>
+                        </md-text-button>
+                        <md-text-button id="logs-expand-btn" title="Open in full page">
+                            <span class="material-symbols-outlined" slot="icon">open_in_full</span>
+                            Expand
+                        </md-text-button>
+                    </div>
+                </div>
+                <div id="container-logs" class="terminal" style="min-height: 300px; max-height: 400px;">
+                    <span class="loading-text">Click "Refresh" to load logs...</span>
+                </div>
+            </div>
         `;
 
         openModal('Container Details', content, `
             <md-filled-button onclick="document.getElementById('app-dialog').close()">Close</md-filled-button>
         `);
+
+        let logsAutoRefresh = null;
+        let autoScroll = false;
+
+        const loadLogs = async () => {
+            const logsContainer = document.getElementById('container-logs');
+            const tailSelect = document.getElementById('logs-tail-select');
+            const timestampsCheck = document.getElementById('logs-timestamps');
+
+            if (!logsContainer) return;
+
+            logsContainer.innerHTML = '<span class="loading-text">Loading logs...</span>';
+
+            try {
+                const tail = tailSelect?.value || 500;
+                const timestamps = timestampsCheck?.checked || false;
+                const result = await getContainerLogs(state.currentHostId, containerId, tail, timestamps);
+                logsContainer.textContent = result.logs || '(no logs available)';
+                if (autoScroll) {
+                    logsContainer.scrollTop = logsContainer.scrollHeight;
+                }
+            } catch (e) {
+                logsContainer.textContent = 'Failed to load logs: ' + e.message;
+            }
+        };
 
         // Setup tab switching
         setTimeout(() => {
@@ -1012,14 +1072,176 @@ async function showDetailsModal(id) {
                     document.querySelectorAll('.details-panel').forEach(p => p.classList.add('hidden'));
                     tab.classList.add('active');
                     document.getElementById(`panel-${tab.dataset.tab}`).classList.remove('hidden');
+
+                    // Auto-load logs when switching to logs tab
+                    if (tab.dataset.tab === 'logs') {
+                        const logsContainer = document.getElementById('container-logs');
+                        if (logsContainer?.querySelector('.loading-text')) {
+                            loadLogs();
+                        }
+                    }
                 });
             });
+
+            // Refresh button
+            document.getElementById('logs-refresh-btn')?.addEventListener('click', loadLogs);
+
+            // Auto-scroll toggle
+            document.getElementById('logs-tail-btn')?.addEventListener('click', () => {
+                autoScroll = !autoScroll;
+                const btnText = document.getElementById('tail-btn-text');
+                if (btnText) {
+                    btnText.textContent = autoScroll ? 'Auto-scroll: On' : 'Auto-scroll: Off';
+                }
+
+                if (autoScroll) {
+                    // Start auto-refresh every 3 seconds
+                    logsAutoRefresh = setInterval(loadLogs, 3000);
+                    loadLogs();
+                } else {
+                    // Stop auto-refresh
+                    if (logsAutoRefresh) {
+                        clearInterval(logsAutoRefresh);
+                        logsAutoRefresh = null;
+                    }
+                }
+            });
+
+            // Expand button - open full page logs view
+            document.getElementById('logs-expand-btn')?.addEventListener('click', () => {
+                if (logsAutoRefresh) {
+                    clearInterval(logsAutoRefresh);
+                    logsAutoRefresh = null;
+                }
+                closeModal();
+                showLogsView(containerId, containerName);
+            });
+
+            // Cleanup on modal close
+            const dialog = document.getElementById('app-dialog');
+            dialog?.addEventListener('close', () => {
+                if (logsAutoRefresh) {
+                    clearInterval(logsAutoRefresh);
+                    logsAutoRefresh = null;
+                }
+            }, { once: true });
         }, 50);
 
     } catch (e) {
         console.error('Failed to load container details:', e);
         showToast('Failed to load details', 'error');
     }
+}
+
+// Full-page logs view
+let logsViewAutoRefresh = null;
+
+function showLogsView(containerId, containerName) {
+    currentView = 'logs';
+
+    const page = document.getElementById('containers-page');
+    page.innerHTML = `
+        <div class="section-header">
+            <div class="section-header-left">
+                <md-icon-button id="back-to-list-btn" title="Back to containers">
+                    <span class="material-symbols-outlined">arrow_back</span>
+                </md-icon-button>
+                <h2 class="section-title">Logs: ${containerName}</h2>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header">
+                <span class="card-title">Container Logs</span>
+            </div>
+            <div class="card-content">
+                <div class="logs-toolbar">
+                    <div class="logs-options">
+                        <md-filled-select id="logs-tail-select" style="width: 160px;">
+                            <md-select-option value="100">Last 100 lines</md-select-option>
+                            <md-select-option value="500">Last 500 lines</md-select-option>
+                            <md-select-option value="1000" selected>Last 1000 lines</md-select-option>
+                            <md-select-option value="5000">Last 5000 lines</md-select-option>
+                            <md-select-option value="10000">Last 10000 lines</md-select-option>
+                        </md-filled-select>
+                        <label class="checkbox-label" style="display: flex; align-items: center; gap: 4px;">
+                            <md-checkbox id="logs-timestamps"></md-checkbox>
+                            <span>Timestamps</span>
+                        </label>
+                    </div>
+                    <div class="logs-actions">
+                        <md-filled-button id="logs-refresh-btn">
+                            <span class="material-symbols-outlined" slot="icon">refresh</span>
+                            Refresh
+                        </md-filled-button>
+                        <md-filled-tonal-button id="logs-tail-btn">
+                            <span class="material-symbols-outlined" slot="icon">vertical_align_bottom</span>
+                            <span id="tail-btn-text">Auto-scroll: Off</span>
+                        </md-filled-tonal-button>
+                    </div>
+                </div>
+                <div id="container-logs" class="terminal logs-fullpage">
+                    <span class="loading-text">Loading logs...</span>
+                </div>
+            </div>
+        </div>
+    `;
+
+    let autoScroll = false;
+
+    const loadLogs = async () => {
+        const logsContainer = document.getElementById('container-logs');
+        const tailSelect = document.getElementById('logs-tail-select');
+        const timestampsCheck = document.getElementById('logs-timestamps');
+
+        if (!logsContainer) return;
+
+        const wasScrolledToBottom = logsContainer.scrollHeight - logsContainer.scrollTop <= logsContainer.clientHeight + 50;
+
+        try {
+            const tail = tailSelect?.value || 1000;
+            const timestamps = timestampsCheck?.checked || false;
+            const result = await getContainerLogs(state.currentHostId, containerId, tail, timestamps);
+            logsContainer.textContent = result.logs || '(no logs available)';
+            if (autoScroll || wasScrolledToBottom) {
+                logsContainer.scrollTop = logsContainer.scrollHeight;
+            }
+        } catch (e) {
+            logsContainer.textContent = 'Failed to load logs: ' + e.message;
+        }
+    };
+
+    // Setup event listeners
+    document.getElementById('back-to-list-btn')?.addEventListener('click', () => {
+        if (logsViewAutoRefresh) {
+            clearInterval(logsViewAutoRefresh);
+            logsViewAutoRefresh = null;
+        }
+        showListView();
+    });
+
+    document.getElementById('logs-refresh-btn')?.addEventListener('click', loadLogs);
+
+    document.getElementById('logs-tail-btn')?.addEventListener('click', () => {
+        autoScroll = !autoScroll;
+        const btnText = document.getElementById('tail-btn-text');
+        if (btnText) {
+            btnText.textContent = autoScroll ? 'Auto-scroll: On' : 'Auto-scroll: Off';
+        }
+
+        if (autoScroll) {
+            logsViewAutoRefresh = setInterval(loadLogs, 3000);
+            loadLogs();
+        } else {
+            if (logsViewAutoRefresh) {
+                clearInterval(logsViewAutoRefresh);
+                logsViewAutoRefresh = null;
+            }
+        }
+    });
+
+    // Initial load
+    loadLogs();
 }
 
 function showEmptyHost() {

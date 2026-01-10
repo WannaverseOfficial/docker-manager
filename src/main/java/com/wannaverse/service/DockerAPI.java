@@ -38,6 +38,29 @@ public class DockerAPI {
         return dockerClient.inspectContainerCmd(containerId).exec();
     }
 
+    public String getContainerLogs(String containerId, int tail, boolean timestamps) {
+        StringBuilder logs = new StringBuilder();
+        try {
+            dockerClient
+                    .logContainerCmd(containerId)
+                    .withStdOut(true)
+                    .withStdErr(true)
+                    .withTail(tail)
+                    .withTimestamps(timestamps)
+                    .exec(
+                            new ResultCallback.Adapter<Frame>() {
+                                @Override
+                                public void onNext(Frame frame) {
+                                    logs.append(new String(frame.getPayload()));
+                                }
+                            })
+                    .awaitCompletion(30, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        return logs.toString();
+    }
+
     public HealthState getContainerHealth(String containerId) {
         InspectContainerResponse inspection = inspectContainer(containerId);
 

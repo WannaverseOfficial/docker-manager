@@ -901,6 +901,40 @@ md-tabs {
     overflow-y: auto;
 }
 
+.terminal .loading-text {
+    color: var(--md-sys-color-on-surface-variant);
+    font-style: italic;
+}
+
+/* Logs Toolbar */
+.logs-toolbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: var(--spacing-md);
+    margin-bottom: var(--spacing-sm);
+    flex-wrap: wrap;
+}
+
+.logs-options {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-md);
+}
+
+.logs-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-xs);
+}
+
+/* Full page logs */
+.logs-fullpage {
+    min-height: 500px;
+    max-height: calc(100vh - 300px);
+    height: calc(100vh - 300px);
+}
+
 /* Truncate */
 .truncate {
     white-space: nowrap;

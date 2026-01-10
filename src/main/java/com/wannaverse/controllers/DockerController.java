@@ -208,6 +208,21 @@ public class DockerController {
         return ResponseEntity.ok(health);
     }
 
+    @GetMapping("/hosts/{hostId}/containers/{containerId}/logs")
+    @RequirePermission(
+            resource = Resource.CONTAINERS,
+            action = "logs",
+            hostIdParam = "hostId",
+            resourceIdParam = "containerId")
+    public ResponseEntity<Map<String, String>> getContainerLogs(
+            @PathVariable String hostId,
+            @PathVariable String containerId,
+            @RequestParam(defaultValue = "500") int tail,
+            @RequestParam(defaultValue = "false") boolean timestamps) {
+        String logs = getDockerAPI(hostId).getContainerLogs(containerId, tail, timestamps);
+        return ResponseEntity.ok(Map.of("logs", logs));
+    }
+
     @GetMapping("/hosts/{hostId}/containers/{containerId}/processes")
     @RequirePermission(
             resource = Resource.CONTAINERS,
