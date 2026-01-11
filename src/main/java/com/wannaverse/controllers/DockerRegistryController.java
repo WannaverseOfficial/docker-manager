@@ -114,8 +114,6 @@ public class DockerRegistryController {
         return ResponseEntity.ok().build();
     }
 
-    // Request/Response DTOs
-
     public record CreateRegistryRequest(
             String name,
             String url,

@@ -26,7 +26,7 @@ public class Pipeline {
     private String description;
 
     @Column(columnDefinition = "TEXT")
-    private String graphLayout; // JSON: node positions for visual editor
+    private String graphLayout;
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "git_repository_id")
@@ -44,7 +44,7 @@ public class Pipeline {
 
     private int pollingIntervalSeconds = 300;
 
-    private String branchFilter; // regex pattern for branch matching
+    private String branchFilter;
 
     @Column(unique = true)
     private String webhookSecret;

@@ -28,43 +28,41 @@ public class ContainerTemplate {
     @Column(nullable = false)
     private String category;
 
-    @Column private String logo; // Icon name or URL
+    @Column private String logo;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     private TemplateType type;
 
     @Column(nullable = false)
-    private boolean system; // true = shipped with app, false = user-created
+    private boolean system;
 
-    // For CONTAINER type
     @Column private String imageName;
 
-    @Column private String defaultPorts; // "5432:5432,5433:5433"
+    @Column private String defaultPorts;
 
     @Column(length = 2000)
-    private String defaultEnv; // "KEY=value,KEY2=value2"
+    private String defaultEnv;
 
     @Column(length = 1000)
-    private String defaultVolumes; // "/host:/container,/host2:/container2"
+    private String defaultVolumes;
 
-    @Column private String defaultUser; // "1000:1000"
+    @Column private String defaultUser;
 
     @Column private String defaultNetwork;
 
-    // For COMPOSE type
     @Column(columnDefinition = "TEXT")
     private String composeContent;
 
-    @Column private String platform; // "linux", "linux/amd64", etc.
+    @Column private String platform;
 
-    @Column private String documentation; // URL to docs
+    @Column private String documentation;
 
     @Column private long createdAt;
 
     @Column private long updatedAt;
 
-    @Column private String createdBy; // Username or "system"
+    @Column private String createdBy;
 
     public enum TemplateType {
         CONTAINER,

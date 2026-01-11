@@ -27,7 +27,7 @@ public class StageExecution {
     @JoinColumn(name = "stage_id", nullable = false)
     private PipelineStage stage;
 
-    private int orderIndex; // Copy of stage.orderIndex for JPA ordering
+    private int orderIndex;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)

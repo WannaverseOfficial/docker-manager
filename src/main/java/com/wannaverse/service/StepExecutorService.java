@@ -90,13 +90,10 @@ public class StepExecutorService {
 
         logConsumer.accept("Executing shell script with " + shell);
 
-        // Execute using Docker with a shell container
         DockerClient client = dockerService.createClientCached(dockerHost.getDockerHostUrl());
 
-        // Use alpine as default shell image
         String image = config.has("image") ? config.get("image").asText() : "alpine:latest";
 
-        // Pull image if needed
         try {
             client.pullImageCmd(image).start().awaitCompletion(5, TimeUnit.MINUTES);
         } catch (Exception e) {
@@ -104,7 +101,6 @@ public class StepExecutorService {
                     "Warning: Could not pull image " + image + ", using local if available");
         }
 
-        // Create container
         List<String> envList = new ArrayList<>();
         env.forEach((k, v) -> envList.add(k + "=" + v));
 
@@ -125,16 +121,13 @@ public class StepExecutorService {
         logConsumer.accept("Created container: " + containerId.substring(0, 12));
 
         try {
-            // Start container
             client.startContainerCmd(containerId).exec();
 
-            // Wait for completion with timeout
             int exitCode =
                     client.waitContainerCmd(containerId)
                             .start()
                             .awaitStatusCode(step.getTimeoutSeconds(), TimeUnit.SECONDS);
 
-            // Get logs
             StringBuilder logs = new StringBuilder();
             client.logContainerCmd(containerId)
                     .withStdOut(true)
@@ -155,7 +148,6 @@ public class StepExecutorService {
             return new StepResult(exitCode == 0, exitCode, logs.toString(), null);
 
         } finally {
-            // Cleanup container
             try {
                 client.removeContainerCmd(containerId).withForce(true).exec();
             } catch (Exception e) {
@@ -182,7 +174,6 @@ public class StepExecutorService {
 
         logConsumer.accept("Executing JAR: " + jarPath);
 
-        // Build command
         StringBuilder cmd = new StringBuilder("java ");
         if (!jvmOpts.isEmpty()) {
             cmd.append(jvmOpts).append(" ");
@@ -192,7 +183,6 @@ public class StepExecutorService {
             cmd.append(" ").append(arg);
         }
 
-        // Use openjdk image
         String image = config.has("image") ? config.get("image").asText() : "openjdk:17-slim";
 
         DockerClient client = dockerService.createClientCached(dockerHost.getDockerHostUrl());
@@ -345,7 +335,6 @@ public class StepExecutorService {
         }
 
         String dockerHostStr = dockerHostUrl(dockerHost);
-
         ProcessBuilder pb =
                 new ProcessBuilder(
                         "docker",
@@ -464,7 +453,6 @@ public class StepExecutorService {
 
     private String dockerHostUrl(DockerHost host) {
         String url = host.getDockerHostUrl();
-        // Fix common URL format issue
         if (url.startsWith("unix://") && !url.startsWith("unix:///")) {
             url = "unix:///" + url.substring(7);
         }
@@ -497,7 +485,6 @@ public class StepExecutorService {
         return gitService.cloneOrPullRepositoryTo(repoUrl, branch, workspacePath);
     }
 
-    /** Execute a step with individual parameters (avoids lazy loading issues). */
     public StepResult executeStep(
             PipelineStep.StepType stepType,
             String stepName,
@@ -516,7 +503,6 @@ public class StepExecutorService {
         logConsumer.accept("Starting step: " + stepName);
         log.info("Step - logConsumer returned, parsing env vars");
 
-        // Parse environment variables from step config
         Map<String, String> stepEnv = new HashMap<>(env);
         if (environmentVariables != null && !environmentVariables.isEmpty()) {
             try {
@@ -681,7 +667,6 @@ public class StepExecutorService {
             Map<String, String> env,
             Consumer<String> logConsumer)
             throws Exception {
-        // Simplified - delegate to shell step with java command
         JsonNode config = objectMapper.readTree(configuration);
         String jarPath = config.get("jarPath").asText();
         String jvmOpts = config.has("jvmOpts") ? config.get("jvmOpts").asText() : "";

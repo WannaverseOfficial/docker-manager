@@ -108,8 +108,6 @@ public class ImagePolicyController {
         return ResponseEntity.ok(Map.of("image", image, "allowed", allowed));
     }
 
-    // Request/Response DTOs
-
     public record CreatePolicyRequest(
             String name,
             String description,

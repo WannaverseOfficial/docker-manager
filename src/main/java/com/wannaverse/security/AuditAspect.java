@@ -43,10 +43,8 @@ public class AuditAspect {
         String resourceId = extractResourceId(joinPoint, auditable.resourceIdParam());
         Map<String, Object> details = new HashMap<>();
 
-        // Capture path variables and request parameters
         details.putAll(extractPathVariablesAndParams(joinPoint));
 
-        // Capture request body if needed
         if (auditable.captureRequestBody()) {
             Object requestBody = extractRequestBody(joinPoint);
             if (requestBody != null) {
@@ -122,7 +120,6 @@ public class AuditAspect {
             if (reqParam != null) {
                 String name =
                         reqParam.value().isEmpty() ? parameters[i].getName() : reqParam.value();
-                // Skip large objects, only include simple types
                 if (args[i] instanceof String
                         || args[i] instanceof Number
                         || args[i] instanceof Boolean) {

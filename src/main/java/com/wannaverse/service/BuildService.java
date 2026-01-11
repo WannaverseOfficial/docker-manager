@@ -53,8 +53,6 @@ public class BuildService {
     @Async("deploymentExecutor")
     @Transactional
     public void executeDeployment(DeploymentJob job) {
-        // Re-fetch GitRepository to get a managed entity with an active session
-        // This avoids LazyInitializationException when accessing DockerHost
         GitRepository gitRepo =
                 gitRepoRepository
                         .findById(job.getGitRepository().getId())
@@ -69,7 +67,6 @@ public class BuildService {
             appendAndBroadcastLog(job, "Starting deployment...");
             jobRepository.save(job);
 
-            // Send deployment started notification
             notificationService.notifyDeploymentStarted(job);
 
             appendAndBroadcastLog(job, "Cloning/pulling repository: " + gitRepo.getRepositoryUrl());
@@ -92,7 +89,6 @@ public class BuildService {
             gitRepo.setLastDeployedAt(System.currentTimeMillis());
             gitRepoRepository.save(gitRepo);
 
-            // Send deployment completed notification
             notificationService.notifyDeploymentCompleted(job);
 
         } catch (Exception e) {
@@ -102,7 +98,6 @@ public class BuildService {
             job.setCompletedAt(System.currentTimeMillis());
             appendAndBroadcastLog(job, "ERROR: " + e.getMessage());
 
-            // Send deployment failed notification
             notificationService.notifyDeploymentFailed(job);
         } finally {
             jobRepository.save(job);
@@ -189,7 +184,6 @@ public class BuildService {
             throw new RuntimeException("Docker host URL is not configured");
         }
 
-        // Fix common URL format issue: unix://var -> unix:///var
         if (dockerHost.startsWith("unix://") && !dockerHost.startsWith("unix:///")) {
             dockerHost = "unix:///" + dockerHost.substring(7);
             log.warn("Fixed Docker host URL format: {}", dockerHost);
@@ -198,7 +192,6 @@ public class BuildService {
         appendAndBroadcastLog(job, "Using Docker host: " + dockerHost);
         log.info("Running docker-compose with DOCKER_HOST={}", dockerHost);
 
-        // Use -H flag to explicitly specify Docker host (more reliable than env var)
         ProcessBuilder pb =
                 new ProcessBuilder(
                         "docker",
@@ -211,7 +204,7 @@ public class BuildService {
                         "-d",
                         "--build");
         pb.directory(repoPath.toFile());
-        pb.environment().put("DOCKER_HOST", dockerHost); // Also set env var as backup
+        pb.environment().put("DOCKER_HOST", dockerHost);
         pb.redirectErrorStream(true);
 
         Process process = pb.start();
@@ -274,7 +267,6 @@ public class BuildService {
                             emitter.send(SseEmitter.event().name("complete").data("done"));
                             emitter.complete();
                         } catch (IOException e) {
-                            // Ignore
                         }
                     });
         }

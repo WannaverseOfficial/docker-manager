@@ -33,7 +33,6 @@ public class PipelineExecutionService {
     private final GitService gitService;
     private final TransactionTemplate transactionTemplate;
 
-    // Self-injection to allow @Async to work with self-invocation
     @Lazy @Autowired private PipelineExecutionService self;
 
     private final Map<String, Set<SseEmitter>> executionEmitters = new ConcurrentHashMap<>();
@@ -75,11 +74,9 @@ public class PipelineExecutionService {
             throw new RuntimeException("Pipeline is disabled");
         }
 
-        // Get next build number
         int buildNumber =
                 executionRepository.findMaxBuildNumberByPipelineId(pipelineId).orElse(0) + 1;
 
-        // Create execution record
         PipelineExecution execution = new PipelineExecution();
         execution.setPipeline(pipeline);
         execution.setBuildNumber(buildNumber);
@@ -90,7 +87,6 @@ public class PipelineExecutionService {
         execution.setTriggeredBy(triggeredBy);
         execution = executionRepository.save(execution);
 
-        // Create stage and step executions
         for (PipelineStage stage : pipeline.getStages()) {
             StageExecution stageExecution = new StageExecution();
             stageExecution.setExecution(execution);
@@ -109,7 +105,6 @@ public class PipelineExecutionService {
             }
         }
 
-        // Trigger async execution AFTER transaction commits to avoid SQLite deadlock
         final String executionId = execution.getId();
         TransactionSynchronizationManager.registerSynchronization(
                 new TransactionSynchronization() {
@@ -129,7 +124,6 @@ public class PipelineExecutionService {
 
     @Async("deploymentExecutor")
     public void executeAsync(String executionId) {
-        // Fetch all required data in a single transaction to avoid lazy loading issues
         ExecutionContext ctx =
                 transactionTemplate.execute(
                         status -> {
@@ -150,7 +144,6 @@ public class PipelineExecutionService {
                                                             new RuntimeException(
                                                                     "Pipeline not found"));
 
-                            // Eagerly fetch lazy associations
                             ExecutionContext context = new ExecutionContext();
                             context.executionId = executionId;
                             context.buildNumber = exec.getBuildNumber();
@@ -182,7 +175,6 @@ public class PipelineExecutionService {
         Path workspacePath = null;
 
         try {
-            // Update status to running in a short transaction
             transactionTemplate.executeWithoutResult(
                     status -> {
                         PipelineExecution exec =
@@ -194,18 +186,15 @@ public class PipelineExecutionService {
                     });
             broadcastLog(executionId, "Starting pipeline execution #" + ctx.buildNumber);
 
-            // Prepare workspace (no DB transaction needed)
             workspacePath =
                     stepExecutorService.prepareWorkspace(
                             ctx.pipelineId, ctx.pipelineName, executionId);
             broadcastLog(executionId, "Workspace prepared: " + workspacePath);
 
-            // Clone repository if configured
             if (ctx.hasGitRepo) {
                 broadcastLog(executionId, "Cloning repository: " + ctx.gitRepoUrl);
                 stepExecutorService.cloneRepository(ctx.gitRepoUrl, ctx.gitBranch, workspacePath);
 
-                // Get commit info and save in short transaction
                 String commitSha = gitService.getCurrentCommitSha(workspacePath);
                 transactionTemplate.executeWithoutResult(
                         status -> {
@@ -217,13 +206,10 @@ public class PipelineExecutionService {
                 broadcastLog(executionId, "Repository cloned at commit: " + commitSha);
             }
 
-            // Build environment variables
             Map<String, String> env = buildEnvironmentVariables(ctx);
 
-            // Execute stages using dependency-based parallel execution
             boolean allSuccess = executeDependencyGraph(executionId, ctx, workspacePath, env);
 
-            // Update final status in short transaction
             final boolean success = allSuccess;
             transactionTemplate.executeWithoutResult(
                     status -> {
@@ -264,20 +250,18 @@ public class PipelineExecutionService {
         } finally {
             completeEmitters(executionId);
 
-            // Cleanup workspace
             if (workspacePath != null) {
                 stepExecutorService.cleanupWorkspace(workspacePath);
             }
         }
     }
 
-    // Context object to hold all data needed for execution (avoids lazy loading issues)
     private static class ExecutionContext {
         String executionId;
         int buildNumber;
         String pipelineId;
         String pipelineName;
-        String dockerHostUrl; // Store URL string, not entity
+        String dockerHostUrl;
         boolean hasGitRepo;
         String gitRepoUrl;
         String gitBranch;
@@ -311,12 +295,6 @@ public class PipelineExecutionService {
         }
     }
 
-    /**
-     * Execute stages based on their dependency graph. Stages with no dependencies (or all
-     * dependencies satisfied) run in parallel. When a stage completes, check for newly-runnable
-     * stages.
-     */
-    // Helper record to hold stage info extracted within a transaction
     private record StageInfo(
             String stageId,
             String stageExecId,
@@ -327,7 +305,6 @@ public class PipelineExecutionService {
     private boolean executeDependencyGraph(
             String executionId, ExecutionContext ctx, Path workspacePath, Map<String, String> env) {
 
-        // Extract all stage info within a single transaction to avoid lazy loading
         List<StageInfo> stageInfoList =
                 transactionTemplate.execute(
                         status -> {
@@ -338,7 +315,6 @@ public class PipelineExecutionService {
                             List<StageInfo> infos = new ArrayList<>();
                             for (StageExecution se : stageExecutions) {
                                 PipelineStage stage = se.getStage();
-                                // Force initialization of lazy fields
                                 infos.add(
                                         new StageInfo(
                                                 stage.getId(),
@@ -357,7 +333,6 @@ public class PipelineExecutionService {
             return true;
         }
 
-        // Build maps for quick lookup
         Map<String, String> stageExecIdByStageId = new HashMap<>();
         Map<String, String> stageNameById = new HashMap<>();
         Map<String, List<String>> stageDepsById = new HashMap<>();
@@ -372,15 +347,12 @@ public class PipelineExecutionService {
 
         List<String> allStageIds = new ArrayList<>(stageExecIdByStageId.keySet());
 
-        // Track completed stages and their results
         Map<String, Boolean> completedStages = new ConcurrentHashMap<>();
         Set<String> runningStages = ConcurrentHashMap.newKeySet();
         boolean[] stopExecution = {false};
 
-        // Execute until all stages are done or we need to stop
         while (completedStages.size() < allStageIds.size() && !stopExecution[0]) {
 
-            // Find stages that are ready to run
             List<String> readyStageIds = new ArrayList<>();
             for (String stageId : allStageIds) {
                 if (completedStages.containsKey(stageId) || runningStages.contains(stageId)) {
@@ -441,7 +413,6 @@ public class PipelineExecutionService {
                 continue;
             }
 
-            // Start ready stages in parallel
             List<Thread> threads = new ArrayList<>();
             final Path workspace = workspacePath;
 
@@ -480,7 +451,6 @@ public class PipelineExecutionService {
                 thread.start();
             }
 
-            // Wait for at least one stage to complete
             for (Thread thread : threads) {
                 try {
                     thread.join(100);
@@ -491,7 +461,6 @@ public class PipelineExecutionService {
             }
         }
 
-        // Wait for any remaining running stages
         while (!runningStages.isEmpty()) {
             try {
                 Thread.sleep(100);
@@ -501,7 +470,6 @@ public class PipelineExecutionService {
             }
         }
 
-        // Cancel any stages that didn't run
         for (String stageId : allStageIds) {
             if (!completedStages.containsKey(stageId)) {
                 String stageExecId = stageExecIdByStageId.get(stageId);
@@ -519,7 +487,6 @@ public class PipelineExecutionService {
         return completedStages.values().stream().allMatch(Boolean::booleanValue);
     }
 
-    // Helper record for step info
     private record StepInfo2(String stepExecId, boolean continueOnFailure) {}
 
     private boolean executeStage(
@@ -529,7 +496,6 @@ public class PipelineExecutionService {
             Path workspacePath,
             Map<String, String> env) {
 
-        // Fetch all stage and step info in a single transaction
         record StageData(
                 String stageName, PipelineStage.ExecutionMode execMode, List<StepInfo2> steps) {}
 
@@ -562,7 +528,6 @@ public class PipelineExecutionService {
 
         logAndBroadcast(executionId, "\n=== Stage: " + stageData.stageName + " ===");
 
-        // Update status
         transactionTemplate.executeWithoutResult(
                 status -> {
                     StageExecution se =
@@ -617,7 +582,6 @@ public class PipelineExecutionService {
             }
         }
 
-        // Update final status
         final boolean finalSuccess = allSuccess;
         transactionTemplate.executeWithoutResult(
                 status -> {
@@ -641,7 +605,6 @@ public class PipelineExecutionService {
             Path workspacePath,
             Map<String, String> env) {
 
-        // Fetch step info in transaction to get all needed data
         record StepInfo(
                 String stepName,
                 PipelineStep.StepType stepType,
@@ -667,7 +630,6 @@ public class PipelineExecutionService {
 
         logAndBroadcast(executionId, "  → Step: " + stepInfo.stepName);
 
-        // Update status to running
         transactionTemplate.executeWithoutResult(
                 status -> {
                     StepExecution se = stepExecutionRepository.findById(stepExecId).orElseThrow();
@@ -690,7 +652,6 @@ public class PipelineExecutionService {
                             env,
                             logLine -> logAndBroadcast(executionId, "    " + logLine));
 
-            // Save result
             final boolean success = result.success();
             transactionTemplate.executeWithoutResult(
                     status -> {
@@ -737,11 +698,8 @@ public class PipelineExecutionService {
     }
 
     private void logAndBroadcast(String executionId, String message) {
-        // Broadcast to SSE clients first (non-blocking)
         broadcastLog(executionId, message);
 
-        // Save to DB asynchronously to avoid blocking step execution
-        // SQLite with single connection causes contention with multiple threads
         CompletableFuture.runAsync(
                 () -> {
                     try {
@@ -783,19 +741,16 @@ public class PipelineExecutionService {
     private Map<String, String> buildEnvironmentVariables(ExecutionContext ctx) {
         Map<String, String> env = new HashMap<>();
 
-        // Pipeline info
         env.put("PIPELINE_ID", ctx.pipelineId);
         env.put("PIPELINE_NAME", ctx.pipelineName);
         env.put("BUILD_NUMBER", String.valueOf(ctx.buildNumber));
         env.put("EXECUTION_ID", ctx.executionId);
 
-        // Git info
         if (ctx.hasGitRepo) {
             env.put("GIT_REPO_URL", ctx.gitRepoUrl);
             env.put("GIT_BRANCH", ctx.triggerBranch);
         }
 
-        // Trigger info
         if (ctx.triggerType != null) {
             env.put("TRIGGER_TYPE", ctx.triggerType.name());
         }
@@ -813,7 +768,6 @@ public class PipelineExecutionService {
         return "main";
     }
 
-    // SSE Emitter management
     public void registerEmitter(String executionId, SseEmitter emitter) {
         executionEmitters
                 .computeIfAbsent(executionId, k -> ConcurrentHashMap.newKeySet())
@@ -839,7 +793,6 @@ public class PipelineExecutionService {
                             emitter.send(SseEmitter.event().name("complete").data("done"));
                             emitter.complete();
                         } catch (IOException e) {
-                            // Ignore
                         }
                     });
         }

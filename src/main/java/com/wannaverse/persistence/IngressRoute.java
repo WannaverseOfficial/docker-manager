@@ -79,15 +79,15 @@ public class IngressRoute {
     }
 
     public enum TlsMode {
-        NONE, // HTTP only
-        LETS_ENCRYPT, // Automatic Let's Encrypt certificate
-        CUSTOM_CERT, // User-uploaded certificate
-        BRING_YOUR_OWN // External certificate (provide paths)
+        NONE,
+        LETS_ENCRYPT,
+        CUSTOM_CERT,
+        BRING_YOUR_OWN
     }
 
     public enum AuthType {
-        BASIC, // HTTP Basic Auth
-        FORWARD_AUTH // Forward auth to external service
+        BASIC,
+        FORWARD_AUTH
     }
 
     @PrePersist

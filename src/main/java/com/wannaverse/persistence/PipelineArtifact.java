@@ -25,23 +25,23 @@ public class PipelineArtifact {
     private StepExecution stepExecution;
 
     @Column(nullable = false)
-    private String name; // Display name
+    private String name;
 
     @Column(nullable = false)
-    private String path; // File path in artifact storage
+    private String path;
 
-    private String originalPath; // Original path in container
+    private String originalPath;
 
     private String contentType;
 
     private long sizeBytes;
 
-    private String checksum; // SHA-256
+    private String checksum;
 
     @Column(nullable = false)
     private long createdAt;
 
-    private long expiresAt; // Optional TTL for cleanup
+    private long expiresAt;
 
     @PrePersist
     protected void onCreate() {

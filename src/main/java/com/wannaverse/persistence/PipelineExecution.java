@@ -60,18 +60,18 @@ public class PipelineExecution {
     private long finishedAt;
 
     public enum ExecutionStatus {
-        PENDING, // Waiting to start
-        RUNNING, // Currently executing
-        SUCCESS, // Completed successfully
-        FAILED, // Completed with failure
-        CANCELLED // Manually cancelled
+        PENDING,
+        RUNNING,
+        SUCCESS,
+        FAILED,
+        CANCELLED
     }
 
     public enum TriggerType {
-        MANUAL, // Triggered by user
-        WEBHOOK, // Triggered by git webhook
-        POLLING, // Triggered by polling service
-        SCHEDULED // Triggered by schedule (future)
+        MANUAL,
+        WEBHOOK,
+        POLLING,
+        SCHEDULED
     }
 
     @PrePersist

@@ -42,8 +42,6 @@ public class PipelineController {
         this.executionRepository = executionRepository;
     }
 
-    // ==================== Pipeline CRUD ====================
-
     @GetMapping
     @RequirePermission(resource = Resource.PIPELINES, action = "list")
     public ResponseEntity<List<PipelineResponse>> listPipelines() {
@@ -104,8 +102,6 @@ public class PipelineController {
         boolean enabled = body.getOrDefault("enabled", true);
         return ResponseEntity.ok(pipelineService.toggleEnabled(id, enabled));
     }
-
-    // ==================== Pipeline Execution ====================
 
     @PostMapping("/{id}/trigger")
     @RequirePermission(resource = Resource.PIPELINE_EXECUTIONS, action = "trigger")
@@ -189,7 +185,6 @@ public class PipelineController {
 
         SseEmitter emitter = new SseEmitter(Long.MAX_VALUE);
 
-        // Send existing logs
         if (execution.getLogs() != null && !execution.getLogs().isEmpty()) {
             try {
                 for (String line : execution.getLogs().split("\n")) {
@@ -201,7 +196,6 @@ public class PipelineController {
             }
         }
 
-        // If execution is complete, close the emitter
         if (execution.getStatus() == PipelineExecution.ExecutionStatus.SUCCESS
                 || execution.getStatus() == PipelineExecution.ExecutionStatus.FAILED
                 || execution.getStatus() == PipelineExecution.ExecutionStatus.CANCELLED) {
@@ -212,14 +206,11 @@ public class PipelineController {
                 emitter.completeWithError(e);
             }
         } else {
-            // Register for live updates
             executionService.registerEmitter(executionId, emitter);
         }
 
         return emitter;
     }
-
-    // ==================== Webhook ====================
 
     @PostMapping("/webhook/{secret}")
     public ResponseEntity<Map<String, String>> handleWebhook(
@@ -243,12 +234,10 @@ public class PipelineController {
                     Map.of("status", "ignored", "reason", "pipeline or webhook disabled"));
         }
 
-        // Extract commit info from payload
         String commit = payload.get("after") != null ? payload.get("after").toString() : null;
         String ref = payload.get("ref") != null ? payload.get("ref").toString() : null;
         String branch = ref != null ? ref.replace("refs/heads/", "") : null;
 
-        // Check branch filter if configured
         if (pipeline.getBranchFilter() != null && !pipeline.getBranchFilter().isEmpty()) {
             if (branch == null || !branch.matches(pipeline.getBranchFilter())) {
                 return ResponseEntity.ok(

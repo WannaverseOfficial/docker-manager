@@ -65,7 +65,6 @@ public class AuditController {
             try {
                 resourceTypeEnum = Resource.valueOf(resourceType);
             } catch (IllegalArgumentException e) {
-                // Invalid resource type, ignore filter
             }
         }
 

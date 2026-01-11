@@ -24,7 +24,7 @@ public class StepExecution {
     @JoinColumn(name = "step_id", nullable = false)
     private PipelineStep step;
 
-    private int orderIndex; // Copy of step.orderIndex for JPA ordering
+    private int orderIndex;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
@@ -36,11 +36,11 @@ public class StepExecution {
     private String logs;
 
     @Column(columnDefinition = "TEXT")
-    private String artifacts; // JSON list of artifact paths
+    private String artifacts;
 
     private String errorMessage;
 
-    private String containerId; // Docker container used for execution
+    private String containerId;
 
     private long startedAt;
 

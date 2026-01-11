@@ -20,24 +20,14 @@ public class NginxConfigGenerator {
     private static final DateTimeFormatter DATE_FORMATTER =
             DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss").withZone(ZoneId.systemDefault());
 
-    /**
-     * Generate complete nginx.conf from all enabled routes.
-     *
-     * @param config The ingress configuration
-     * @param routes List of routes to include
-     * @param certificates Map of hostname to certificate
-     * @return Complete nginx configuration
-     */
     public String generateFullConfig(
             IngressConfig config,
             List<IngressRoute> routes,
             Map<String, IngressCertificate> certificates) {
         StringBuilder sb = new StringBuilder();
 
-        // Main nginx.conf header
         sb.append(generateMainConfig(config));
 
-        // Group routes by hostname for server blocks
         Map<String, List<IngressRoute>> routesByHostname = new HashMap<>();
         for (IngressRoute route : routes) {
             if (route.isEnabled()) {
@@ -47,7 +37,6 @@ public class NginxConfigGenerator {
             }
         }
 
-        // Generate server block for each hostname
         for (Map.Entry<String, List<IngressRoute>> entry : routesByHostname.entrySet()) {
             String hostname = entry.getKey();
             List<IngressRoute> hostnameRoutes = entry.getValue();
@@ -57,12 +46,11 @@ public class NginxConfigGenerator {
             sb.append(generateServerBlock(hostname, hostnameRoutes, cert, config));
         }
 
-        sb.append("}\n"); // Close http block
+        sb.append("}\n");
 
         return sb.toString();
     }
 
-    /** Generate main nginx.conf header and defaults. */
     private String generateMainConfig(IngressConfig config) {
         return """
         # Managed Ingress Configuration
@@ -113,7 +101,6 @@ public class NginxConfigGenerator {
                         config.getAcmeProxyPort());
     }
 
-    /** Generate server block for a hostname with its routes. */
     private String generateServerBlock(
             String hostname,
             List<IngressRoute> routes,
@@ -121,7 +108,6 @@ public class NginxConfigGenerator {
             IngressConfig config) {
         StringBuilder sb = new StringBuilder();
 
-        // Check if any route needs HTTPS AND we have a valid certificate
         boolean hasCert =
                 cert != null && cert.getStatus() == IngressCertificate.CertificateStatus.ACTIVE;
         boolean wantsTls =
@@ -129,7 +115,6 @@ public class NginxConfigGenerator {
         boolean wantsRedirect =
                 routes.stream().anyMatch(IngressRoute::isForceHttpsRedirect);
 
-        // HTTP server block
         sb.append(
                 """
 
@@ -140,7 +125,6 @@ public class NginxConfigGenerator {
                 """
                         .formatted(hostname, config.getHttpPort(), hostname));
 
-        // ACME challenge location (always present for Let's Encrypt)
         sb.append(
                 """
 
@@ -152,7 +136,6 @@ public class NginxConfigGenerator {
                         .formatted(config.getAcmeProxyPort()));
 
         if (hasCert && wantsTls) {
-            // We have a valid certificate - redirect HTTP to HTTPS
             sb.append(
                     """
 
@@ -162,11 +145,8 @@ public class NginxConfigGenerator {
                         }
                     """);
 
-            // HTTPS server block
             sb.append(generateHttpsServerBlock(hostname, routes, cert, config));
         } else if (wantsRedirect && wantsTls) {
-            // User wants redirect but cert not ready yet - still redirect
-            // (browser will show cert warning until cert is issued)
             sb.append(
                     """
 
@@ -178,10 +158,8 @@ public class NginxConfigGenerator {
                         }
                     """);
 
-            // Generate HTTPS server block placeholder (will use self-signed or fail until cert ready)
             sb.append(generateHttpsServerBlock(hostname, routes, cert, config));
         } else {
-            // HTTP-only: add location blocks directly
             for (IngressRoute route : routes) {
                 sb.append(generateLocationBlock(route));
             }
@@ -191,7 +169,6 @@ public class NginxConfigGenerator {
         return sb.toString();
     }
 
-    /** Generate HTTPS server block. */
     private String generateHttpsServerBlock(
             String hostname,
             List<IngressRoute> routes,
@@ -199,7 +176,6 @@ public class NginxConfigGenerator {
             IngressConfig config) {
         StringBuilder sb = new StringBuilder();
 
-        // Get first route for metadata
         IngressRoute firstRoute = routes.get(0);
 
         sb.append(
@@ -223,7 +199,6 @@ public class NginxConfigGenerator {
                                 config.getHttpsPort(),
                                 hostname));
 
-        // TLS configuration
         if (cert != null && cert.getStatus() == IngressCertificate.CertificateStatus.ACTIVE) {
             sb.append(
                     """
@@ -246,7 +221,6 @@ public class NginxConfigGenerator {
                     """);
         }
 
-        // Location blocks for each route
         for (IngressRoute route : routes) {
             sb.append(generateLocationBlock(route));
         }
@@ -256,7 +230,6 @@ public class NginxConfigGenerator {
         return sb.toString();
     }
 
-    /** Generate location block for a route. */
     public String generateLocationBlock(IngressRoute route) {
         StringBuilder sb = new StringBuilder();
 
@@ -277,7 +250,6 @@ public class NginxConfigGenerator {
                                 route.getTargetPort(),
                                 path));
 
-        // Optional Basic Auth
         if (route.isAuthEnabled() && route.getAuthType() == IngressRoute.AuthType.BASIC) {
             sb.append(
                     """
@@ -288,7 +260,6 @@ public class NginxConfigGenerator {
                             .formatted(route.getHostname().replace(".", "-")));
         }
 
-        // Proxy configuration
         sb.append(
                 """
                             proxy_pass http://%s:%d;
@@ -307,13 +278,6 @@ public class NginxConfigGenerator {
         return sb.toString();
     }
 
-    /**
-     * Generate a single server block preview for the UI.
-     *
-     * @param route The route to generate config for
-     * @param cert Optional certificate
-     * @return Preview of nginx configuration
-     */
     public String generateServerBlockPreview(IngressRoute route, IngressCertificate cert) {
         StringBuilder sb = new StringBuilder();
 
@@ -322,7 +286,6 @@ public class NginxConfigGenerator {
         boolean wantsTls = route.getTlsMode() != IngressRoute.TlsMode.NONE;
 
         if (wantsTls) {
-            // HTTPS server block
             sb.append("server {\n");
             sb.append("    listen 443 ssl http2;\n");
             sb.append("    server_name ").append(route.getHostname()).append(";\n\n");
@@ -344,7 +307,6 @@ public class NginxConfigGenerator {
             sb.append(generateLocationBlock(route).replaceAll("(?m)^", ""));
             sb.append("}\n");
 
-            // HTTP server block with redirect or proxy
             sb.append("\nserver {\n");
             sb.append("    listen 80;\n");
             sb.append("    server_name ").append(route.getHostname()).append(";\n\n");
@@ -355,17 +317,14 @@ public class NginxConfigGenerator {
             sb.append("    }\n\n");
 
             if (route.isForceHttpsRedirect()) {
-                sb.append("    # Redirect HTTP to HTTPS\n");
                 sb.append("    location / {\n");
                 sb.append("        return 301 https://$host$request_uri;\n");
                 sb.append("    }\n");
             } else {
-                sb.append("    # Serving HTTP (no redirect configured)\n");
                 sb.append(generateLocationBlock(route).replaceAll("(?m)^", ""));
             }
             sb.append("}\n");
         } else {
-            // HTTP-only
             sb.append("server {\n");
             sb.append("    listen 80;\n");
             sb.append("    server_name ").append(route.getHostname()).append(";\n\n");
@@ -376,9 +335,7 @@ public class NginxConfigGenerator {
         return sb.toString();
     }
 
-    /** Validate nginx configuration syntax. Returns null if valid, error message if invalid. */
     public ValidationResult validateConfig(String config) {
-        // Basic validation - check for balanced braces
         int braceCount = 0;
         for (char c : config.toCharArray()) {
             if (c == '{') braceCount++;
@@ -391,7 +348,6 @@ public class NginxConfigGenerator {
             return new ValidationResult(false, "Unmatched opening brace", null);
         }
 
-        // Check for required directives
         if (!config.contains("events {")) {
             return new ValidationResult(false, "Missing 'events' block", null);
         }

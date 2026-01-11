@@ -36,7 +36,6 @@ public class ContainerMonitorState {
 
     private Integer lastRestartCount;
 
-    // The restart count when the monitoring window started
     private Integer restartCountAtWindowStart;
 
     private long lastRestartCountChange;

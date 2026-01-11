@@ -35,7 +35,6 @@ public class PipelineResponse {
     private long updatedAt;
     private String createdBy;
 
-    // Summary stats
     private int totalExecutions;
     private int successfulExecutions;
     private int failedExecutions;

@@ -26,8 +26,6 @@ public class DockerRegistryService {
         this.encryptionService = encryptionService;
     }
 
-    // CRUD Operations
-
     public List<DockerRegistry> getAllRegistries() {
         return registryRepository.findAllByOrderByNameAsc();
     }
@@ -49,7 +47,6 @@ public class DockerRegistryService {
         registry.setRegistryType(request.registryType());
         registry.setEnabled(true);
 
-        // Encrypt and set credentials based on type
         setCredentials(registry, request);
 
         if (request.isDefault()) {
@@ -80,7 +77,6 @@ public class DockerRegistryService {
         }
         registry.setEnabled(request.enabled());
 
-        // Update credentials if provided (null means keep existing)
         updateCredentials(registry, request);
 
         if (request.isDefault() && !registry.isDefault()) {
@@ -114,12 +110,9 @@ public class DockerRegistryService {
         registryRepository.save(registry);
     }
 
-    // Authentication
-
     public AuthConfig getAuthConfig(String imageName) {
         String registryUrl = extractRegistryUrl(imageName);
         if (registryUrl == null) {
-            // Try default registry
             return getDefaultAuthConfig();
         }
 
@@ -158,8 +151,6 @@ public class DockerRegistryService {
                 break;
 
             case AWS_ECR:
-                // For ECR, the username is always "AWS" and password is the token
-                // In production, you'd want to refresh the token periodically
                 authConfig.withUsername("AWS");
                 if (registry.getPassword() != null) {
                     authConfig.withPassword(encryptionService.decrypt(registry.getPassword()));
@@ -167,7 +158,6 @@ public class DockerRegistryService {
                 break;
 
             case GCR:
-                // For GCR, username is "_json_key" and password is the service account JSON
                 authConfig.withUsername("_json_key");
                 if (registry.getGcpServiceAccountJson() != null) {
                     authConfig.withPassword(
@@ -176,7 +166,6 @@ public class DockerRegistryService {
                 break;
 
             case ACR:
-                // For ACR, use the client ID and secret
                 if (registry.getAzureClientId() != null) {
                     authConfig.withUsername(registry.getAzureClientId());
                 }
@@ -190,7 +179,6 @@ public class DockerRegistryService {
         return authConfig;
     }
 
-    // Test connection
     public boolean testConnection(String id) {
         DockerRegistry registry =
                 registryRepository
@@ -199,8 +187,6 @@ public class DockerRegistryService {
                                 () -> new IllegalArgumentException("Registry not found: " + id));
 
         try {
-            // For now, just verify we can build auth config
-            // In production, you'd make an actual API call to the registry
             AuthConfig authConfig = buildAuthConfig(registry);
             return authConfig != null;
         } catch (Exception e) {
@@ -211,8 +197,6 @@ public class DockerRegistryService {
             return false;
         }
     }
-
-    // Helper Methods
 
     private void setCredentials(DockerRegistry registry, RegistryCreateRequest request) {
         switch (request.registryType()) {
@@ -234,7 +218,6 @@ public class DockerRegistryService {
                 if (request.awsSecretKey() != null) {
                     registry.setAwsSecretKey(encryptionService.encrypt(request.awsSecretKey()));
                 }
-                // Store the token as password (would be refreshed in production)
                 if (request.password() != null) {
                     registry.setPassword(encryptionService.encrypt(request.password()));
                 }
@@ -260,7 +243,6 @@ public class DockerRegistryService {
     }
 
     private void updateCredentials(DockerRegistry registry, RegistryUpdateRequest request) {
-        // Only update credentials if they are provided (non-null)
         if (request.username() != null) {
             registry.setUsername(encryptionService.encrypt(request.username()));
         }
@@ -297,11 +279,9 @@ public class DockerRegistryService {
     private String normalizeUrl(String url) {
         if (url == null) return null;
         url = url.trim();
-        // Remove trailing slash
         if (url.endsWith("/")) {
             url = url.substring(0, url.length() - 1);
         }
-        // Add https:// if no protocol specified
         if (!url.startsWith("http://") && !url.startsWith("https://")) {
             url = "https://" + url;
         }
@@ -313,22 +293,18 @@ public class DockerRegistryService {
             return null;
         }
 
-        // Check if image has a registry prefix
         int firstSlash = imageName.indexOf('/');
         if (firstSlash == -1) {
-            return null; // Official Docker Hub image
+            return null;
         }
 
         String possibleRegistry = imageName.substring(0, firstSlash);
-        // Check if it looks like a registry (has . or :)
         if (possibleRegistry.contains(".") || possibleRegistry.contains(":")) {
             return possibleRegistry;
         }
 
-        return null; // Docker Hub namespace
+        return null;
     }
-
-    // Request DTOs
 
     public record RegistryCreateRequest(
             String name,

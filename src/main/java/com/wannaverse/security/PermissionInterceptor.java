@@ -12,13 +12,6 @@ import org.springframework.web.servlet.HandlerMapping;
 
 import java.util.Map;
 
-/**
- * Interceptor that enforces authentication and permission checks on all API endpoints.
- *
- * <p>By default, all endpoints require authentication unless explicitly excluded via the
- * SecurityConfig exclusion patterns. Endpoints with @RequirePermission additionally enforce
- * permission checks.
- */
 @Component
 public class PermissionInterceptor implements HandlerInterceptor {
 
@@ -38,11 +31,8 @@ public class PermissionInterceptor implements HandlerInterceptor {
 
         SecurityContext ctx = SecurityContextHolder.getContext();
 
-        // Check for @RequirePermission annotation
         RequirePermission annotation = handlerMethod.getMethodAnnotation(RequirePermission.class);
 
-        // If no @RequirePermission, still require authentication for all API endpoints
-        // This is a fail-safe - endpoints without @RequirePermission still need auth
         if (annotation == null) {
             if (ctx == null || !ctx.isAuthenticated()) {
                 response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
@@ -53,7 +43,6 @@ public class PermissionInterceptor implements HandlerInterceptor {
             return true;
         }
 
-        // For endpoints with @RequirePermission, check authentication and permissions
         if (ctx == null || !ctx.isAuthenticated()) {
             response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
             response.setContentType("application/json");

@@ -31,7 +31,6 @@ public class GitRepositoryResponse {
     private long createdAt;
     private long lastDeployedAt;
 
-    // Drift detection fields
     private DriftStatus driftStatus;
     private String latestRemoteCommitSha;
     private Long driftDetectedAt;
@@ -57,7 +56,6 @@ public class GitRepositoryResponse {
         response.setCreatedAt(entity.getCreatedAt());
         response.setLastDeployedAt(entity.getLastDeployedAt());
 
-        // Drift detection fields
         response.setDriftStatus(entity.getDriftStatus());
         response.setLatestRemoteCommitSha(entity.getLatestRemoteCommitSha());
         response.setDriftDetectedAt(entity.getDriftDetectedAt());

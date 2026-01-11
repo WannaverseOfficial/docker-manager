@@ -70,13 +70,11 @@ public class GlobalExceptionHandler {
             HttpMessageNotReadableException ex) {
         Map<String, Object> response = new HashMap<>();
 
-        // Extract the actual cause for better error messages
         String detailedMessage = "Invalid request body";
         Throwable cause = ex.getCause();
         if (cause != null) {
             String causeMessage = cause.getMessage();
             if (causeMessage != null) {
-                // Try to extract a user-friendly message
                 if (causeMessage.contains("Cannot deserialize")) {
                     detailedMessage = "JSON parsing error: " + causeMessage;
                 } else if (causeMessage.contains("Unrecognized field")) {
@@ -89,7 +87,6 @@ public class GlobalExceptionHandler {
             }
         }
 
-        // Log the full exception for debugging
         ex.printStackTrace();
 
         response.put("error", detailedMessage);

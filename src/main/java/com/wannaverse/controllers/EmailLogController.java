@@ -56,7 +56,6 @@ public class EmailLogController {
             try {
                 statusFilter = EmailLog.EmailStatus.valueOf(status);
             } catch (IllegalArgumentException e) {
-                // Invalid status, ignore filter
             }
         }
 
@@ -65,7 +64,6 @@ public class EmailLogController {
             try {
                 eventTypeFilter = NotificationEventType.valueOf(eventType);
             } catch (IllegalArgumentException e) {
-                // Invalid event type, ignore filter
             }
         }
 

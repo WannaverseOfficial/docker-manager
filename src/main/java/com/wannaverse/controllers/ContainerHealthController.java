@@ -125,7 +125,6 @@ public class ContainerHealthController {
         long oneDayAgo = now - (24 * 60 * 60 * 1000L);
         long sevenDaysAgo = now - (7 * 24 * 60 * 60 * 1000L);
 
-        // Count events by type in last 24h
         Map<String, Long> eventsByType24h = new HashMap<>();
         List<Object[]> counts24h = eventRepository.countByEventTypeSince(hostId, oneDayAgo);
         long total24h = 0;
@@ -136,7 +135,6 @@ public class ContainerHealthController {
             total24h += count;
         }
 
-        // Count events by type in last 7d
         Map<String, Long> eventsByType7d = new HashMap<>();
         List<Object[]> counts7d = eventRepository.countByEventTypeSince(hostId, sevenDaysAgo);
         long total7d = 0;

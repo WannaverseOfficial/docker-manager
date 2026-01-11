@@ -49,7 +49,6 @@ public class RollbackService {
             return new RollbackValidation(false, "Operation not found", null);
         }
 
-        // Check if there's a BEFORE snapshot
         StateSnapshot beforeSnapshot =
                 snapshotRepository
                         .findByOperationIdAndSnapshotType(
@@ -60,7 +59,6 @@ public class RollbackService {
             return new RollbackValidation(false, "No before state snapshot available", operation);
         }
 
-        // Check if operation type supports rollback
         if (!isRollbackSupported(operation.getOperationType())) {
             return new RollbackValidation(
                     false,
@@ -68,13 +66,11 @@ public class RollbackService {
                     operation);
         }
 
-        // Check if already rolled back
         if (operation.getStatus() == DockerOperation.OperationStatus.ROLLED_BACK) {
             return new RollbackValidation(
                     false, "Operation has already been rolled back", operation);
         }
 
-        // For container operations, check if image is available
         if (isContainerOperation(operation.getOperationType())) {
             String imageName = beforeSnapshot.getImageName();
             if (imageName != null) {
@@ -84,7 +80,6 @@ public class RollbackService {
                             dockerService.dockerAPI(
                                     dockerService.createClientCached(host.getDockerHostUrl()));
 
-                    // Try to inspect the image
                     api.inspectImage(imageName);
                 } catch (Exception e) {
                     return new RollbackValidation(
@@ -114,7 +109,6 @@ public class RollbackService {
                         .orElseThrow();
 
         try {
-            // Start rollback operation tracking
             DockerOperation rollbackOp =
                     trackingService.beginOperation(
                             host.getId(),
@@ -122,7 +116,6 @@ public class RollbackService {
                             originalOperation.getResourceId(),
                             "Rollback: " + originalOperation.getResourceName());
 
-            // Capture current state before rollback
             if (originalOperation.getResourceId() != null) {
                 try {
                     trackingService.captureContainerState(
@@ -135,20 +128,16 @@ public class RollbackService {
                 }
             }
 
-            // Perform rollback based on operation type
             String newResourceId = performRollback(host, originalOperation, beforeSnapshot);
 
-            // Capture state after rollback
             if (newResourceId != null) {
                 trackingService.captureContainerState(
                         rollbackOp, newResourceId, StateSnapshot.SnapshotType.AFTER);
             }
 
-            // Mark original operation as rolled back
             originalOperation.setStatus(DockerOperation.OperationStatus.ROLLED_BACK);
             operationRepository.save(originalOperation);
 
-            // Complete rollback operation
             trackingService.completeOperation(rollbackOp, true, null);
 
             return new RollbackResult(true, "Rollback completed successfully", newResourceId);
@@ -200,14 +189,12 @@ public class RollbackService {
 
         JsonNode inspect = objectMapper.readTree(inspectJson);
 
-        // Extract configuration
         String imageName = snapshot.getImageName();
         String containerName = snapshot.getResourceName();
         if (containerName != null && containerName.startsWith("/")) {
             containerName = containerName.substring(1);
         }
 
-        // Parse environment variables
         List<String> env = new ArrayList<>();
         if (snapshot.getEnvironmentVars() != null) {
             JsonNode envNode = objectMapper.readTree(snapshot.getEnvironmentVars());
@@ -216,7 +203,6 @@ public class RollbackService {
             }
         }
 
-        // Parse port bindings
         Map<Integer, Integer> portBindings = new HashMap<>();
         if (snapshot.getPortBindings() != null) {
             JsonNode portsNode = objectMapper.readTree(snapshot.getPortBindings());
@@ -242,7 +228,6 @@ public class RollbackService {
                             });
         }
 
-        // Parse volume bindings
         List<String> volumeBindings = new ArrayList<>();
         if (snapshot.getVolumeBindings() != null) {
             JsonNode volumesNode = objectMapper.readTree(snapshot.getVolumeBindings());
@@ -251,7 +236,6 @@ public class RollbackService {
             }
         }
 
-        // Parse network
         String networkName = null;
         if (snapshot.getNetworkSettings() != null) {
             JsonNode networkNode = objectMapper.readTree(snapshot.getNetworkSettings());
@@ -264,7 +248,6 @@ public class RollbackService {
             }
         }
 
-        // Create container
         var response =
                 api.createContainer(
                         imageName,
@@ -276,7 +259,6 @@ public class RollbackService {
 
         String newContainerId = response.getId();
 
-        // Start the container
         api.startContainer(newContainerId);
 
         log.info("Recreated container {} from snapshot", newContainerId);
@@ -295,7 +277,6 @@ public class RollbackService {
         DockerHost host = current.getDockerHost();
         String projectName = current.getProjectName();
 
-        // Find target version
         ComposeDeployment target =
                 composeRepository
                         .findByDockerHostIdAndProjectNameAndVersion(
@@ -307,7 +288,6 @@ public class RollbackService {
         }
 
         try {
-            // Create new deployment from target version
             ComposeDeployment newDeployment =
                     trackingService.createComposeDeployment(
                             host.getId(),
@@ -317,16 +297,13 @@ public class RollbackService {
                             target.getCommitSha(),
                             target.getGitRepository());
 
-            // Deploy compose
             List<String> logs =
                     dockerService.deployCompose(
                             host.getDockerHostUrl(), target.getComposeContent(), projectName);
 
-            // Update deployment status
             newDeployment.setLogs(String.join("\n", logs));
             trackingService.completeComposeDeployment(newDeployment, true, null);
 
-            // Mark original as rolled back
             current.setStatus(ComposeDeployment.DeploymentStatus.ROLLED_BACK);
             composeRepository.save(current);
 
@@ -390,7 +367,6 @@ public class RollbackService {
         };
     }
 
-    // Result records
     public record RollbackValidation(
             boolean canRollback, String reason, DockerOperation operation) {}
 

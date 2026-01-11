@@ -123,12 +123,10 @@ public class DockerAPI {
             cmd.withEnv(environmentVariables);
         }
 
-        // Set user if specified (e.g., "1000", "1000:1000", "nobody")
         if (user != null && !user.isBlank()) {
             cmd.withUser(user);
         }
 
-        // Build a single HostConfig with all settings combined
         HostConfig hostConfig = HostConfig.newHostConfig();
 
         if (portBindings != null && !portBindings.isEmpty()) {
@@ -335,14 +333,10 @@ public class DockerAPI {
         dockerClient.close();
     }
 
-    // ==================== Stats & Info ====================
-
-    /** Get Docker daemon/host information. */
     public Info getHostInfo() {
         return dockerClient.infoCmd().exec();
     }
 
-    /** Get container stats (single snapshot). Uses a blocking approach to get one stats reading. */
     public Statistics getContainerStats(String containerId) {
         final Statistics[] result = new Statistics[1];
 
