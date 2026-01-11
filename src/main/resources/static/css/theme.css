@@ -329,132 +329,73 @@ html, body {
 .login-background {
     position: absolute;
     inset: 0;
-    overflow: hidden;
+    background: var(--md-sys-color-surface);
 }
 
 .login-gradient {
-    position: absolute;
-    inset: 0;
-    background: linear-gradient(
-        135deg,
-        var(--md-sys-color-surface) 0%,
-        var(--md-sys-color-surface-container-low) 25%,
-        var(--md-sys-color-surface-container) 50%,
-        var(--md-sys-color-surface-container-low) 75%,
-        var(--md-sys-color-surface) 100%
-    );
-    background-size: 400% 400%;
-    animation: gradientShift 15s ease infinite;
-}
-
-@keyframes gradientShift {
-    0% { background-position: 0% 50%; }
-    50% { background-position: 100% 50%; }
-    100% { background-position: 0% 50%; }
+    display: none;
 }
 
 .login-particles {
-    position: absolute;
-    inset: 0;
-    overflow: hidden;
+    display: none;
 }
 
 .login-particles .particle {
-    position: absolute;
-    width: 4px;
-    height: 4px;
-    background: var(--md-sys-color-primary);
-    opacity: 0.2;
-    border-radius: 50%;
-    animation: float 20s infinite;
-}
-
-.login-particles .particle:nth-child(1) { left: 10%; top: 20%; animation-delay: 0s; animation-duration: 25s; }
-.login-particles .particle:nth-child(2) { left: 20%; top: 80%; animation-delay: -5s; animation-duration: 20s; }
-.login-particles .particle:nth-child(3) { left: 60%; top: 40%; animation-delay: -10s; animation-duration: 28s; }
-.login-particles .particle:nth-child(4) { left: 80%; top: 60%; animation-delay: -15s; animation-duration: 22s; }
-.login-particles .particle:nth-child(5) { left: 40%; top: 10%; animation-delay: -7s; animation-duration: 30s; }
-
-@keyframes float {
-    0%, 100% { transform: translateY(0) translateX(0) scale(1); opacity: 0.2; }
-    25% { transform: translateY(-100px) translateX(50px) scale(1.5); opacity: 0.4; }
-    50% { transform: translateY(-50px) translateX(-30px) scale(1); opacity: 0.3; }
-    75% { transform: translateY(-150px) translateX(20px) scale(1.2); opacity: 0.35; }
+    display: none;
 }
 
 /* Login Card */
 .login-card {
     position: relative;
     width: 100%;
-    max-width: 420px;
+    max-width: 380px;
     background: var(--md-sys-color-surface-container);
-    border-radius: 24px;
-    padding: 48px 40px;
-    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5),
-                0 0 0 1px var(--md-sys-color-outline-variant);
-    animation: cardSlideUp 0.6s ease-out;
-}
-
-@keyframes cardSlideUp {
-    from {
-        opacity: 0;
-        transform: translateY(30px);
-    }
-    to {
-        opacity: 1;
-        transform: translateY(0);
-    }
+    border-radius: 8px;
+    padding: 40px 32px;
+    border: 1px solid var(--md-sys-color-outline-variant);
 }
 
 .login-header {
     text-align: center;
-    margin-bottom: 32px;
+    margin-bottom: 28px;
 }
 
 .login-brand-logo {
-    max-width: 200px;
+    max-width: 180px;
     height: auto;
-    margin-bottom: 24px;
+    margin-bottom: 20px;
 }
 
 .login-logo-container {
-    width: 80px;
-    height: 80px;
-    margin: 0 auto 20px;
+    width: 56px;
+    height: 56px;
+    margin: 0 auto 16px;
     background: var(--md-sys-color-primary-container);
-    border-radius: 20px;
+    border-radius: 8px;
     display: flex;
     align-items: center;
     justify-content: center;
-    box-shadow: 0 10px 30px -10px rgba(0, 71, 135, 0.5);
-    animation: iconPulse 3s ease-in-out infinite;
-}
-
-@keyframes iconPulse {
-    0%, 100% { transform: scale(1); }
-    50% { transform: scale(1.02); }
 }
 
 .login-icon {
-    font-size: 40px;
+    font-size: 28px;
     color: var(--md-sys-color-on-primary-container);
 }
 
 .login-header h1 {
-    font-size: 28px;
+    font-size: 22px;
     font-weight: 600;
     color: var(--md-sys-color-on-surface);
-    margin-bottom: 8px;
-    letter-spacing: -0.5px;
+    margin-bottom: 4px;
 }
 
 .login-header .subtitle {
     color: var(--md-sys-color-on-surface-variant);
-    font-size: 15px;
+    font-size: 14px;
 }
 
 .login-header .logo-icon {
-    font-size: 64px;
+    font-size: 48px;
     color: var(--md-sys-color-primary);
     margin-bottom: var(--spacing-md);
 }

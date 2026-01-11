@@ -127,7 +127,7 @@
 }
 
 .graph-node.selected {
-    filter: drop-shadow(0 0 20px var(--md-sys-color-primary));
+    /* Selection indicated by stroke change on .node-bg */
 }
 
 .graph-node.dragging {

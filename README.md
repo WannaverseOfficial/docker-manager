@@ -1,7 +1,7 @@
 <img width="288" alt="wannaverse logo" src="https://github.com/user-attachments/assets/7623d002-539b-42cb-b794-645b9fac471f" />
 
-# Wannaverse Docker Manager
-Wannaverse Docker Manager is a free, open-source, self-hosted web interface for managing Docker environments.
+# Wannaverse Docker Manager (WDM)
+WDM is a free, open-source, self-hosted web interface for managing Docker environments.
 Built for tech enthusiasts, software developers, and small businesses who want powerful Docker management without subscriptions, licensing fees, or feature gates.
 
 No paid tiers. No hidden costs. Just Docker management done right.
