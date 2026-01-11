@@ -325,14 +325,38 @@ public class IngressService {
             int routesDisabled =
                     routeRepository.countByIngressConfigIdAndEnabled(config.getId(), true);
 
+            if (config.getIngressNetworkId() != null) {
+                log.debug(
+                        "Disconnecting containers from ingress network: {}",
+                        config.getIngressNetworkId());
+                try {
+                    var network = api.inspectNetwork(config.getIngressNetworkId());
+                    if (network.getContainers() != null) {
+                        for (String containerId : network.getContainers().keySet()) {
+                            log.debug(
+                                    "Disconnecting container {} from ingress network", containerId);
+                            try {
+                                api.disconnectContainerFromNetwork(
+                                        config.getIngressNetworkId(), containerId);
+                            } catch (Exception e) {
+                                log.warn(
+                                        "Failed to disconnect container {}: {}",
+                                        containerId,
+                                        e.getMessage());
+                            }
+                        }
+                    }
+                } catch (Exception e) {
+                    log.debug("Network may not exist: {}", e.getMessage());
+                }
+            }
+
             if (config.getNginxContainerId() != null) {
                 log.debug("Stopping nginx container: {}", config.getNginxContainerId());
                 try {
                     api.stopContainer(config.getNginxContainerId());
                 } catch (Exception e) {
-                    log.warn(
-                            "Failed to stop container (may already be stopped): {}",
-                            e.getMessage());
+                    log.debug("Container may already be stopped: {}", e.getMessage());
                 }
 
                 log.debug("Removing nginx container: {}", config.getNginxContainerId());
@@ -340,6 +364,11 @@ public class IngressService {
                     api.forceRemoveContainer(config.getNginxContainerId());
                 } catch (Exception e) {
                     log.warn("Failed to remove container: {}", e.getMessage());
+                }
+
+                if (containerExists(api, config.getNginxContainerId())) {
+                    throw new IllegalStateException(
+                            "Failed to remove nginx container: " + config.getNginxContainerId());
                 }
             }
 
@@ -349,6 +378,11 @@ public class IngressService {
                     api.removeNetwork(config.getIngressNetworkId());
                 } catch (Exception e) {
                     log.warn("Failed to remove network: {}", e.getMessage());
+                }
+
+                if (networkExists(api, config.getIngressNetworkId())) {
+                    throw new IllegalStateException(
+                            "Failed to remove ingress network: " + config.getIngressNetworkId());
                 }
             }
 
@@ -388,6 +422,24 @@ public class IngressService {
                             username));
 
             return new DisableIngressResult(false, 0, e.getMessage());
+        }
+    }
+
+    private boolean containerExists(DockerAPI api, String containerId) {
+        try {
+            api.inspectContainer(containerId);
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private boolean networkExists(DockerAPI api, String networkId) {
+        try {
+            api.inspectNetwork(networkId);
+            return true;
+        } catch (Exception e) {
+            return false;
         }
     }
 
