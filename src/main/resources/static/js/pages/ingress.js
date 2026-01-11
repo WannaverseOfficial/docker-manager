@@ -11,6 +11,7 @@ let routes = [];
 let certificates = [];
 let auditLogs = [];
 let containers = [];
+let availableCerts = [];
 let currentTab = 'routes';
 let currentView = 'main'; // 'main' or 'expose'
 
@@ -918,9 +919,14 @@ async function showExposeAppView() {
     const hostId = state.currentHostId;
 
     try {
-        // Load containers for selection
-        const containerList = await listContainers(hostId, true);
+        // Load containers and certificates in parallel
+        const [containerList, certList] = await Promise.all([
+            listContainers(hostId, true),
+            ingressApi.listCertificates(hostId)
+        ]);
+
         containers = containerList.filter(c => c.state === 'running');
+        availableCerts = certList || [];
 
         if (containers.length === 0) {
             showToast('No running containers to expose', 'warning');
@@ -1062,7 +1068,7 @@ function renderExposeAppView() {
                                     </md-select-option>
                                     <md-select-option value="CUSTOM_CERT">
                                         <span slot="headline">Custom Certificate</span>
-                                        <span slot="supporting-text">Upload your own certificate</span>
+                                        <span slot="supporting-text">Upload or select an existing certificate</span>
                                     </md-select-option>
                                     <md-select-option value="BRING_YOUR_OWN">
                                         <span slot="headline">Self-signed / External</span>
@@ -1085,6 +1091,53 @@ function renderExposeAppView() {
                                 <div>
                                     <strong>Let's Encrypt Requirements</strong>
                                     <p>Ensure DNS is configured and port 80 is accessible from the internet for certificate issuance.</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div id="custom-cert-options" class="custom-cert-options hidden">
+                            <div class="form-row">
+                                <div class="form-field">
+                                    <md-filled-select id="cert-source-select" label="Certificate Source" style="width: 100%;">
+                                        <md-select-option value="upload" selected>
+                                            <span slot="headline">Upload New Certificate</span>
+                                        </md-select-option>
+                                        ${availableCerts.filter(c => c.status === 'ACTIVE').map(c => `
+                                            <md-select-option value="${c.id}">
+                                                <span slot="headline">Use existing: ${c.hostname}</span>
+                                                <span slot="supporting-text">Expires: ${new Date(c.expiresAt).toLocaleDateString()}</span>
+                                            </md-select-option>
+                                        `).join('')}
+                                    </md-filled-select>
+                                </div>
+                            </div>
+
+                            <div id="cert-upload-fields" class="cert-upload-fields">
+                                <div class="info-banner" style="margin-bottom: var(--spacing-md);">
+                                    <span class="material-symbols-outlined">info</span>
+                                    <div>
+                                        <strong>Certificate Upload</strong>
+                                        <p>You can upload the certificate now or after creating the route.</p>
+                                    </div>
+                                </div>
+                                <div class="form-row">
+                                    <div class="form-field">
+                                        <label class="form-label">Certificate (PEM format)</label>
+                                        <textarea id="cert-pem-input" class="cert-textarea" placeholder="-----BEGIN CERTIFICATE-----&#10;...&#10;-----END CERTIFICATE-----"></textarea>
+                                    </div>
+                                </div>
+                                <div class="form-row">
+                                    <div class="form-field">
+                                        <label class="form-label">Private Key (PEM format)</label>
+                                        <textarea id="key-pem-input" class="cert-textarea" placeholder="-----BEGIN PRIVATE KEY-----&#10;...&#10;-----END PRIVATE KEY-----"></textarea>
+                                    </div>
+                                </div>
+                                <div class="form-row">
+                                    <div class="form-field">
+                                        <label class="form-label">Certificate Chain (optional)</label>
+                                        <textarea id="chain-pem-input" class="cert-textarea" placeholder="-----BEGIN CERTIFICATE-----&#10;...&#10;-----END CERTIFICATE-----"></textarea>
+                                        <span class="form-hint">Include intermediate certificates if needed</span>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -1116,6 +1169,9 @@ function setupExposeAppListeners() {
     const tlsModeSelect = document.getElementById('tls-mode-select');
     const tlsOptions = document.getElementById('tls-options');
     const tlsInfo = document.getElementById('tls-info');
+    const customCertOptions = document.getElementById('custom-cert-options');
+    const certSourceSelect = document.getElementById('cert-source-select');
+    const certUploadFields = document.getElementById('cert-upload-fields');
 
     tlsModeSelect?.addEventListener('change', () => {
         const mode = tlsModeSelect.value;
@@ -1128,6 +1184,21 @@ function setupExposeAppListeners() {
             tlsInfo?.classList.remove('hidden');
         } else {
             tlsInfo?.classList.add('hidden');
+        }
+        if (mode === 'CUSTOM_CERT') {
+            customCertOptions?.classList.remove('hidden');
+        } else {
+            customCertOptions?.classList.add('hidden');
+        }
+    });
+
+    // Show/hide cert upload fields based on cert source selection
+    certSourceSelect?.addEventListener('change', () => {
+        const source = certSourceSelect.value;
+        if (source === 'upload') {
+            certUploadFields?.classList.remove('hidden');
+        } else {
+            certUploadFields?.classList.add('hidden');
         }
     });
 
@@ -1144,6 +1215,24 @@ async function handleExposeAppSubmit() {
     const tlsMode = document.getElementById('tls-mode-select')?.value || 'NONE';
     const forceHttpsRedirect = document.getElementById('redirect-http')?.selected || false;
     const container = containers.find(c => c.id === containerId);
+
+    // Get custom certificate options if CUSTOM_CERT mode
+    let certificateId = null;
+    let certUploadData = null;
+    if (tlsMode === 'CUSTOM_CERT') {
+        const certSource = document.getElementById('cert-source-select')?.value || 'upload';
+        if (certSource === 'upload') {
+            const certPem = document.getElementById('cert-pem-input')?.value?.trim();
+            const keyPem = document.getElementById('key-pem-input')?.value?.trim();
+            const chainPem = document.getElementById('chain-pem-input')?.value?.trim();
+            if (certPem && keyPem) {
+                certUploadData = { certPem, keyPem, chainPem };
+            }
+        } else {
+            // Using existing certificate
+            certificateId = certSource;
+        }
+    }
 
     // Validation
     const errors = [];
@@ -1175,19 +1264,19 @@ async function handleExposeAppSubmit() {
             authEnabled: false,
             authType: null,
             authConfig: null,
-            certificateId: null,
+            certificateId,
             forceHttpsRedirect,
         });
 
         // Show preview/confirmation if there are warnings
         if (preview.warnings?.length > 0 || tlsMode !== 'NONE') {
-            const confirmed = await showRoutePreviewDialog(preview, { containerId, hostname, port, pathPrefix, protocol, tlsMode, forceHttpsRedirect, container });
+            const confirmed = await showRoutePreviewDialog(preview, { containerId, hostname, port, pathPrefix, protocol, tlsMode, forceHttpsRedirect, container, certificateId, certUploadData });
             if (confirmed) {
-                await handleCreateRoute(containerId, hostname, port, pathPrefix, protocol, tlsMode, forceHttpsRedirect);
+                await handleCreateRoute(containerId, hostname, port, pathPrefix, protocol, tlsMode, forceHttpsRedirect, certificateId, certUploadData);
                 backToIngressMain();
             }
         } else {
-            await handleCreateRoute(containerId, hostname, port, pathPrefix, protocol, tlsMode, forceHttpsRedirect);
+            await handleCreateRoute(containerId, hostname, port, pathPrefix, protocol, tlsMode, forceHttpsRedirect, certificateId, certUploadData);
             backToIngressMain();
         }
     } catch (error) {
@@ -1612,7 +1701,7 @@ async function handleCheckDns(hostname) {
     }
 }
 
-async function handleCreateRoute(containerId, hostname, port, pathPrefix, protocol, tlsMode, forceHttpsRedirect = false) {
+async function handleCreateRoute(containerId, hostname, port, pathPrefix, protocol, tlsMode, forceHttpsRedirect = false, certificateId = null, certUploadData = null) {
     const hostId = state.currentHostId;
     const container = containers.find(c => c.id === containerId);
 
@@ -1629,12 +1718,26 @@ async function handleCreateRoute(containerId, hostname, port, pathPrefix, protoc
             protocol: protocol,
             authEnabled: false,
             forceHttpsRedirect: forceHttpsRedirect,
+            certificateId: certificateId,
         });
 
         showToast('Route created successfully!', 'success');
 
-        // If TLS was requested, show certificate status
-        if (tlsMode !== 'NONE' && result?.certificateId) {
+        // If custom cert upload data was provided, upload the certificate now
+        if (tlsMode === 'CUSTOM_CERT' && certUploadData && result?.certificateId) {
+            try {
+                showToast('Uploading certificate...', 'info');
+                await ingressApi.uploadCertificate(
+                    result.certificateId,
+                    certUploadData.certPem,
+                    certUploadData.keyPem,
+                    certUploadData.chainPem || null
+                );
+                showToast('Certificate uploaded successfully!', 'success');
+            } catch (certError) {
+                showToast(`Route created but certificate upload failed: ${certError.message}`, 'warning');
+            }
+        } else if (tlsMode !== 'NONE' && result?.certificateId) {
             showToast(`Certificate requested for ${hostname}`, 'info');
         }
 
