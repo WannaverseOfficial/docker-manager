@@ -3638,3 +3638,256 @@ md-tabs {
         max-width: 100%;
     }
 }
+
+/* ======================== */
+/* Pipeline Editor Styles   */
+/* ======================== */
+
+.pipeline-editor-layout {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--spacing-lg);
+    margin-top: var(--spacing-lg);
+}
+
+@media (max-width: 1200px) {
+    .pipeline-editor-layout {
+        grid-template-columns: 1fr;
+    }
+}
+
+.pipeline-config-panel,
+.pipeline-graph-panel {
+    min-width: 0;
+}
+
+.stage-card {
+    background: var(--md-sys-color-surface-container);
+    border-radius: var(--radius-md);
+    margin-bottom: var(--spacing-md);
+    overflow: hidden;
+}
+
+.stage-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--spacing-md);
+    background: var(--md-sys-color-surface-container-high);
+    border-bottom: 1px solid var(--md-sys-color-outline-variant);
+}
+
+.stage-info {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+}
+
+.stage-name-input {
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    padding: var(--spacing-xs) var(--spacing-sm);
+    font-size: var(--md-sys-typescale-title-small-size);
+    font-weight: 500;
+    color: var(--md-sys-color-on-surface);
+    min-width: 150px;
+}
+
+.stage-name-input:hover {
+    border-color: var(--md-sys-color-outline-variant);
+}
+
+.stage-name-input:focus {
+    outline: none;
+    border-color: var(--md-sys-color-primary);
+    background: var(--md-sys-color-surface);
+}
+
+.stage-actions {
+    display: flex;
+    gap: var(--spacing-xs);
+}
+
+.steps-container {
+    padding: var(--spacing-md);
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-sm);
+}
+
+.empty-steps {
+    text-align: center;
+    padding: var(--spacing-lg);
+    color: var(--md-sys-color-on-surface-variant);
+    font-size: var(--md-sys-typescale-body-small-size);
+}
+
+.step-card {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-md);
+    padding: var(--spacing-sm) var(--spacing-md);
+    background: var(--md-sys-color-surface);
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--md-sys-color-outline-variant);
+    transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.step-card:hover {
+    border-color: var(--md-sys-color-primary);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.step-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    background: var(--md-sys-color-primary-container);
+    border-radius: var(--radius-sm);
+    color: var(--md-sys-color-on-primary-container);
+}
+
+.step-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.step-name {
+    font-weight: 500;
+    color: var(--md-sys-color-on-surface);
+}
+
+.step-type {
+    font-size: var(--md-sys-typescale-body-small-size);
+    color: var(--md-sys-color-on-surface-variant);
+}
+
+.step-actions {
+    display: flex;
+    gap: var(--spacing-xs);
+    opacity: 0;
+    transition: opacity 0.2s;
+}
+
+.step-card:hover .step-actions {
+    opacity: 1;
+}
+
+/* Pipeline Graph */
+#pipeline-svg {
+    background: var(--md-sys-color-surface-container-lowest);
+    border-radius: var(--radius-sm);
+}
+
+/* Execution View */
+.execution-layout {
+    display: grid;
+    grid-template-columns: 300px 1fr;
+    gap: var(--spacing-lg);
+    margin-top: var(--spacing-lg);
+}
+
+@media (max-width: 900px) {
+    .execution-layout {
+        grid-template-columns: 1fr;
+    }
+}
+
+.execution-stage {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-md);
+    padding: var(--spacing-md);
+    border-radius: var(--radius-sm);
+    background: var(--md-sys-color-surface);
+    margin-bottom: var(--spacing-sm);
+}
+
+.execution-stage.running {
+    background: color-mix(in srgb, var(--md-sys-color-primary) 10%, transparent);
+}
+
+.execution-stage.success {
+    background: color-mix(in srgb, var(--md-sys-color-primary) 10%, transparent);
+}
+
+.execution-stage.failed {
+    background: color-mix(in srgb, var(--md-sys-color-error) 10%, transparent);
+}
+
+.stage-status-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.stage-details {
+    flex: 1;
+}
+
+.stage-duration {
+    font-size: var(--md-sys-typescale-body-small-size);
+    color: var(--md-sys-color-on-surface-variant);
+}
+
+.log-output {
+    background: var(--md-sys-color-surface-container-lowest);
+    padding: var(--spacing-md);
+    border-radius: var(--radius-sm);
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    font-size: 12px;
+    line-height: 1.6;
+    overflow-x: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 600px;
+    overflow-y: auto;
+}
+
+/* Status badges for pipelines */
+.status-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 8px;
+    border-radius: var(--radius-xs);
+    font-size: 11px;
+    font-weight: 500;
+    text-transform: uppercase;
+}
+
+.status-badge.success {
+    background: color-mix(in srgb, var(--md-sys-color-primary) 20%, transparent);
+    color: var(--md-sys-color-primary);
+}
+
+.status-badge.failed {
+    background: color-mix(in srgb, var(--md-sys-color-error) 20%, transparent);
+    color: var(--md-sys-color-error);
+}
+
+.status-badge.running {
+    background: color-mix(in srgb, var(--md-sys-color-tertiary) 20%, transparent);
+    color: var(--md-sys-color-tertiary);
+}
+
+.status-badge.pending,
+.status-badge.cancelled {
+    background: var(--md-sys-color-surface-container-high);
+    color: var(--md-sys-color-on-surface-variant);
+}
+
+.status-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--md-sys-color-outline);
+    margin-right: 6px;
+}
+
+.status-dot.success {
+    background: var(--md-sys-color-primary);
+}

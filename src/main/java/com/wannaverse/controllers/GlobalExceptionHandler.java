@@ -69,8 +69,31 @@ public class GlobalExceptionHandler {
     public ResponseEntity<Map<String, Object>> handleHttpMessageNotReadableException(
             HttpMessageNotReadableException ex) {
         Map<String, Object> response = new HashMap<>();
-        response.put("error", "Invalid request body");
-        response.put("message", "Invalid request body");
+
+        // Extract the actual cause for better error messages
+        String detailedMessage = "Invalid request body";
+        Throwable cause = ex.getCause();
+        if (cause != null) {
+            String causeMessage = cause.getMessage();
+            if (causeMessage != null) {
+                // Try to extract a user-friendly message
+                if (causeMessage.contains("Cannot deserialize")) {
+                    detailedMessage = "JSON parsing error: " + causeMessage;
+                } else if (causeMessage.contains("Unrecognized field")) {
+                    detailedMessage = "Unknown field in request: " + causeMessage;
+                } else if (causeMessage.contains("Missing required")) {
+                    detailedMessage = "Missing required field: " + causeMessage;
+                } else {
+                    detailedMessage = "Invalid request body: " + causeMessage;
+                }
+            }
+        }
+
+        // Log the full exception for debugging
+        ex.printStackTrace();
+
+        response.put("error", detailedMessage);
+        response.put("message", detailedMessage);
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(response);
     }
 
