@@ -112,8 +112,7 @@ public class NginxConfigGenerator {
                 cert != null && cert.getStatus() == IngressCertificate.CertificateStatus.ACTIVE;
         boolean wantsTls =
                 routes.stream().anyMatch(r -> r.getTlsMode() != IngressRoute.TlsMode.NONE);
-        boolean wantsRedirect =
-                routes.stream().anyMatch(IngressRoute::isForceHttpsRedirect);
+        boolean wantsRedirect = routes.stream().anyMatch(IngressRoute::isForceHttpsRedirect);
 
         sb.append(
                 """

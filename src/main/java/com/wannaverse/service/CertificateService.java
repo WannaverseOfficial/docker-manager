@@ -748,7 +748,9 @@ public class CertificateService {
         // Send SIGHUP to reload the configuration
         log.info("Sending SIGHUP to nginx master process (PID 1)");
         String reloadResult = api.execCommand(containerId, "kill", "-HUP", "1");
-        log.info("Nginx reload result: {}", reloadResult.isEmpty() ? "(success - no output)" : reloadResult);
+        log.info(
+                "Nginx reload result: {}",
+                reloadResult.isEmpty() ? "(success - no output)" : reloadResult);
     }
 
     private Account findOrRegisterAccount(Session session, KeyPair accountKeyPair, String email)

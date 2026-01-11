@@ -93,7 +93,7 @@ public class DockerController {
     @RequirePermission(resource = Resource.DOCKER_HOSTS, action = "create")
     @Auditable(resource = Resource.DOCKER_HOSTS, action = "create", captureRequestBody = true)
     public ResponseEntity<DockerHost> addHost(@RequestBody DockerHost host) {
-            if (!InputValidator.isValidDockerHostUrl(host.getDockerHostUrl())) {
+        if (!InputValidator.isValidDockerHostUrl(host.getDockerHostUrl())) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,
                     "Invalid Docker host URL format. Must be unix:///path/to/socket.sock, "

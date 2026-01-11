@@ -805,7 +805,9 @@ public class IngressService {
     private void reloadOrStartNginx(DockerAPI api, String containerId) {
         log.info("Sending SIGHUP to nginx master process (PID 1)");
         String reloadResult = api.execCommand(containerId, "kill", "-HUP", "1");
-        log.info("Nginx reload result: {}", reloadResult.isEmpty() ? "(success - no output)" : reloadResult);
+        log.info(
+                "Nginx reload result: {}",
+                reloadResult.isEmpty() ? "(success - no output)" : reloadResult);
     }
 
     private String findOrCreateNetwork(DockerAPI api, String networkName) {

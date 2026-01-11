@@ -52,8 +52,7 @@ public class WebSecurityConfig {
                                         .frameOptions(HeadersConfigurer.FrameOptionsConfig::deny))
                 .authorizeHttpRequests(
                         auth ->
-                                auth
-                                        .requestMatchers(
+                                auth.requestMatchers(
                                                 "/",
                                                 "/index.html",
                                                 "/css/**",
