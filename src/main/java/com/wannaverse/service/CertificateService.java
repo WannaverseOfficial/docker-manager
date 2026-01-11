@@ -658,29 +658,30 @@ public class CertificateService {
             String certDir = "/etc/nginx/certs/" + hostname;
             api.execCommand(containerId, "mkdir", "-p", certDir);
 
-            // Write certificate files using heredoc through sh
+            // Write certificate files using base64 encoding for reliable transfer
             String fullchain = cert.getCertificatePem();
             if (cert.getChainPem() != null && !cert.getChainPem().isEmpty()) {
                 fullchain += "\n" + cert.getChainPem();
             }
 
             // Write certificate file
+            String base64Fullchain =
+                    java.util.Base64.getEncoder().encodeToString(fullchain.getBytes());
             api.execCommand(
                     containerId,
                     "sh",
                     "-c",
-                    "cat > " + certDir + "/fullchain.pem << 'CERTEOF'\n" + fullchain + "\nCERTEOF");
+                    "echo '" + base64Fullchain + "' | base64 -d > " + certDir + "/fullchain.pem");
 
             // Write private key file
+            String base64PrivKey =
+                    java.util.Base64.getEncoder()
+                            .encodeToString(cert.getPrivateKeyPem().getBytes());
             api.execCommand(
                     containerId,
                     "sh",
                     "-c",
-                    "cat > "
-                            + certDir
-                            + "/privkey.pem << 'KEYEOF'\n"
-                            + cert.getPrivateKeyPem()
-                            + "\nKEYEOF");
+                    "echo '" + base64PrivKey + "' | base64 -d > " + certDir + "/privkey.pem");
 
             // Set proper permissions
             api.execCommand(containerId, "chmod", "600", certDir + "/privkey.pem");
@@ -689,8 +690,8 @@ public class CertificateService {
             // Regenerate nginx config to enable HTTPS
             regenerateNginxConfig(config, host);
 
-            // Reload nginx
-            api.execCommand(containerId, "nginx", "-s", "reload");
+            // Reload or start nginx
+            reloadOrStartNginx(api, containerId);
 
             log.info("Certificate deployed to nginx for {}", hostname);
 
@@ -723,20 +724,31 @@ public class CertificateService {
                             dockerService.createClientCached(host.getDockerHostUrl()));
             String containerId = config.getNginxContainerId();
 
-            // Write nginx.conf
+            // Write nginx.conf using base64 encoding for reliable transfer
+            String base64Config =
+                    java.util.Base64.getEncoder().encodeToString(nginxConfig.getBytes());
             api.execCommand(
                     containerId,
                     "sh",
                     "-c",
-                    "cat > /etc/nginx/nginx.conf << 'CONFEOF'\n" + nginxConfig + "\nCONFEOF");
+                    "echo '" + base64Config + "' | base64 -d > /etc/nginx/nginx.conf");
 
             // Test config
             String testResult = api.execCommand(containerId, "nginx", "-t");
-            log.debug("Nginx config test: {}", testResult);
+            log.info("Nginx config test: {}", testResult);
 
         } catch (Exception e) {
             log.error("Failed to apply nginx config: {}", e.getMessage(), e);
         }
+    }
+
+    /** Reload nginx by sending HUP signal to the master process (PID 1 in container). */
+    private void reloadOrStartNginx(DockerAPI api, String containerId) {
+        // In Docker containers, nginx runs as PID 1 (the main process)
+        // Send SIGHUP to reload the configuration
+        log.info("Sending SIGHUP to nginx master process (PID 1)");
+        String reloadResult = api.execCommand(containerId, "kill", "-HUP", "1");
+        log.info("Nginx reload result: {}", reloadResult.isEmpty() ? "(success - no output)" : reloadResult);
     }
 
     private Account findOrRegisterAccount(Session session, KeyPair accountKeyPair, String email)

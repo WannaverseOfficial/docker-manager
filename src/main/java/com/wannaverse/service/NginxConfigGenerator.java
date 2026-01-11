@@ -122,17 +122,12 @@ public class NginxConfigGenerator {
         StringBuilder sb = new StringBuilder();
 
         // Check if any route needs HTTPS AND we have a valid certificate
-        // Without a valid cert, serve HTTP and allow ACME challenge to complete first
         boolean hasCert =
                 cert != null && cert.getStatus() == IngressCertificate.CertificateStatus.ACTIVE;
-        boolean hasHttps =
-                hasCert
-                        && routes.stream()
-                                .anyMatch(
-                                        r ->
-                                                r.getProtocol() == IngressRoute.Protocol.HTTPS
-                                                        && r.getTlsMode()
-                                                                != IngressRoute.TlsMode.NONE);
+        boolean wantsTls =
+                routes.stream().anyMatch(r -> r.getTlsMode() != IngressRoute.TlsMode.NONE);
+        boolean wantsRedirect =
+                routes.stream().anyMatch(IngressRoute::isForceHttpsRedirect);
 
         // HTTP server block
         sb.append(
@@ -145,7 +140,7 @@ public class NginxConfigGenerator {
                 """
                         .formatted(hostname, config.getHttpPort(), hostname));
 
-        // ACME challenge location
+        // ACME challenge location (always present for Let's Encrypt)
         sb.append(
                 """
 
@@ -156,8 +151,8 @@ public class NginxConfigGenerator {
                 """
                         .formatted(config.getAcmeProxyPort()));
 
-        if (hasHttps) {
-            // Redirect HTTP to HTTPS
+        if (hasCert && wantsTls) {
+            // We have a valid certificate - redirect HTTP to HTTPS
             sb.append(
                     """
 
@@ -168,6 +163,22 @@ public class NginxConfigGenerator {
                     """);
 
             // HTTPS server block
+            sb.append(generateHttpsServerBlock(hostname, routes, cert, config));
+        } else if (wantsRedirect && wantsTls) {
+            // User wants redirect but cert not ready yet - still redirect
+            // (browser will show cert warning until cert is issued)
+            sb.append(
+                    """
+
+                            # Note: Redirecting to HTTPS but certificate is pending
+                            # ACME challenge above will still work for certificate issuance
+                            location / {
+                                return 301 https://$host$request_uri;
+                            }
+                        }
+                    """);
+
+            // Generate HTTPS server block placeholder (will use self-signed or fail until cert ready)
             sb.append(generateHttpsServerBlock(hostname, routes, cert, config));
         } else {
             // HTTP-only: add location blocks directly
@@ -308,13 +319,15 @@ public class NginxConfigGenerator {
 
         sb.append("# Preview: Server block for ").append(route.getHostname()).append("\n\n");
 
-        if (route.getProtocol() == IngressRoute.Protocol.HTTPS
-                && route.getTlsMode() != IngressRoute.TlsMode.NONE) {
+        boolean wantsTls = route.getTlsMode() != IngressRoute.TlsMode.NONE;
+
+        if (wantsTls) {
+            // HTTPS server block
             sb.append("server {\n");
             sb.append("    listen 443 ssl http2;\n");
             sb.append("    server_name ").append(route.getHostname()).append(";\n\n");
 
-            if (cert != null) {
+            if (cert != null && cert.getStatus() == IngressCertificate.CertificateStatus.ACTIVE) {
                 sb.append("    ssl_certificate /etc/nginx/certs/")
                         .append(route.getHostname())
                         .append("/fullchain.pem;\n");
@@ -331,13 +344,28 @@ public class NginxConfigGenerator {
             sb.append(generateLocationBlock(route).replaceAll("(?m)^", ""));
             sb.append("}\n");
 
-            // HTTP redirect block
+            // HTTP server block with redirect or proxy
             sb.append("\nserver {\n");
             sb.append("    listen 80;\n");
-            sb.append("    server_name ").append(route.getHostname()).append(";\n");
-            sb.append("    return 301 https://$host$request_uri;\n");
+            sb.append("    server_name ").append(route.getHostname()).append(";\n\n");
+            sb.append("    # ACME challenge handler\n");
+            sb.append("    location /.well-known/acme-challenge/ {\n");
+            sb.append("        proxy_pass http://host.docker.internal:8080/api/ingress/acme/;\n");
+            sb.append("        proxy_set_header Host $host;\n");
+            sb.append("    }\n\n");
+
+            if (route.isForceHttpsRedirect()) {
+                sb.append("    # Redirect HTTP to HTTPS\n");
+                sb.append("    location / {\n");
+                sb.append("        return 301 https://$host$request_uri;\n");
+                sb.append("    }\n");
+            } else {
+                sb.append("    # Serving HTTP (no redirect configured)\n");
+                sb.append(generateLocationBlock(route).replaceAll("(?m)^", ""));
+            }
             sb.append("}\n");
         } else {
+            // HTTP-only
             sb.append("server {\n");
             sb.append("    listen 80;\n");
             sb.append("    server_name ").append(route.getHostname()).append(";\n\n");

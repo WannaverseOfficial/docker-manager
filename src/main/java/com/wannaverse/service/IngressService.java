@@ -217,17 +217,20 @@ public class IngressService {
             // Step 6: Write nginx config to container and reload
             log.debug("Applying nginx config to container");
             String containerId = containerResponse.getId();
+
+            // Write config using base64 encoding for reliable transfer
+            String base64Config =
+                    java.util.Base64.getEncoder().encodeToString(nginxConfig.getBytes());
             api.execCommand(
                     containerId,
                     "sh",
                     "-c",
-                    "cat > /etc/nginx/nginx.conf << 'CONFEOF'\n" + nginxConfig + "\nCONFEOF");
+                    "echo '" + base64Config + "' | base64 -d > /etc/nginx/nginx.conf");
 
-            // Test and reload nginx
+            // Test and reload/start nginx
             String testResult = api.execCommand(containerId, "nginx", "-t");
-            log.debug("Nginx config test: {}", testResult);
-            api.execCommand(containerId, "nginx", "-s", "reload");
-            log.debug("Nginx reloaded");
+            log.info("Nginx config test: {}", testResult);
+            reloadOrStartNginx(api, containerId);
 
             config = configRepository.save(config);
 
@@ -451,6 +454,7 @@ public class IngressService {
         route.setTargetPort(request.targetPort());
         route.setProtocol(IngressRoute.Protocol.valueOf(request.protocol()));
         route.setTlsMode(IngressRoute.TlsMode.valueOf(request.tlsMode()));
+        route.setForceHttpsRedirect(request.forceHttpsRedirect());
 
         // Generate preview nginx block
         String nginxBlock = nginxConfigGenerator.generateServerBlockPreview(route, null);
@@ -550,6 +554,7 @@ public class IngressService {
         route.setTargetPort(request.targetPort());
         route.setProtocol(IngressRoute.Protocol.valueOf(request.protocol()));
         route.setTlsMode(IngressRoute.TlsMode.valueOf(request.tlsMode()));
+        route.setForceHttpsRedirect(request.forceHttpsRedirect());
         route.setEnabled(true);
         route.setCreatedByUserId(userId);
         route.setCreatedByUsername(username);
@@ -865,6 +870,15 @@ public class IngressService {
         return dockerService.dockerAPI(dockerService.createClientCached(host.getDockerHostUrl()));
     }
 
+    /** Reload nginx by sending HUP signal to the master process (PID 1 in container). */
+    private void reloadOrStartNginx(DockerAPI api, String containerId) {
+        // In Docker containers, nginx runs as PID 1 (the main process)
+        // Send SIGHUP to reload the configuration
+        log.info("Sending SIGHUP to nginx master process (PID 1)");
+        String reloadResult = api.execCommand(containerId, "kill", "-HUP", "1");
+        log.info("Nginx reload result: {}", reloadResult.isEmpty() ? "(success - no output)" : reloadResult);
+    }
+
     /** Find existing network by name or create a new one. */
     private String findOrCreateNetwork(DockerAPI api, String networkName) {
         // Check if network already exists
@@ -933,18 +947,24 @@ public class IngressService {
                 DockerAPI api = getDockerAPI(host);
                 String containerId = config.getNginxContainerId();
 
-                // Write nginx config to container
-                api.execCommand(
-                        containerId,
-                        "sh",
-                        "-c",
-                        "cat > /etc/nginx/nginx.conf << 'CONFEOF'\n" + nginxConfig + "\nCONFEOF");
+                // Write nginx config to container using base64 encoding for reliable transfer
+                String base64Config =
+                        java.util.Base64.getEncoder().encodeToString(nginxConfig.getBytes());
+                String writeResult =
+                        api.execCommand(
+                                containerId,
+                                "sh",
+                                "-c",
+                                "echo '" + base64Config + "' | base64 -d > /etc/nginx/nginx.conf");
+                log.debug("Nginx config write result: {}", writeResult);
 
-                // Test and reload nginx
+                // Test nginx config
                 String testResult = api.execCommand(containerId, "nginx", "-t");
-                log.debug("Nginx config test: {}", testResult);
+                log.info("Nginx config test: {}", testResult);
 
-                api.execCommand(containerId, "nginx", "-s", "reload");
+                // Reload or start nginx
+                reloadOrStartNginx(api, containerId);
+
                 log.info("Nginx config applied and reloaded successfully");
 
             } catch (Exception e) {
@@ -1026,7 +1046,8 @@ public class IngressService {
             String certificateId,
             boolean authEnabled,
             String authType,
-            String authConfig) {}
+            String authConfig,
+            boolean forceHttpsRedirect) {}
 
     public record ExposeAppPreview(
             String proposedNginxBlock,

@@ -51,6 +51,8 @@ public class IngressRoute {
 
     private boolean authEnabled = false;
 
+    private boolean forceHttpsRedirect = false;
+
     @Enumerated(EnumType.STRING)
     private AuthType authType;
 
