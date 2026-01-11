@@ -79,6 +79,14 @@ public class NginxConfigGenerator {
             sendfile on;
             keepalive_timeout 65;
 
+            # Default HTTPS server - rejects SSL for hostnames without certificates
+            # This prevents serving the wrong certificate for unconfigured hostnames
+            server {
+                listen %d ssl default_server;
+                server_name _;
+                ssl_reject_handshake on;
+            }
+
             # ACME challenge handler (always present for Let's Encrypt)
             server {
                 listen %d default_server;
@@ -97,6 +105,7 @@ public class NginxConfigGenerator {
                 .formatted(
                         DATE_FORMATTER.format(Instant.now()),
                         config.getDockerHostId(),
+                        config.getHttpsPort(),
                         config.getHttpPort(),
                         config.getAcmeProxyPort());
     }
