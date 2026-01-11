@@ -33,7 +33,7 @@ const pageTitles = {
     volumes: 'Volumes',
     networks: 'Networks',
     'git-repos': 'Git Repositories',
-    pipelines: 'CI/CD Pipelines',
+    pipelines: 'Pipelines',
     'deployment-history': 'Deployment History',
     hosts: 'Docker Hosts',
     'container-health': 'Container Health',

@@ -33,7 +33,7 @@ function renderListView() {
 
         <div id="panel-pipelines" class="tab-panel">
             <div class="section-header" style="margin-top: 16px;">
-                <h2 class="section-title">CI/CD Pipelines</h2>
+                <h2 class="section-title">Pipelines</h2>
                 <md-filled-button id="add-pipeline-btn">
                     <span class="material-symbols-outlined" slot="icon">add</span>
                     Create Pipeline
@@ -366,7 +366,7 @@ function renderPipelinesGrid() {
                     <span class="material-symbols-outlined">account_tree</span>
                 </div>
                 <h3>No Pipelines Yet</h3>
-                <p>Create your first CI/CD pipeline to automate your builds and deployments.</p>
+                <p>Create your first pipeline to automate a workflow</p>
                 <md-filled-button id="empty-add-btn">
                     <span class="material-symbols-outlined" slot="icon">add</span>
                     Create Pipeline

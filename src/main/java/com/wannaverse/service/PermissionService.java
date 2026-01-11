@@ -89,11 +89,29 @@ public class PermissionService {
         return false;
     }
 
-    /**
-     * Get the set of allowed resource IDs for a user. Returns null if user has global access (no
-     * resource restrictions). Returns empty set if user has no access. Returns set of IDs if user
-     * has resource-scoped permissions only.
-     */
+    public boolean hasAnyPermission(
+            String userId, Resource resource, String action, String hostId) {
+        User user =
+                userRepository
+                        .findById(userId)
+                        .orElseThrow(() -> new RuntimeException("User not found"));
+
+        if (user.isAdmin()) {
+            return true;
+        }
+
+        List<UserPermission> directPerms =
+                userPermissionRepository.findMatchingPermissions(userId, resource, action, hostId);
+        if (!directPerms.isEmpty()) {
+            return true;
+        }
+
+        List<GroupPermission> groupPerms =
+                groupPermissionRepository.findMatchingPermissionsForUser(
+                        userId, resource, action, hostId);
+        return !groupPerms.isEmpty();
+    }
+
     @Transactional(readOnly = true)
     public Set<String> getAllowedResourceIds(
             String userId, Resource resource, String action, String hostId) {

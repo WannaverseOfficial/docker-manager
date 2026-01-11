@@ -6,7 +6,7 @@ import {
     listGroups, createGroup, updateGroup, deleteGroup,
     getGroupPermissions, grantGroupPermission, revokeGroupPermission,
     addUserToGroup, removeUserFromGroup,
-    RESOURCES, RESOURCE_ACTIONS
+    RESOURCES, RESOURCE_ACTIONS, RESOURCE_CATEGORIES, RESOURCE_LABELS
 } from '../api/users.js';
 import { listContainers, listVolumes, listNetworks } from '../api/docker.js';
 import { showToast } from '../components/toast.js';
@@ -14,15 +14,15 @@ import { openModal, closeModal } from '../components/modal.js';
 import { confirmDelete } from '../components/confirm-dialog.js';
 import { renderTable, renderActions, setupTableActions } from '../components/data-table.js';
 import { renderRoleBadge, renderEnabledBadge } from '../components/status-badge.js';
-import { navigateTo } from '../router.js';
 
-// Resources that support scoping to specific items
 const SCOPABLE_RESOURCES = ['CONTAINERS', 'VOLUMES', 'NETWORKS'];
 
 let users = [];
 let groups = [];
+let currentView = 'list';
+let currentUserId = null;
+let currentGroupId = null;
 
-// Render page
 export function render() {
     if (!isAdmin()) {
         return `
@@ -34,7 +34,31 @@ export function render() {
         `;
     }
 
-    return `
+    return `<div id="users-page"></div>`;
+}
+
+export async function init() {
+    if (!isAdmin()) return;
+    await loadData();
+    renderListView();
+}
+
+async function loadData() {
+    try {
+        [users, groups] = await Promise.all([listUsers(), listGroups()]);
+    } catch (error) {
+        console.error('Failed to load data:', error);
+        showToast('Failed to load data', 'error');
+    }
+}
+
+function renderListView() {
+    currentView = 'list';
+    currentUserId = null;
+    currentGroupId = null;
+
+    const page = document.getElementById('users-page');
+    page.innerHTML = `
         <md-tabs id="users-tabs">
             <md-primary-tab id="tab-users" aria-controls="panel-users">Users</md-primary-tab>
             <md-primary-tab id="tab-groups" aria-controls="panel-groups">Groups</md-primary-tab>
@@ -49,11 +73,7 @@ export function render() {
                 </md-filled-button>
             </div>
             <div class="card">
-                <div class="card-content" id="users-table">
-                    <div class="loading-container">
-                        <md-circular-progress indeterminate></md-circular-progress>
-                    </div>
-                </div>
+                <div class="card-content" id="users-table"></div>
             </div>
         </div>
 
@@ -66,21 +86,17 @@ export function render() {
                 </md-filled-button>
             </div>
             <div class="card">
-                <div class="card-content" id="groups-table">
-                    <div class="loading-container">
-                        <md-circular-progress indeterminate></md-circular-progress>
-                    </div>
-                </div>
+                <div class="card-content" id="groups-table"></div>
             </div>
         </div>
     `;
+
+    renderUsersTable();
+    renderGroupsTable();
+    setupListViewListeners();
 }
 
-// Initialize
-export async function init() {
-    if (!isAdmin()) return;
-
-    // Setup tabs
+function setupListViewListeners() {
     const tabs = document.getElementById('users-tabs');
     tabs?.addEventListener('change', () => {
         const activeTab = tabs.activeTabIndex;
@@ -93,46 +109,26 @@ export async function init() {
 
     setupTableActions('users-table', {
         edit: showEditUserModal,
-        permissions: showUserPermissionsModal,
+        permissions: (id) => renderUserPermissionsView(id),
         reset: handleResetPassword,
         delete: handleDeleteUser,
     });
 
     setupTableActions('groups-table', {
-        edit: showEditGroupModal,
-        permissions: showGroupPermissionsModal,
+        edit: (id) => renderGroupDetailView(id),
+        permissions: (id) => renderGroupDetailView(id),
         delete: handleDeleteGroup,
     });
-
-    await loadData();
 }
 
-// Load data
-async function loadData() {
-    try {
-        [users, groups] = await Promise.all([listUsers(), listGroups()]);
-        renderUsersTable();
-        renderGroupsTable();
-    } catch (error) {
-        console.error('Failed to load users:', error);
-        showToast('Failed to load users', 'error');
-    }
-}
-
-// Render users table
 function renderUsersTable() {
     const container = document.getElementById('users-table');
-
     const columns = [
         { key: 'username', label: 'Username' },
         { key: 'email', label: 'Email' },
         { key: 'admin', label: 'Role', render: renderRoleBadge },
         { key: 'enabled', label: 'Status', render: renderEnabledBadge },
-        {
-            key: 'groups',
-            label: 'Groups',
-            render: (grps) => grps?.map(g => g.name).join(', ') || 'None'
-        },
+        { key: 'groups', label: 'Groups', render: (grps) => grps?.map(g => g.name).join(', ') || 'None' },
     ];
 
     const actions = (user) => renderActions([
@@ -142,27 +138,15 @@ function renderUsersTable() {
         { icon: 'delete', title: 'Delete', action: 'delete', color: 'var(--status-stopped)' },
     ]);
 
-    container.innerHTML = renderTable({
-        columns,
-        data: users,
-        actions,
-        emptyMessage: 'No users found',
-        emptyIcon: 'group',
-    });
+    container.innerHTML = renderTable({ columns, data: users, actions, emptyMessage: 'No users found', emptyIcon: 'group' });
 }
 
-// Render groups table
 function renderGroupsTable() {
     const container = document.getElementById('groups-table');
-
     const columns = [
         { key: 'name', label: 'Name' },
         { key: 'description', label: 'Description' },
-        {
-            key: 'members',
-            label: 'Members',
-            render: (members) => members?.length || 0
-        },
+        { key: 'members', label: 'Members', render: (members) => members?.length || 0 },
     ];
 
     const actions = (group) => renderActions([
@@ -171,16 +155,559 @@ function renderGroupsTable() {
         { icon: 'delete', title: 'Delete', action: 'delete', color: 'var(--status-stopped)' },
     ]);
 
-    container.innerHTML = renderTable({
-        columns,
-        data: groups,
-        actions,
-        emptyMessage: 'No groups found',
-        emptyIcon: 'groups',
+    container.innerHTML = renderTable({ columns, data: groups, actions, emptyMessage: 'No groups found', emptyIcon: 'groups' });
+}
+
+// ==================== User Permissions Full Page View ====================
+
+async function renderUserPermissionsView(userId) {
+    currentView = 'user-permissions';
+    currentUserId = userId;
+
+    const user = users.find(u => u.id === userId);
+    if (!user) return renderListView();
+
+    const page = document.getElementById('users-page');
+    page.innerHTML = `
+        <div class="full-page-view">
+            <div class="view-header">
+                <div class="view-header-left">
+                    <md-icon-button id="back-to-list-btn">
+                        <span class="material-symbols-outlined">arrow_back</span>
+                    </md-icon-button>
+                    <div class="view-title-group">
+                        <h2>Permissions: ${user.username}</h2>
+                        <span class="view-subtitle">${user.email} ${user.admin ? '(Admin)' : ''}</span>
+                    </div>
+                </div>
+            </div>
+            <div class="permissions-layout">
+                <div class="permissions-current">
+                    <div class="section-header">
+                        <h3 class="section-title">Current Permissions</h3>
+                    </div>
+                    <div id="current-permissions-list" class="permissions-list">
+                        <div class="loading-container"><md-circular-progress indeterminate></md-circular-progress></div>
+                    </div>
+                </div>
+                <div class="permissions-grant">
+                    <div class="section-header">
+                        <h3 class="section-title">Grant Permission</h3>
+                    </div>
+                    <div class="grant-form">
+                        ${renderPermissionGrantForm('user')}
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+
+    document.getElementById('back-to-list-btn')?.addEventListener('click', renderListView);
+    await loadAndRenderUserPermissions(userId);
+    setupPermissionGrantForm('user', userId);
+}
+
+async function loadAndRenderUserPermissions(userId) {
+    try {
+        const permissions = await getUserPermissions(userId);
+        renderPermissionsList('current-permissions-list', permissions, 'user', userId);
+    } catch (error) {
+        showToast('Failed to load permissions', 'error');
+    }
+}
+
+// ==================== Group Detail Full Page View ====================
+
+async function renderGroupDetailView(groupId) {
+    currentView = 'group-detail';
+    currentGroupId = groupId;
+
+    const group = groups.find(g => g.id === groupId);
+    if (!group) return renderListView();
+
+    const page = document.getElementById('users-page');
+    page.innerHTML = `
+        <div class="full-page-view">
+            <div class="view-header">
+                <div class="view-header-left">
+                    <md-icon-button id="back-to-list-btn">
+                        <span class="material-symbols-outlined">arrow_back</span>
+                    </md-icon-button>
+                    <div class="view-title-group">
+                        <h2>${group.name}</h2>
+                        <span class="view-subtitle">${group.description || 'No description'}</span>
+                    </div>
+                </div>
+                <div class="view-header-right">
+                    <md-outlined-button id="edit-group-info-btn">
+                        <span class="material-symbols-outlined" slot="icon">edit</span>
+                        Edit Info
+                    </md-outlined-button>
+                    <md-outlined-button id="delete-group-btn" style="--md-outlined-button-outline-color: var(--md-sys-color-error);">
+                        <span class="material-symbols-outlined" slot="icon">delete</span>
+                        Delete
+                    </md-outlined-button>
+                </div>
+            </div>
+
+            <div class="group-detail-layout">
+                <div class="group-members-section">
+                    <div class="section-header">
+                        <h3 class="section-title">Members (${group.members?.length || 0})</h3>
+                    </div>
+                    <div class="members-list">
+                        ${renderGroupMembers(group)}
+                    </div>
+                </div>
+
+                <div class="permissions-layout">
+                    <div class="permissions-current">
+                        <div class="section-header">
+                            <h3 class="section-title">Group Permissions</h3>
+                        </div>
+                        <div id="current-permissions-list" class="permissions-list">
+                            <div class="loading-container"><md-circular-progress indeterminate></md-circular-progress></div>
+                        </div>
+                    </div>
+                    <div class="permissions-grant">
+                        <div class="section-header">
+                            <h3 class="section-title">Grant Permission</h3>
+                        </div>
+                        <div class="grant-form">
+                            ${renderPermissionGrantForm('group')}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+
+    document.getElementById('back-to-list-btn')?.addEventListener('click', renderListView);
+    document.getElementById('edit-group-info-btn')?.addEventListener('click', () => showEditGroupInfoModal(groupId));
+    document.getElementById('delete-group-btn')?.addEventListener('click', () => handleDeleteGroupFromDetail(groupId));
+
+    await loadAndRenderGroupPermissions(groupId);
+    setupPermissionGrantForm('group', groupId);
+}
+
+function renderGroupMembers(group) {
+    if (!group.members?.length) {
+        return `<div class="empty-state small"><span class="material-symbols-outlined">group_off</span><p>No members</p></div>`;
+    }
+
+    return group.members.map(member => `
+        <div class="member-item">
+            <div class="member-info">
+                <span class="material-symbols-outlined">person</span>
+                <span class="member-name">${member.username}</span>
+                ${member.admin ? '<span class="chip admin">Admin</span>' : ''}
+            </div>
+        </div>
+    `).join('');
+}
+
+async function loadAndRenderGroupPermissions(groupId) {
+    try {
+        const permissions = await getGroupPermissions(groupId);
+        renderPermissionsList('current-permissions-list', permissions, 'group', groupId);
+    } catch (error) {
+        showToast('Failed to load permissions', 'error');
+    }
+}
+
+// ==================== Shared Permission Components ====================
+
+function renderPermissionGrantForm(type) {
+    return `
+        <div class="grant-form-content">
+            <div class="form-section">
+                <label class="form-label">Resource Category</label>
+                <div class="category-selector" id="${type}-category-selector">
+                    ${Object.keys(RESOURCE_CATEGORIES).map((cat, i) => `
+                        <button class="category-btn ${i === 0 ? 'selected' : ''}" data-category="${cat}">${cat}</button>
+                    `).join('')}
+                </div>
+            </div>
+
+            <div class="form-section">
+                <label class="form-label">Resource</label>
+                <div class="resource-grid" id="${type}-resource-grid">
+                    ${renderResourceButtons(Object.keys(RESOURCE_CATEGORIES)[0], type)}
+                </div>
+            </div>
+
+            <div class="form-section">
+                <label class="form-label">Actions</label>
+                <div class="actions-selector" id="${type}-actions-selector">
+                    <p class="hint-text">Select a resource first</p>
+                </div>
+            </div>
+
+            <div class="form-section" id="${type}-scope-section" style="display: none;">
+                <label class="form-label">Scope (Optional)</label>
+                <md-filled-select id="${type}-scope-select" label="Specific resource" style="width: 100%;">
+                    <md-select-option value="" selected>All (no restriction)</md-select-option>
+                </md-filled-select>
+            </div>
+
+            <div class="form-actions">
+                <md-filled-button id="${type}-grant-btn" disabled>
+                    <span class="material-symbols-outlined" slot="icon">add</span>
+                    Grant Permission
+                </md-filled-button>
+            </div>
+        </div>
+    `;
+}
+
+function renderResourceButtons(category, type) {
+    const resources = RESOURCE_CATEGORIES[category] || [];
+    return resources.map(r => `
+        <button class="resource-btn" data-resource="${r}">
+            <span class="resource-name">${RESOURCE_LABELS[r] || r}</span>
+        </button>
+    `).join('');
+}
+
+function renderPermissionsList(containerId, permissions, type, entityId) {
+    const container = document.getElementById(containerId);
+
+    if (!permissions?.length) {
+        container.innerHTML = `<div class="empty-state small"><span class="material-symbols-outlined">key_off</span><p>No permissions assigned</p></div>`;
+        return;
+    }
+
+    // Group by resource
+    const grouped = {};
+    permissions.forEach(p => {
+        const key = p.resource;
+        if (!grouped[key]) grouped[key] = [];
+        grouped[key].push(p);
+    });
+
+    container.innerHTML = Object.entries(grouped).map(([resource, perms]) => `
+        <div class="permission-group">
+            <div class="permission-group-header">
+                <span class="resource-label">${RESOURCE_LABELS[resource] || resource}</span>
+                <span class="permission-count">${perms.length} permission${perms.length > 1 ? 's' : ''}</span>
+            </div>
+            <div class="permission-items">
+                ${perms.map(p => `
+                    <div class="permission-item">
+                        <div class="permission-info">
+                            <span class="action-name">${p.action === '*' ? 'All actions' : p.action}</span>
+                            ${p.scopeResourceId ? `<span class="scope-badge">${p.scopeResourceId}</span>` : ''}
+                            ${p.source && p.source !== 'direct' ? `<span class="source-badge">${p.source}</span>` : ''}
+                        </div>
+                        ${(!p.source || p.source === 'direct') ? `
+                            <md-icon-button class="revoke-btn" data-permission-id="${p.id}" data-type="${type}" data-entity-id="${entityId}">
+                                <span class="material-symbols-outlined">close</span>
+                            </md-icon-button>
+                        ` : ''}
+                    </div>
+                `).join('')}
+            </div>
+        </div>
+    `).join('');
+
+    // Setup revoke handlers
+    container.querySelectorAll('.revoke-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const permId = btn.dataset.permissionId;
+            const pType = btn.dataset.type;
+            const entId = btn.dataset.entityId;
+
+            try {
+                if (pType === 'user') {
+                    await revokeUserPermission(entId, permId);
+                    await loadAndRenderUserPermissions(entId);
+                } else {
+                    await revokeGroupPermission(entId, permId);
+                    await loadAndRenderGroupPermissions(entId);
+                }
+                showToast('Permission revoked', 'success');
+            } catch (e) {
+                showToast('Failed: ' + e.message, 'error');
+            }
+        });
     });
 }
 
-// Create user modal
+function setupPermissionGrantForm(type, entityId) {
+    let selectedResource = null;
+    let selectedActions = new Set();
+
+    // Category selection
+    document.querySelectorAll(`#${type}-category-selector .category-btn`).forEach(btn => {
+        btn.addEventListener('click', () => {
+            document.querySelectorAll(`#${type}-category-selector .category-btn`).forEach(b => b.classList.remove('selected'));
+            btn.classList.add('selected');
+            const category = btn.dataset.category;
+            document.getElementById(`${type}-resource-grid`).innerHTML = renderResourceButtons(category, type);
+            setupResourceButtons();
+            selectedResource = null;
+            selectedActions.clear();
+            updateActionsSelector();
+            updateGrantButton();
+        });
+    });
+
+    function setupResourceButtons() {
+        document.querySelectorAll(`#${type}-resource-grid .resource-btn`).forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll(`#${type}-resource-grid .resource-btn`).forEach(b => b.classList.remove('selected'));
+                btn.classList.add('selected');
+                selectedResource = btn.dataset.resource;
+                selectedActions.clear();
+                updateActionsSelector();
+                updateScopeSection();
+                updateGrantButton();
+            });
+        });
+    }
+
+    function updateActionsSelector() {
+        const container = document.getElementById(`${type}-actions-selector`);
+        if (!selectedResource) {
+            container.innerHTML = '<p class="hint-text">Select a resource first</p>';
+            return;
+        }
+
+        const actions = RESOURCE_ACTIONS[selectedResource] || [];
+        const hint = getPermissionHint(selectedResource, selectedActions);
+
+        container.innerHTML = `
+            <div class="action-chips">
+                <button class="action-chip ${selectedActions.has('*') ? 'selected' : ''}" data-action="*">
+                    All Actions
+                </button>
+                ${actions.map(a => `
+                    <button class="action-chip ${selectedActions.has(a) ? 'selected' : ''}" data-action="${a}">${a}</button>
+                `).join('')}
+            </div>
+            ${hint ? `<div class="permission-hint" id="${type}-permission-hint">${hint}</div>` : ''}
+        `;
+
+        container.querySelectorAll('.action-chip').forEach(chip => {
+            chip.addEventListener('click', () => {
+                const action = chip.dataset.action;
+                if (action === '*') {
+                    selectedActions.clear();
+                    selectedActions.add('*');
+                } else {
+                    selectedActions.delete('*');
+                    if (selectedActions.has(action)) {
+                        selectedActions.delete(action);
+                    } else {
+                        selectedActions.add(action);
+                    }
+                }
+                updateActionsSelector();
+                updateGrantButton();
+            });
+        });
+
+        // Setup quick-add buttons in hints
+        container.querySelectorAll('.quick-add-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const actionsToAdd = btn.dataset.actions.split(',');
+                actionsToAdd.forEach(a => selectedActions.add(a));
+                selectedActions.delete('*');
+                updateActionsSelector();
+                updateGrantButton();
+            });
+        });
+    }
+
+    function getPermissionHint(resource, actions) {
+        const scopeSelect = document.getElementById(`${type}-scope-select`);
+        const isScoped = scopeSelect?.value && scopeSelect.value !== '';
+
+        if (resource === 'CONTAINERS') {
+            if (actions.has('list') && actions.size === 1) {
+                return `
+                    <div class="hint-card">
+                        <span class="material-symbols-outlined">lightbulb</span>
+                        <div class="hint-content">
+                            <p><strong>Tip:</strong> "list" only shows the container in the list. To view details or control it, also add:</p>
+                            <div class="hint-actions">
+                                <button class="quick-add-btn" data-actions="inspect,logs">+ View (inspect, logs)</button>
+                                <button class="quick-add-btn" data-actions="start,stop,restart">+ Control (start, stop, restart)</button>
+                                <button class="quick-add-btn" data-actions="inspect,logs,start,stop,restart,exec">+ Full Access</button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
+            if (actions.has('list') && !actions.has('inspect') && !actions.has('*')) {
+                return `
+                    <div class="hint-card info">
+                        <span class="material-symbols-outlined">info</span>
+                        <p>Add <button class="quick-add-btn text" data-actions="inspect">inspect</button> to view container details</p>
+                    </div>
+                `;
+            }
+        }
+
+        if (resource === 'PIPELINES') {
+            if (actions.has('list') && actions.size === 1) {
+                return `
+                    <div class="hint-card">
+                        <span class="material-symbols-outlined">lightbulb</span>
+                        <div class="hint-content">
+                            <p><strong>Tip:</strong> To work with pipelines, also consider:</p>
+                            <div class="hint-actions">
+                                <button class="quick-add-btn" data-actions="read,trigger">+ Run pipelines</button>
+                                <button class="quick-add-btn" data-actions="read,create,update,delete,trigger">+ Manage pipelines</button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
+        }
+
+        if (resource === 'INGRESS_ROUTES') {
+            if (actions.has('list') && actions.size === 1) {
+                return `
+                    <div class="hint-card">
+                        <span class="material-symbols-outlined">lightbulb</span>
+                        <div class="hint-content">
+                            <p><strong>Tip:</strong> To manage ingress routes, also add:</p>
+                            <div class="hint-actions">
+                                <button class="quick-add-btn" data-actions="read,create,update,delete">+ Manage routes</button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
+        }
+
+        if (resource === 'GIT_REPOS') {
+            if (actions.has('list') && actions.size === 1) {
+                return `
+                    <div class="hint-card">
+                        <span class="material-symbols-outlined">lightbulb</span>
+                        <div class="hint-content">
+                            <p><strong>Tip:</strong> To work with repositories:</p>
+                            <div class="hint-actions">
+                                <button class="quick-add-btn" data-actions="read,deploy">+ Deploy only</button>
+                                <button class="quick-add-btn" data-actions="read,create,update,delete,deploy,poll">+ Full management</button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
+        }
+
+        if (resource === 'USERS' || resource === 'USER_GROUPS') {
+            if (actions.has('list') && actions.size === 1) {
+                return `
+                    <div class="hint-card">
+                        <span class="material-symbols-outlined">lightbulb</span>
+                        <div class="hint-content">
+                            <p><strong>Tip:</strong> To manage ${resource === 'USERS' ? 'users' : 'groups'}:</p>
+                            <div class="hint-actions">
+                                <button class="quick-add-btn" data-actions="read">+ View details</button>
+                                <button class="quick-add-btn" data-actions="read,create,update,delete">+ Full management</button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
+        }
+
+        return null;
+    }
+
+    async function updateScopeSection() {
+        const section = document.getElementById(`${type}-scope-section`);
+        const select = document.getElementById(`${type}-scope-select`);
+
+        if (SCOPABLE_RESOURCES.includes(selectedResource)) {
+            section.style.display = 'block';
+            await loadScopeOptions(select, selectedResource);
+        } else {
+            section.style.display = 'none';
+        }
+    }
+
+    function updateGrantButton() {
+        const btn = document.getElementById(`${type}-grant-btn`);
+        btn.disabled = !selectedResource || selectedActions.size === 0;
+    }
+
+    // Grant button
+    document.getElementById(`${type}-grant-btn`)?.addEventListener('click', async () => {
+        if (!selectedResource || selectedActions.size === 0) return;
+
+        const scopeSelect = document.getElementById(`${type}-scope-select`);
+        const scopeResourceId = scopeSelect?.value || null;
+
+        try {
+            // Grant each selected action
+            for (const action of selectedActions) {
+                const permission = { resource: selectedResource, action };
+                if (scopeResourceId) permission.scopeResourceId = scopeResourceId;
+
+                if (type === 'user') {
+                    await grantUserPermission(entityId, permission);
+                } else {
+                    await grantGroupPermission(entityId, permission);
+                }
+            }
+
+            showToast('Permission(s) granted', 'success');
+
+            // Reload permissions
+            if (type === 'user') {
+                await loadAndRenderUserPermissions(entityId);
+            } else {
+                await loadAndRenderGroupPermissions(entityId);
+            }
+
+            // Reset form
+            selectedActions.clear();
+            updateActionsSelector();
+            updateGrantButton();
+        } catch (e) {
+            showToast('Failed: ' + e.message, 'error');
+        }
+    });
+
+    setupResourceButtons();
+}
+
+async function loadScopeOptions(selectElement, resource) {
+    const hostId = state.currentHostId;
+    if (!hostId) {
+        selectElement.innerHTML = `<md-select-option value="" selected>All (no restriction)</md-select-option>`;
+        return;
+    }
+
+    try {
+        let items = [];
+        if (resource === 'CONTAINERS') {
+            const containers = await listContainers(hostId, true);
+            items = containers.map(c => ({ value: c.names?.[0]?.replace(/^\//, '') || c.id?.substring(0, 12), label: c.names?.[0]?.replace(/^\//, '') || c.id?.substring(0, 12) }));
+        } else if (resource === 'VOLUMES') {
+            const volumes = await listVolumes(hostId);
+            items = volumes.map(v => ({ value: v.name, label: v.name }));
+        } else if (resource === 'NETWORKS') {
+            const networks = await listNetworks(hostId);
+            items = networks.map(n => ({ value: n.name, label: n.name }));
+        }
+
+        selectElement.innerHTML = `
+            <md-select-option value="" selected>All (no restriction)</md-select-option>
+            ${items.map(item => `<md-select-option value="${item.value}">${item.label}</md-select-option>`).join('')}
+        `;
+    } catch (error) {
+        selectElement.innerHTML = `<md-select-option value="" selected>All (no restriction)</md-select-option>`;
+    }
+}
+
+// ==================== Modals (Create/Edit) ====================
+
 function showCreateUserModal() {
     const content = `
         <form class="dialog-form">
@@ -216,7 +743,6 @@ function showCreateUserModal() {
                 closeModal();
                 showToast('User created', 'success');
 
-                // Show temp password
                 openModal('User Created', `
                     <p>Temporary password for <strong>${data.username}</strong>:</p>
                     <div class="terminal" style="margin-top: 16px;">${result.temporaryPassword}</div>
@@ -224,6 +750,7 @@ function showCreateUserModal() {
                 `, `<md-filled-button onclick="document.getElementById('app-dialog').close()">OK</md-filled-button>`);
 
                 await loadData();
+                renderListView();
             } catch (error) {
                 showToast('Failed: ' + error.message, 'error');
             }
@@ -231,16 +758,13 @@ function showCreateUserModal() {
     }, 100);
 }
 
-// Edit user modal
 async function showEditUserModal(id) {
     const user = users.find(u => u.id === id);
     if (!user) return;
 
     const groupCheckboxes = groups.map(g => {
         const checked = user.groups?.some(ug => ug.id === g.id) ? 'checked' : '';
-        return `<label style="display: flex; align-items: center; gap: 8px;">
-            <md-checkbox data-group-id="${g.id}" ${checked}></md-checkbox>${g.name}
-        </label>`;
+        return `<label style="display: flex; align-items: center; gap: 8px;"><md-checkbox data-group-id="${g.id}" ${checked}></md-checkbox>${g.name}</label>`;
     }).join('');
 
     const content = `
@@ -271,37 +795,26 @@ async function showEditUserModal(id) {
     setTimeout(() => {
         document.getElementById('edit-user-submit')?.addEventListener('click', async () => {
             try {
-                // Update user
                 await updateUser(id, {
                     email: document.getElementById('edit-email')?.value,
                     admin: document.getElementById('edit-admin')?.checked,
                     enabled: document.getElementById('edit-enabled')?.checked,
                 });
 
-                // Update group memberships
-                const selectedGroups = Array.from(document.querySelectorAll('[data-group-id]'))
-                    .filter(cb => cb.checked)
-                    .map(cb => cb.dataset.groupId);
-
+                const selectedGroups = Array.from(document.querySelectorAll('[data-group-id]')).filter(cb => cb.checked).map(cb => cb.dataset.groupId);
                 const currentGroups = user.groups?.map(g => g.id) || [];
 
-                // Add to new groups
                 for (const gid of selectedGroups) {
-                    if (!currentGroups.includes(gid)) {
-                        await addUserToGroup(id, gid);
-                    }
+                    if (!currentGroups.includes(gid)) await addUserToGroup(id, gid);
                 }
-
-                // Remove from old groups
                 for (const gid of currentGroups) {
-                    if (!selectedGroups.includes(gid)) {
-                        await removeUserFromGroup(id, gid);
-                    }
+                    if (!selectedGroups.includes(gid)) await removeUserFromGroup(id, gid);
                 }
 
                 closeModal();
                 showToast('User updated', 'success');
                 await loadData();
+                renderListView();
             } catch (error) {
                 showToast('Failed: ' + error.message, 'error');
             }
@@ -309,212 +822,6 @@ async function showEditUserModal(id) {
     }, 100);
 }
 
-// User permissions modal
-async function showUserPermissionsModal(id) {
-    const user = users.find(u => u.id === id);
-    if (!user) return;
-
-    try {
-        const permissions = await getUserPermissions(id);
-
-        const resourceOptions = Object.keys(RESOURCES).map(r =>
-            `<md-select-option value="${r}">${r}</md-select-option>`
-        ).join('');
-
-        const permissionsList = permissions.map(p => `
-            <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px; background: var(--md-sys-color-surface-container); border-radius: 8px; margin-bottom: 8px;">
-                <span>
-                    ${p.resource}.${p.action}${p.scopeResourceId ? ` [${p.scopeResourceId}]` : ''}${p.scopeHostId ? ` @${p.scopeHostId.substring(0, 8)}` : ''}${p.source ? ` <span style="color: var(--md-sys-color-outline);">(${p.source})</span>` : ''}
-                </span>
-                ${p.source === 'direct' || !p.source ? `<md-icon-button data-revoke="${p.id}"><span class="material-symbols-outlined">delete</span></md-icon-button>` : ''}
-            </div>
-        `).join('') || '<p style="color: var(--md-sys-color-on-surface-variant);">No permissions</p>';
-
-        const content = `
-            <div style="margin-bottom: 16px;">
-                <h4>Current Permissions</h4>
-                <div id="permissions-list" style="max-height: 200px; overflow-y: auto;">${permissionsList}</div>
-            </div>
-            <div>
-                <h4>Grant Permission</h4>
-                <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 8px;">
-                    <div style="display: flex; gap: 8px;">
-                        <md-filled-select id="perm-resource" label="Resource" style="flex: 1;">
-                            ${resourceOptions}
-                        </md-filled-select>
-                        <md-filled-select id="perm-action" label="Action" style="flex: 1;">
-                            <md-select-option value="*">* (All)</md-select-option>
-                        </md-filled-select>
-                    </div>
-                    <div id="resource-scope-section" style="display: none;">
-                        <div style="display: flex; gap: 8px; align-items: flex-end;">
-                            <md-filled-select id="perm-resource-name" label="Resource Name" style="flex: 1;">
-                                <md-select-option value="*" selected>* (All)</md-select-option>
-                            </md-filled-select>
-                            <md-circular-progress id="resource-loading" indeterminate style="display: none; width: 24px; height: 24px;"></md-circular-progress>
-                        </div>
-                        <p style="font-size: 12px; color: var(--md-sys-color-outline); margin-top: 4px;">
-                            Select a specific resource or * for all
-                        </p>
-                    </div>
-                    <md-filled-button id="grant-perm" style="align-self: flex-end;">Grant</md-filled-button>
-                </div>
-            </div>
-        `;
-
-        openModal('Permissions: ' + user.username, content, `
-            <md-filled-button onclick="document.getElementById('app-dialog').close()">Close</md-filled-button>
-        `);
-
-        setTimeout(() => {
-            // Update actions and show/hide resource scope when resource changes
-            document.getElementById('perm-resource')?.addEventListener('change', async (e) => {
-                const resource = e.target.value;
-                const actions = RESOURCE_ACTIONS[resource] || [];
-                const actionSelect = document.getElementById('perm-action');
-                actionSelect.innerHTML = `
-                    <md-select-option value="*">* (All)</md-select-option>
-                    ${actions.map(a => `<md-select-option value="${a}">${a}</md-select-option>`).join('')}
-                `;
-
-                // Show/hide resource scope section
-                const scopeSection = document.getElementById('resource-scope-section');
-                const resourceNameSelect = document.getElementById('perm-resource-name');
-
-                if (SCOPABLE_RESOURCES.includes(resource)) {
-                    scopeSection.style.display = 'block';
-                    await loadResourceOptions(resource, resourceNameSelect);
-                } else {
-                    scopeSection.style.display = 'none';
-                }
-            });
-
-            // Grant permission
-            document.getElementById('grant-perm')?.addEventListener('click', async () => {
-                const resource = document.getElementById('perm-resource')?.value;
-                const action = document.getElementById('perm-action')?.value || '*';
-                const resourceName = document.getElementById('perm-resource-name')?.value;
-
-                const permission = { resource, action };
-
-                // Add scopeResourceId if a specific resource is selected
-                if (SCOPABLE_RESOURCES.includes(resource) && resourceName && resourceName !== '*') {
-                    permission.scopeResourceId = resourceName;
-                }
-
-                try {
-                    await grantUserPermission(id, permission);
-                    showToast('Permission granted', 'success');
-                    closeModal();
-                    showUserPermissionsModal(id);
-                } catch (e) {
-                    showToast('Failed: ' + e.message, 'error');
-                }
-            });
-
-            // Revoke permissions
-            document.querySelectorAll('[data-revoke]').forEach(btn => {
-                btn.addEventListener('click', async () => {
-                    try {
-                        await revokeUserPermission(id, btn.dataset.revoke);
-                        showToast('Permission revoked', 'success');
-                        closeModal();
-                        showUserPermissionsModal(id);
-                    } catch (e) {
-                        showToast('Failed: ' + e.message, 'error');
-                    }
-                });
-            });
-        }, 100);
-    } catch (error) {
-        showToast('Failed to load permissions', 'error');
-    }
-}
-
-// Load resource options for dropdown
-async function loadResourceOptions(resource, selectElement) {
-    const hostId = state.currentHostId;
-    if (!hostId) {
-        selectElement.innerHTML = `
-            <md-select-option value="*" selected>* (All)</md-select-option>
-            <md-select-option disabled>No host selected</md-select-option>
-        `;
-        return;
-    }
-
-    const loadingEl = document.getElementById('resource-loading');
-    if (loadingEl) loadingEl.style.display = 'block';
-
-    try {
-        let items = [];
-
-        if (resource === 'CONTAINERS') {
-            const containers = await listContainers(hostId, true);
-            items = containers.map(c => ({
-                value: c.names?.[0]?.replace(/^\//, '') || c.id?.substring(0, 12),
-                label: c.names?.[0]?.replace(/^\//, '') || c.id?.substring(0, 12)
-            }));
-        } else if (resource === 'VOLUMES') {
-            const volumes = await listVolumes(hostId);
-            items = volumes.map(v => ({
-                value: v.name,
-                label: v.name
-            }));
-        } else if (resource === 'NETWORKS') {
-            const networks = await listNetworks(hostId);
-            items = networks.map(n => ({
-                value: n.name,
-                label: n.name
-            }));
-        }
-
-        selectElement.innerHTML = `
-            <md-select-option value="*" selected>* (All)</md-select-option>
-            ${items.map(item => `<md-select-option value="${item.value}">${item.label}</md-select-option>`).join('')}
-        `;
-    } catch (error) {
-        console.error('Failed to load resources:', error);
-        selectElement.innerHTML = `
-            <md-select-option value="*" selected>* (All)</md-select-option>
-            <md-select-option disabled>Failed to load</md-select-option>
-        `;
-    } finally {
-        if (loadingEl) loadingEl.style.display = 'none';
-    }
-}
-
-// Reset password
-async function handleResetPassword(id) {
-    const user = users.find(u => u.id === id);
-    if (!user) return;
-
-    try {
-        const result = await resetUserPassword(id);
-        openModal('Password Reset', `
-            <p>New temporary password for <strong>${user.username}</strong>:</p>
-            <div class="terminal" style="margin-top: 16px;">${result.temporaryPassword}</div>
-        `, `<md-filled-button onclick="document.getElementById('app-dialog').close()">OK</md-filled-button>`);
-    } catch (error) {
-        showToast('Failed: ' + error.message, 'error');
-    }
-}
-
-// Delete user
-async function handleDeleteUser(id) {
-    const user = users.find(u => u.id === id);
-    const confirmed = await confirmDelete('User', `<p><strong>${user?.username}</strong></p>`);
-    if (!confirmed) return;
-
-    try {
-        await deleteUser(id);
-        showToast('User deleted', 'success');
-        await loadData();
-    } catch (error) {
-        showToast('Failed: ' + error.message, 'error');
-    }
-}
-
-// Create group modal
 function showCreateGroupModal() {
     const content = `
         <form class="dialog-form">
@@ -545,6 +852,7 @@ function showCreateGroupModal() {
                 closeModal();
                 showToast('Group created', 'success');
                 await loadData();
+                renderListView();
             } catch (error) {
                 showToast('Failed: ' + error.message, 'error');
             }
@@ -552,9 +860,8 @@ function showCreateGroupModal() {
     }, 100);
 }
 
-// Edit group modal
-async function showEditGroupModal(id) {
-    const group = groups.find(g => g.id === id);
+async function showEditGroupInfoModal(groupId) {
+    const group = groups.find(g => g.id === groupId);
     if (!group) return;
 
     const content = `
@@ -572,13 +879,14 @@ async function showEditGroupModal(id) {
     setTimeout(() => {
         document.getElementById('edit-group-submit')?.addEventListener('click', async () => {
             try {
-                await updateGroup(id, {
+                await updateGroup(groupId, {
                     name: document.getElementById('edit-group-name')?.value,
                     description: document.getElementById('edit-group-desc')?.value,
                 });
                 closeModal();
                 showToast('Group updated', 'success');
                 await loadData();
+                renderGroupDetailView(groupId);
             } catch (error) {
                 showToast('Failed: ' + error.message, 'error');
             }
@@ -586,176 +894,38 @@ async function showEditGroupModal(id) {
     }, 100);
 }
 
-// Group permissions modal
-async function showGroupPermissionsModal(id) {
-    const group = groups.find(g => g.id === id);
-    if (!group) return;
+// ==================== Actions ====================
+
+async function handleResetPassword(id) {
+    const user = users.find(u => u.id === id);
+    if (!user) return;
 
     try {
-        const permissions = await getGroupPermissions(id);
-
-        const resourceOptions = Object.keys(RESOURCES).map(r =>
-            `<md-select-option value="${r}">${r}</md-select-option>`
-        ).join('');
-
-        const permissionsList = permissions.map(p => `
-            <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px; background: var(--md-sys-color-surface-container); border-radius: 8px; margin-bottom: 8px;">
-                <span>${p.resource}.${p.action}${p.scopeResourceId ? ` [${p.scopeResourceId}]` : ''}${p.scopeHostId ? ` @${p.scopeHostId.substring(0, 8)}` : ''}</span>
-                <md-icon-button data-revoke="${p.id}"><span class="material-symbols-outlined">delete</span></md-icon-button>
-            </div>
-        `).join('') || '<p style="color: var(--md-sys-color-on-surface-variant);">No permissions</p>';
-
-        const content = `
-            <div style="margin-bottom: 16px;">
-                <h4>Group Permissions</h4>
-                <div style="max-height: 200px; overflow-y: auto;">${permissionsList}</div>
-            </div>
-            <div>
-                <h4>Grant Permission</h4>
-                <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 8px;">
-                    <div style="display: flex; gap: 8px;">
-                        <md-filled-select id="gperm-resource" label="Resource" style="flex: 1;">
-                            ${resourceOptions}
-                        </md-filled-select>
-                        <md-filled-select id="gperm-action" label="Action" style="flex: 1;">
-                            <md-select-option value="*">* (All)</md-select-option>
-                        </md-filled-select>
-                    </div>
-                    <div id="gresource-scope-section" style="display: none;">
-                        <div style="display: flex; gap: 8px; align-items: flex-end;">
-                            <md-filled-select id="gperm-resource-name" label="Resource Name" style="flex: 1;">
-                                <md-select-option value="*" selected>* (All)</md-select-option>
-                            </md-filled-select>
-                            <md-circular-progress id="gresource-loading" indeterminate style="display: none; width: 24px; height: 24px;"></md-circular-progress>
-                        </div>
-                        <p style="font-size: 12px; color: var(--md-sys-color-outline); margin-top: 4px;">
-                            Select a specific resource or * for all
-                        </p>
-                    </div>
-                    <md-filled-button id="grant-gperm" style="align-self: flex-end;">Grant</md-filled-button>
-                </div>
-            </div>
-        `;
-
-        openModal('Permissions: ' + group.name, content, `
-            <md-filled-button onclick="document.getElementById('app-dialog').close()">Close</md-filled-button>
-        `);
-
-        setTimeout(() => {
-            document.getElementById('gperm-resource')?.addEventListener('change', async (e) => {
-                const resource = e.target.value;
-                const actions = RESOURCE_ACTIONS[resource] || [];
-                const actionSelect = document.getElementById('gperm-action');
-                actionSelect.innerHTML = `
-                    <md-select-option value="*">* (All)</md-select-option>
-                    ${actions.map(a => `<md-select-option value="${a}">${a}</md-select-option>`).join('')}
-                `;
-
-                // Show/hide resource scope section
-                const scopeSection = document.getElementById('gresource-scope-section');
-                const resourceNameSelect = document.getElementById('gperm-resource-name');
-
-                if (SCOPABLE_RESOURCES.includes(resource)) {
-                    scopeSection.style.display = 'block';
-                    await loadResourceOptionsForGroup(resource, resourceNameSelect);
-                } else {
-                    scopeSection.style.display = 'none';
-                }
-            });
-
-            document.getElementById('grant-gperm')?.addEventListener('click', async () => {
-                const resource = document.getElementById('gperm-resource')?.value;
-                const action = document.getElementById('gperm-action')?.value || '*';
-                const resourceName = document.getElementById('gperm-resource-name')?.value;
-
-                const permission = { resource, action };
-
-                // Add scopeResourceId if a specific resource is selected
-                if (SCOPABLE_RESOURCES.includes(resource) && resourceName && resourceName !== '*') {
-                    permission.scopeResourceId = resourceName;
-                }
-
-                try {
-                    await grantGroupPermission(id, permission);
-                    showToast('Permission granted', 'success');
-                    closeModal();
-                    showGroupPermissionsModal(id);
-                } catch (e) {
-                    showToast('Failed: ' + e.message, 'error');
-                }
-            });
-
-            document.querySelectorAll('[data-revoke]').forEach(btn => {
-                btn.addEventListener('click', async () => {
-                    try {
-                        await revokeGroupPermission(id, btn.dataset.revoke);
-                        showToast('Permission revoked', 'success');
-                        closeModal();
-                        showGroupPermissionsModal(id);
-                    } catch (e) {
-                        showToast('Failed: ' + e.message, 'error');
-                    }
-                });
-            });
-        }, 100);
+        const result = await resetUserPassword(id);
+        openModal('Password Reset', `
+            <p>New temporary password for <strong>${user.username}</strong>:</p>
+            <div class="terminal" style="margin-top: 16px;">${result.temporaryPassword}</div>
+        `, `<md-filled-button onclick="document.getElementById('app-dialog').close()">OK</md-filled-button>`);
     } catch (error) {
-        showToast('Failed to load permissions', 'error');
+        showToast('Failed: ' + error.message, 'error');
     }
 }
 
-// Load resource options for group dropdown (uses different IDs)
-async function loadResourceOptionsForGroup(resource, selectElement) {
-    const hostId = state.currentHostId;
-    if (!hostId) {
-        selectElement.innerHTML = `
-            <md-select-option value="*" selected>* (All)</md-select-option>
-            <md-select-option disabled>No host selected</md-select-option>
-        `;
-        return;
-    }
-
-    const loadingEl = document.getElementById('gresource-loading');
-    if (loadingEl) loadingEl.style.display = 'block';
+async function handleDeleteUser(id) {
+    const user = users.find(u => u.id === id);
+    const confirmed = await confirmDelete('User', `<p><strong>${user?.username}</strong></p>`);
+    if (!confirmed) return;
 
     try {
-        let items = [];
-
-        if (resource === 'CONTAINERS') {
-            const containers = await listContainers(hostId, true);
-            items = containers.map(c => ({
-                value: c.names?.[0]?.replace(/^\//, '') || c.id?.substring(0, 12),
-                label: c.names?.[0]?.replace(/^\//, '') || c.id?.substring(0, 12)
-            }));
-        } else if (resource === 'VOLUMES') {
-            const volumes = await listVolumes(hostId);
-            items = volumes.map(v => ({
-                value: v.name,
-                label: v.name
-            }));
-        } else if (resource === 'NETWORKS') {
-            const networks = await listNetworks(hostId);
-            items = networks.map(n => ({
-                value: n.name,
-                label: n.name
-            }));
-        }
-
-        selectElement.innerHTML = `
-            <md-select-option value="*" selected>* (All)</md-select-option>
-            ${items.map(item => `<md-select-option value="${item.value}">${item.label}</md-select-option>`).join('')}
-        `;
+        await deleteUser(id);
+        showToast('User deleted', 'success');
+        await loadData();
+        renderListView();
     } catch (error) {
-        console.error('Failed to load resources:', error);
-        selectElement.innerHTML = `
-            <md-select-option value="*" selected>* (All)</md-select-option>
-            <md-select-option disabled>Failed to load</md-select-option>
-        `;
-    } finally {
-        if (loadingEl) loadingEl.style.display = 'none';
+        showToast('Failed: ' + error.message, 'error');
     }
 }
 
-// Delete group
 async function handleDeleteGroup(id) {
     const group = groups.find(g => g.id === id);
     const confirmed = await confirmDelete('Group', `<p><strong>${group?.name}</strong></p>`);
@@ -765,6 +935,22 @@ async function handleDeleteGroup(id) {
         await deleteGroup(id);
         showToast('Group deleted', 'success');
         await loadData();
+        renderListView();
+    } catch (error) {
+        showToast('Failed: ' + error.message, 'error');
+    }
+}
+
+async function handleDeleteGroupFromDetail(groupId) {
+    const group = groups.find(g => g.id === groupId);
+    const confirmed = await confirmDelete('Group', `<p><strong>${group?.name}</strong></p>`);
+    if (!confirmed) return;
+
+    try {
+        await deleteGroup(groupId);
+        showToast('Group deleted', 'success');
+        await loadData();
+        renderListView();
     } catch (error) {
         showToast('Failed: ' + error.message, 'error');
     }
@@ -773,4 +959,7 @@ async function handleDeleteGroup(id) {
 export function cleanup() {
     users = [];
     groups = [];
+    currentView = 'list';
+    currentUserId = null;
+    currentGroupId = null;
 }
