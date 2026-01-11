@@ -62,8 +62,6 @@ public class DockerController {
         this.driftDetectionService = driftDetectionService;
     }
 
-    // ==================== Helper Method ====================
-
     private DockerAPI getDockerAPI(String hostId) {
         DockerHost host =
                 hostRepository
@@ -75,8 +73,6 @@ public class DockerController {
                                                 "Docker host not found: " + hostId));
         return dockerService.dockerAPI(dockerService.createClientCached(host.getDockerHostUrl()));
     }
-
-    // ==================== Docker Host Management ====================
 
     @GetMapping("/hosts")
     @RequirePermission(resource = Resource.DOCKER_HOSTS, action = "list")
@@ -97,7 +93,6 @@ public class DockerController {
     @RequirePermission(resource = Resource.DOCKER_HOSTS, action = "create")
     @Auditable(resource = Resource.DOCKER_HOSTS, action = "create", captureRequestBody = true)
     public ResponseEntity<DockerHost> addHost(@RequestBody DockerHost host) {
-        // Validate Docker host URL to prevent SSRF attacks
         if (!InputValidator.isValidDockerHostUrl(host.getDockerHostUrl())) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,
@@ -121,16 +116,12 @@ public class DockerController {
         return ResponseEntity.noContent().build();
     }
 
-    // ==================== Connection ====================
-
     @GetMapping("/hosts/{hostId}/ping")
     @RequirePermission(resource = Resource.DOCKER_HOSTS, action = "ping", hostIdParam = "hostId")
     public ResponseEntity<Map<String, Boolean>> ping(@PathVariable String hostId) {
         boolean result = getDockerAPI(hostId).ping();
         return ResponseEntity.ok(Map.of("connected", result));
     }
-
-    // ==================== Container Operations ====================
 
     @GetMapping("/hosts/{hostId}/containers")
     @RequirePermission(resource = Resource.CONTAINERS, action = "list", hostIdParam = "hostId")
@@ -139,7 +130,6 @@ public class DockerController {
         DockerAPI api = getDockerAPI(hostId);
         List<Container> containers = all ? api.listAllContainers() : api.listRunningContainers();
 
-        // Filter by resource-level permissions
         String userId = SecurityContextHolder.getCurrentUserId();
         if (userId != null) {
             Set<String> allowedIds =
@@ -158,12 +148,10 @@ public class DockerController {
     private List<Container> filterContainers(List<Container> containers, Set<String> allowedIds) {
         List<Container> filtered = new ArrayList<>();
         for (Container c : containers) {
-            // Check container ID (short and full)
             if (allowedIds.contains(c.getId()) || allowedIds.contains(c.getId().substring(0, 12))) {
                 filtered.add(c);
                 continue;
             }
-            // Check container names (Docker prefixes with /)
             if (c.getNames() != null) {
                 for (String name : c.getNames()) {
                     String cleanName = name.startsWith("/") ? name.substring(1) : name;
@@ -258,7 +246,6 @@ public class DockerController {
     @Auditable(resource = Resource.CONTAINERS, action = "create", captureRequestBody = true)
     public ResponseEntity<CreateContainerResponse> createContainer(
             @PathVariable String hostId, @RequestBody CreateContainerRequest request) {
-        // Validate container name
         if (request.getContainerName() != null
                 && !InputValidator.isValidContainerName(request.getContainerName())) {
             throw new ResponseStatusException(
@@ -267,20 +254,16 @@ public class DockerController {
                             + "periods, and hyphens.");
         }
 
-        // Validate image name
         if (!InputValidator.isValidImageName(request.getImageName())) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid image name format.");
         }
 
-        // Validate image against policies before creating container
         imagePolicyService.validateImageForContainerCreation(request.getImageName());
 
-        // Pull image if it doesn't exist locally
         DockerAPI dockerAPI = getDockerAPI(hostId);
         try {
             dockerAPI.inspectImage(request.getImageName());
         } catch (NotFoundException e) {
-            // Image doesn't exist locally, pull it first
             try {
                 var authConfig = registryService.getAuthConfig(request.getImageName());
                 dockerAPI.pullImage(request.getImageName(), authConfig);
@@ -307,7 +290,7 @@ public class DockerController {
                             request.getPortBindings(),
                             request.getVolumeBindings(),
                             request.getNetworkName(),
-                            null, // extraHosts
+                            null,
                             request.getUser());
 
             operation.setResourceId(response.getId());
@@ -364,7 +347,6 @@ public class DockerController {
                     StateSnapshot.SnapshotType.AFTER);
             trackingService.completeOperation(operation, true, null);
 
-            // Also create ComposeDeployment record
             trackingService.createComposeDeployment(
                     hostId, projectName, request.getComposeContent(), null, null, null);
 
@@ -585,7 +567,6 @@ public class DockerController {
             @PathVariable String hostId,
             @PathVariable String containerId,
             @RequestBody ExecCommandRequest request) {
-        // Validate command to prevent dangerous operations
         if (!InputValidator.isCommandSafe(request.getCommand())) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,
@@ -597,8 +578,6 @@ public class DockerController {
         return ResponseEntity.ok(Map.of("output", output));
     }
 
-    // ==================== Image Operations ====================
-
     @GetMapping("/hosts/{hostId}/images")
     @RequirePermission(resource = Resource.IMAGES, action = "list", hostIdParam = "hostId")
     public ResponseEntity<List<Image>> listImages(
@@ -606,7 +585,6 @@ public class DockerController {
         DockerAPI api = getDockerAPI(hostId);
         List<Image> images = dangling ? api.listDanglingImages() : api.listImages();
 
-        // Filter by resource-level permissions
         String userId = SecurityContextHolder.getCurrentUserId();
         if (userId != null) {
             Set<String> allowedIds =
@@ -625,19 +603,16 @@ public class DockerController {
     private List<Image> filterImages(List<Image> images, Set<String> allowedIds) {
         List<Image> filtered = new ArrayList<>();
         for (Image img : images) {
-            // Check image ID
             if (allowedIds.contains(img.getId())) {
                 filtered.add(img);
                 continue;
             }
-            // Check repo tags (e.g., nginx:latest)
             if (img.getRepoTags() != null) {
                 for (String tag : img.getRepoTags()) {
                     if (allowedIds.contains(tag)) {
                         filtered.add(img);
                         break;
                     }
-                    // Also check just the repo name without tag
                     String repoName = tag.contains(":") ? tag.split(":")[0] : tag;
                     if (allowedIds.contains(repoName)) {
                         filtered.add(img);
@@ -666,10 +641,8 @@ public class DockerController {
     public ResponseEntity<Map<String, String>> pullImage(
             @PathVariable String hostId, @RequestParam String imageName)
             throws InterruptedException {
-        // Validate image against policies before pulling
         imagePolicyService.validateImageForPull(imageName);
 
-        // Get auth config from registry if available
         var authConfig = registryService.getAuthConfig(imageName);
         getDockerAPI(hostId).pullImage(imageName, authConfig);
         return ResponseEntity.ok(Map.of("status", "pulled", "image", imageName));
@@ -720,14 +693,11 @@ public class DockerController {
         return ResponseEntity.ok(result);
     }
 
-    // ==================== Volume Operations ====================
-
     @GetMapping("/hosts/{hostId}/volumes")
     @RequirePermission(resource = Resource.VOLUMES, action = "list", hostIdParam = "hostId")
     public ResponseEntity<ListVolumesResponse> listVolumes(@PathVariable String hostId) {
         ListVolumesResponse response = getDockerAPI(hostId).listVolumes();
 
-        // Filter by resource-level permissions
         String userId = SecurityContextHolder.getCurrentUserId();
         if (userId != null && response.getVolumes() != null) {
             Set<String> allowedIds =
@@ -766,14 +736,11 @@ public class DockerController {
         return ResponseEntity.noContent().build();
     }
 
-    // ==================== Network Operations ====================
-
     @GetMapping("/hosts/{hostId}/networks")
     @RequirePermission(resource = Resource.NETWORKS, action = "list", hostIdParam = "hostId")
     public ResponseEntity<List<Network>> listNetworks(@PathVariable String hostId) {
         List<Network> networks = getDockerAPI(hostId).listNetworks();
 
-        // Filter by resource-level permissions
         String userId = SecurityContextHolder.getCurrentUserId();
         if (userId != null) {
             Set<String> allowedIds =
@@ -858,8 +825,6 @@ public class DockerController {
         return ResponseEntity.ok().build();
     }
 
-    // ==================== Stats & Info ====================
-
     @GetMapping("/hosts/{hostId}/info")
     @RequirePermission(resource = Resource.DOCKER_HOSTS, action = "read", hostIdParam = "hostId")
     public ResponseEntity<HostInfoResponse> getHostInfo(@PathVariable String hostId) {
@@ -906,7 +871,6 @@ public class DockerController {
                                             return buildContainerStatsResponse(container, stats);
                                         }
                                     } catch (Exception e) {
-                                        // Skip containers that fail to get stats
                                     }
                                     return null;
                                 })
@@ -1102,8 +1066,6 @@ public class DockerController {
         }
         return 0;
     }
-
-    // ==================== Drift Detection ====================
 
     @GetMapping("/hosts/{hostId}/drift")
     @RequirePermission(resource = Resource.CONTAINERS, action = "list", hostIdParam = "hostId")

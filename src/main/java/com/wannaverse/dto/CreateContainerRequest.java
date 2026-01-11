@@ -17,5 +17,5 @@ public class CreateContainerRequest {
     private Map<Integer, Integer> portBindings;
     private List<String> volumeBindings;
     private String networkName;
-    private String user; // Run as specific user (e.g., "1000", "1000:1000", "nobody")
+    private String user;
 }

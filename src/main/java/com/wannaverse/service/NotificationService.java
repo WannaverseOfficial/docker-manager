@@ -40,8 +40,6 @@ public class NotificationService {
         this.userRepository = userRepository;
     }
 
-    // ==================== Deployment Notifications ====================
-
     @Async("emailExecutor")
     public void notifyDeploymentStarted(DeploymentJob job) {
         if (!emailService.isConfigured()) {
@@ -105,8 +103,6 @@ public class NotificationService {
         return context;
     }
 
-    // ==================== Container Notifications ====================
-
     @Async("emailExecutor")
     public void notifyContainerStoppedUnexpectedly(
             String hostId, String hostName, String containerId, String containerName) {
@@ -152,14 +148,12 @@ public class NotificationService {
                 NotifyTarget.ADMINS);
     }
 
-    // Overload for health monitor service
     public void notifyContainerHealthCheckFailed(
             DockerHost host, String containerId, String containerName) {
         notifyContainerHealthCheckFailed(
                 host.getId(), host.getId(), containerId, containerName, "Unhealthy");
     }
 
-    // Overload for health monitor service
     public void notifyContainerStopped(DockerHost host, String containerId, String containerName) {
         notifyContainerStoppedUnexpectedly(host.getId(), host.getId(), containerId, containerName);
     }
@@ -205,15 +199,12 @@ public class NotificationService {
                 NotifyTarget.ADMINS);
     }
 
-    // ==================== Security Notifications ====================
-
     @Async("emailExecutor")
     public void notifyUserLogin(User user, String ipAddress) {
         if (!emailService.isConfigured() || user.getEmail() == null || user.getEmail().isEmpty()) {
             return;
         }
 
-        // Check if user has this notification enabled
         if (!isNotificationEnabledForUser(user.getId(), NotificationEventType.USER_LOGIN)) {
             return;
         }
@@ -240,7 +231,6 @@ public class NotificationService {
             return;
         }
 
-        // Check if user has this notification enabled
         if (!isNotificationEnabledForUser(user.getId(), NotificationEventType.PASSWORD_CHANGED)) {
             return;
         }
@@ -260,8 +250,6 @@ public class NotificationService {
                 NotificationEventType.PASSWORD_CHANGED,
                 user.getId());
     }
-
-    // ==================== System Notifications ====================
 
     @Async("emailExecutor")
     public void notifyHostDisconnected(DockerHost host) {
@@ -295,8 +283,6 @@ public class NotificationService {
         notifyForEvent(
                 NotificationEventType.HOST_RECONNECTED, host.getId(), context, NotifyTarget.ADMINS);
     }
-
-    // ==================== Helper Methods ====================
 
     private enum NotifyTarget {
         ALL,

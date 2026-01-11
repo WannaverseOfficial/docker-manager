@@ -24,13 +24,11 @@ public class NotificationPreferencesResponse {
     public static NotificationPreferencesResponse fromEntities(
             String userId, List<UserNotificationPreference> prefs) {
 
-        // Initialize with all event types defaulting to true
         Map<String, Boolean> map = new LinkedHashMap<>();
         for (NotificationEventType type : NotificationEventType.values()) {
             map.put(type.name(), true);
         }
 
-        // Override with user preferences
         for (UserNotificationPreference pref : prefs) {
             map.put(pref.getEventType().name(), pref.isEmailEnabled());
         }

@@ -11,7 +11,9 @@ let routes = [];
 let certificates = [];
 let auditLogs = [];
 let containers = [];
+let availableCerts = [];
 let currentTab = 'routes';
+let currentView = 'main'; // 'main' or 'expose'
 
 export function render() {
     return `
@@ -36,6 +38,7 @@ export function cleanup() {
     certificates = [];
     auditLogs = [];
     containers = [];
+    currentView = 'main';
 }
 
 async function loadIngressStatus() {
@@ -641,7 +644,7 @@ function setupEnabledEventListeners() {
 
 function setupTabEventListeners() {
     // Routes tab
-    document.getElementById('expose-app-btn')?.addEventListener('click', showExposeAppDialog);
+    document.getElementById('expose-app-btn')?.addEventListener('click', showExposeAppView);
     document.querySelectorAll('.delete-route-btn').forEach(btn => {
         btn.addEventListener('click', () => handleDeleteRoute(btn.dataset.routeId));
     });
@@ -912,187 +915,380 @@ async function handleReloadNginx() {
     }
 }
 
-async function showExposeAppDialog() {
+async function showExposeAppView() {
     const hostId = state.currentHostId;
 
     try {
-        // Load containers for selection
-        const containerList = await listContainers(hostId, true);
+        // Load containers and certificates in parallel
+        const [containerList, certList] = await Promise.all([
+            listContainers(hostId, true),
+            ingressApi.listCertificates(hostId)
+        ]);
+
         containers = containerList.filter(c => c.state === 'running');
+        availableCerts = certList || [];
 
         if (containers.length === 0) {
             showToast('No running containers to expose', 'warning');
             return;
         }
 
-        const dialog = document.getElementById('app-dialog');
-        dialog.querySelector('.dialog-title').textContent = 'Expose Application';
-        dialog.querySelector('.dialog-content').innerHTML = `
-            <div class="expose-app-form">
-                <h4>Target Container</h4>
-                <md-filled-select id="container-select" label="Container" required>
-                    ${containers.map(c => {
-                        const name = c.names?.[0]?.replace(/^\//, '') || c.id.substring(0, 12);
-                        const ports = c.ports?.map(p => p.privatePort).filter(Boolean).join(', ') || 'no ports';
-                        return `
-                            <md-select-option value="${c.id}">
-                                <span slot="headline">${name}</span>
-                                <span slot="supporting-text">Ports: ${ports}</span>
-                            </md-select-option>
-                        `;
-                    }).join('')}
-                </md-filled-select>
-
-                <md-filled-text-field
-                    id="port-input"
-                    label="Container Port"
-                    type="number"
-                    value="80"
-                    supporting-text="The port your application listens on inside the container"
-                    required>
-                </md-filled-text-field>
-
-                <h4>Routing</h4>
-                <md-filled-text-field
-                    id="hostname-input"
-                    label="Hostname"
-                    type="text"
-                    placeholder="app.example.com"
-                    supporting-text="The domain name to route to this container"
-                    required>
-                </md-filled-text-field>
-
-                <md-filled-text-field
-                    id="path-input"
-                    label="Path Prefix"
-                    type="text"
-                    value="/"
-                    supporting-text="Route requests starting with this path (e.g., /api)"
-                    placeholder="/">
-                </md-filled-text-field>
-
-                <md-filled-select id="protocol-select" label="Backend Protocol">
-                    <md-select-option value="HTTP" selected>
-                        <span slot="headline">HTTP</span>
-                        <span slot="supporting-text">Connect to container over HTTP</span>
-                    </md-select-option>
-                    <md-select-option value="HTTPS">
-                        <span slot="headline">HTTPS</span>
-                        <span slot="supporting-text">Connect to container over HTTPS (for apps with their own TLS)</span>
-                    </md-select-option>
-                </md-filled-select>
-
-                <h4>TLS / HTTPS</h4>
-                <md-filled-select id="tls-mode-select" label="TLS Mode">
-                    <md-select-option value="NONE" selected>
-                        <span slot="headline">None (HTTP only)</span>
-                        <span slot="supporting-text">No encryption - only use for local/testing</span>
-                    </md-select-option>
-                    <md-select-option value="LETS_ENCRYPT">
-                        <span slot="headline">Let's Encrypt (automatic)</span>
-                        <span slot="supporting-text">Free automatic certificates - requires valid domain pointing to this server</span>
-                    </md-select-option>
-                    <md-select-option value="CUSTOM_CERT">
-                        <span slot="headline">Custom Certificate</span>
-                        <span slot="supporting-text">Upload your own certificate</span>
-                    </md-select-option>
-                    <md-select-option value="BRING_YOUR_OWN">
-                        <span slot="headline">Self-signed / External</span>
-                        <span slot="supporting-text">Generate self-signed or use externally managed cert</span>
-                    </md-select-option>
-                </md-filled-select>
-
-                <div id="tls-options" class="tls-options hidden">
-                    <label class="switch-label">
-                        <md-switch id="redirect-http"></md-switch>
-                        <span>Redirect HTTP to HTTPS</span>
-                    </label>
-                </div>
-
-                <div id="validation-errors" class="validation-errors hidden"></div>
-            </div>
-        `;
-        dialog.querySelector('.dialog-actions').innerHTML = `
-            <md-text-button form="dialog" value="cancel">Cancel</md-text-button>
-            <md-filled-button id="create-route-btn">Expose App</md-filled-button>
-        `;
-
-        dialog.show();
-
-        // Show/hide TLS options based on selection
-        const tlsModeSelect = document.getElementById('tls-mode-select');
-        const tlsOptions = document.getElementById('tls-options');
-        tlsModeSelect?.addEventListener('change', () => {
-            const mode = tlsModeSelect.value;
-            if (mode !== 'NONE') {
-                tlsOptions?.classList.remove('hidden');
-            } else {
-                tlsOptions?.classList.add('hidden');
-            }
-        });
-
-        document.getElementById('create-route-btn')?.addEventListener('click', async () => {
-            const containerId = document.getElementById('container-select')?.value;
-            const hostname = document.getElementById('hostname-input')?.value?.trim();
-            const port = parseInt(document.getElementById('port-input')?.value) || 80;
-            const pathPrefix = document.getElementById('path-input')?.value?.trim() || '/';
-            const protocol = document.getElementById('protocol-select')?.value || 'HTTP';
-            const tlsMode = document.getElementById('tls-mode-select')?.value || 'NONE';
-            const container = containers.find(c => c.id === containerId);
-
-            // Validation
-            const errors = [];
-            if (!containerId) errors.push('Please select a container');
-            if (!hostname) errors.push('Hostname is required');
-            if (hostname && !/^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*$/.test(hostname)) {
-                errors.push('Invalid hostname format');
-            }
-            if (port < 1 || port > 65535) errors.push('Port must be between 1 and 65535');
-            if (!pathPrefix.startsWith('/')) errors.push('Path prefix must start with /');
-
-            if (errors.length > 0) {
-                const errorsDiv = document.getElementById('validation-errors');
-                errorsDiv.innerHTML = errors.map(e => `<div class="error-item">${e}</div>`).join('');
-                errorsDiv.classList.remove('hidden');
-                return;
-            }
-
-            // Get preview with warnings
-            try {
-                const preview = await ingressApi.previewExposeApp(state.currentHostId, {
-                    containerId,
-                    containerName: container?.names?.[0]?.replace(/^\//, '') || containerId.substring(0, 12),
-                    hostname,
-                    targetPort: port,
-                    pathPrefix,
-                    tlsMode,
-                    protocol,
-                    authEnabled: false,
-                    authType: null,
-                    authConfig: null,
-                    certificateId: null,
-                });
-
-                // Show preview/confirmation if there are warnings
-                if (preview.warnings?.length > 0 || tlsMode !== 'NONE') {
-                    dialog.close();
-                    const confirmed = await showRoutePreviewDialog(preview, { containerId, hostname, port, pathPrefix, protocol, tlsMode, container });
-                    if (confirmed) {
-                        await handleCreateRoute(containerId, hostname, port, pathPrefix, protocol, tlsMode);
-                    }
-                } else {
-                    dialog.close();
-                    await handleCreateRoute(containerId, hostname, port, pathPrefix, protocol, tlsMode);
-                }
-            } catch (error) {
-                const errorsDiv = document.getElementById('validation-errors');
-                errorsDiv.innerHTML = `<div class="error-item">${error.message}</div>`;
-                errorsDiv.classList.remove('hidden');
-            }
-        });
+        currentView = 'expose';
+        const content = document.getElementById('ingress-content');
+        content.innerHTML = renderExposeAppView();
+        setupExposeAppListeners();
     } catch (error) {
         showToast(`Failed to load containers: ${error.message}`, 'error');
     }
+}
+
+function renderExposeAppView() {
+    return `
+        <div class="expose-app-page">
+            <div class="section-header">
+                <div class="section-header-left">
+                    <md-icon-button id="back-to-ingress-btn" title="Back to ingress">
+                        <span class="material-symbols-outlined">arrow_back</span>
+                    </md-icon-button>
+                    <h2 class="section-title">Expose Application</h2>
+                </div>
+            </div>
+
+            <div class="expose-app-content">
+                <!-- Container Selection Card -->
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">
+                            <span class="material-symbols-outlined">deployed_code</span>
+                            Target Container
+                        </span>
+                    </div>
+                    <div class="card-content">
+                        <div class="form-row two-col">
+                            <div class="form-field">
+                                <md-filled-select id="container-select" label="Container" required style="width: 100%;">
+                                    ${containers.map(c => {
+                                        const name = c.names?.[0]?.replace(/^\//, '') || c.id.substring(0, 12);
+                                        const ports = c.ports?.map(p => p.privatePort).filter(Boolean).join(', ') || 'no ports';
+                                        return `
+                                            <md-select-option value="${c.id}">
+                                                <span slot="headline">${name}</span>
+                                                <span slot="supporting-text">Ports: ${ports}</span>
+                                            </md-select-option>
+                                        `;
+                                    }).join('')}
+                                </md-filled-select>
+                                <span class="form-hint">Select the container to expose</span>
+                            </div>
+                            <div class="form-field">
+                                <md-filled-text-field
+                                    id="port-input"
+                                    label="Container Port"
+                                    type="number"
+                                    value="80"
+                                    style="width: 100%;"
+                                    required>
+                                </md-filled-text-field>
+                                <span class="form-hint">The port your application listens on inside the container</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Routing Configuration Card -->
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">
+                            <span class="material-symbols-outlined">route</span>
+                            Routing Configuration
+                        </span>
+                    </div>
+                    <div class="card-content">
+                        <div class="form-row two-col">
+                            <div class="form-field">
+                                <md-filled-text-field
+                                    id="hostname-input"
+                                    label="Hostname"
+                                    type="text"
+                                    placeholder="app.example.com"
+                                    style="width: 100%;"
+                                    required>
+                                </md-filled-text-field>
+                                <span class="form-hint">The domain name to route to this container</span>
+                            </div>
+                            <div class="form-field">
+                                <md-filled-text-field
+                                    id="path-input"
+                                    label="Path Prefix"
+                                    type="text"
+                                    value="/"
+                                    placeholder="/"
+                                    style="width: 100%;">
+                                </md-filled-text-field>
+                                <span class="form-hint">Route requests starting with this path (e.g., /api)</span>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-field">
+                                <md-filled-select id="protocol-select" label="Backend Protocol" style="width: 100%;">
+                                    <md-select-option value="HTTP" selected>
+                                        <span slot="headline">HTTP</span>
+                                        <span slot="supporting-text">Connect to container over HTTP</span>
+                                    </md-select-option>
+                                    <md-select-option value="HTTPS">
+                                        <span slot="headline">HTTPS</span>
+                                        <span slot="supporting-text">Connect to container over HTTPS (for apps with their own TLS)</span>
+                                    </md-select-option>
+                                </md-filled-select>
+                                <span class="form-hint">Protocol used to communicate with the container</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- TLS Configuration Card -->
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">
+                            <span class="material-symbols-outlined">lock</span>
+                            TLS / HTTPS
+                        </span>
+                    </div>
+                    <div class="card-content">
+                        <div class="form-row">
+                            <div class="form-field">
+                                <md-filled-select id="tls-mode-select" label="TLS Mode" style="width: 100%;">
+                                    <md-select-option value="NONE" selected>
+                                        <span slot="headline">None (HTTP only)</span>
+                                        <span slot="supporting-text">No encryption - only use for local/testing</span>
+                                    </md-select-option>
+                                    <md-select-option value="LETS_ENCRYPT">
+                                        <span slot="headline">Let's Encrypt (automatic)</span>
+                                        <span slot="supporting-text">Free automatic certificates - requires valid domain pointing to this server</span>
+                                    </md-select-option>
+                                    <md-select-option value="CUSTOM_CERT">
+                                        <span slot="headline">Custom Certificate</span>
+                                        <span slot="supporting-text">Upload or select an existing certificate</span>
+                                    </md-select-option>
+                                    <md-select-option value="BRING_YOUR_OWN">
+                                        <span slot="headline">Self-signed / External</span>
+                                        <span slot="supporting-text">Generate self-signed or use externally managed cert</span>
+                                    </md-select-option>
+                                </md-filled-select>
+                            </div>
+                        </div>
+
+                        <div id="tls-options" class="tls-options hidden">
+                            <label class="switch-label">
+                                <md-switch id="redirect-http"></md-switch>
+                                <span>Redirect HTTP to HTTPS</span>
+                            </label>
+                        </div>
+
+                        <div id="tls-info" class="tls-info hidden">
+                            <div class="info-banner">
+                                <span class="material-symbols-outlined">info</span>
+                                <div>
+                                    <strong>Let's Encrypt Requirements</strong>
+                                    <p>Ensure DNS is configured and port 80 is accessible from the internet for certificate issuance.</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div id="custom-cert-options" class="custom-cert-options hidden">
+                            <div class="form-row">
+                                <div class="form-field">
+                                    <md-filled-select id="cert-source-select" label="Certificate Source" style="width: 100%;">
+                                        <md-select-option value="upload" selected>
+                                            <span slot="headline">Upload New Certificate</span>
+                                        </md-select-option>
+                                        ${availableCerts.filter(c => c.status === 'ACTIVE').map(c => `
+                                            <md-select-option value="${c.id}">
+                                                <span slot="headline">Use existing: ${c.hostname}</span>
+                                                <span slot="supporting-text">Expires: ${new Date(c.expiresAt).toLocaleDateString()}</span>
+                                            </md-select-option>
+                                        `).join('')}
+                                    </md-filled-select>
+                                </div>
+                            </div>
+
+                            <div id="cert-upload-fields" class="cert-upload-fields">
+                                <div class="info-banner" style="margin-bottom: var(--spacing-md);">
+                                    <span class="material-symbols-outlined">info</span>
+                                    <div>
+                                        <strong>Certificate Upload</strong>
+                                        <p>You can upload the certificate now or after creating the route.</p>
+                                    </div>
+                                </div>
+                                <div class="form-row">
+                                    <div class="form-field">
+                                        <label class="form-label">Certificate (PEM format)</label>
+                                        <textarea id="cert-pem-input" class="cert-textarea" placeholder="-----BEGIN CERTIFICATE-----&#10;...&#10;-----END CERTIFICATE-----"></textarea>
+                                    </div>
+                                </div>
+                                <div class="form-row">
+                                    <div class="form-field">
+                                        <label class="form-label">Private Key (PEM format)</label>
+                                        <textarea id="key-pem-input" class="cert-textarea" placeholder="-----BEGIN PRIVATE KEY-----&#10;...&#10;-----END PRIVATE KEY-----"></textarea>
+                                    </div>
+                                </div>
+                                <div class="form-row">
+                                    <div class="form-field">
+                                        <label class="form-label">Certificate Chain (optional)</label>
+                                        <textarea id="chain-pem-input" class="cert-textarea" placeholder="-----BEGIN CERTIFICATE-----&#10;...&#10;-----END CERTIFICATE-----"></textarea>
+                                        <span class="form-hint">Include intermediate certificates if needed</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Validation Errors -->
+                <div id="validation-errors" class="validation-errors hidden"></div>
+
+                <!-- Actions -->
+                <div class="form-actions">
+                    <md-outlined-button id="cancel-expose-btn">Cancel</md-outlined-button>
+                    <md-filled-button id="create-route-btn">
+                        <span class="material-symbols-outlined" slot="icon">check</span>
+                        Expose Application
+                    </md-filled-button>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function setupExposeAppListeners() {
+    // Back button
+    document.getElementById('back-to-ingress-btn')?.addEventListener('click', backToIngressMain);
+    document.getElementById('cancel-expose-btn')?.addEventListener('click', backToIngressMain);
+
+    // Show/hide TLS options based on selection
+    const tlsModeSelect = document.getElementById('tls-mode-select');
+    const tlsOptions = document.getElementById('tls-options');
+    const tlsInfo = document.getElementById('tls-info');
+    const customCertOptions = document.getElementById('custom-cert-options');
+    const certSourceSelect = document.getElementById('cert-source-select');
+    const certUploadFields = document.getElementById('cert-upload-fields');
+
+    tlsModeSelect?.addEventListener('change', () => {
+        const mode = tlsModeSelect.value;
+        if (mode !== 'NONE') {
+            tlsOptions?.classList.remove('hidden');
+        } else {
+            tlsOptions?.classList.add('hidden');
+        }
+        if (mode === 'LETS_ENCRYPT') {
+            tlsInfo?.classList.remove('hidden');
+        } else {
+            tlsInfo?.classList.add('hidden');
+        }
+        if (mode === 'CUSTOM_CERT') {
+            customCertOptions?.classList.remove('hidden');
+        } else {
+            customCertOptions?.classList.add('hidden');
+        }
+    });
+
+    // Show/hide cert upload fields based on cert source selection
+    certSourceSelect?.addEventListener('change', () => {
+        const source = certSourceSelect.value;
+        if (source === 'upload') {
+            certUploadFields?.classList.remove('hidden');
+        } else {
+            certUploadFields?.classList.add('hidden');
+        }
+    });
+
+    // Create route button
+    document.getElementById('create-route-btn')?.addEventListener('click', handleExposeAppSubmit);
+}
+
+async function handleExposeAppSubmit() {
+    const containerId = document.getElementById('container-select')?.value;
+    const hostname = document.getElementById('hostname-input')?.value?.trim();
+    const port = parseInt(document.getElementById('port-input')?.value) || 80;
+    const pathPrefix = document.getElementById('path-input')?.value?.trim() || '/';
+    const protocol = document.getElementById('protocol-select')?.value || 'HTTP';
+    const tlsMode = document.getElementById('tls-mode-select')?.value || 'NONE';
+    const forceHttpsRedirect = document.getElementById('redirect-http')?.selected || false;
+    const container = containers.find(c => c.id === containerId);
+
+    // Get custom certificate options if CUSTOM_CERT mode
+    let certificateId = null;
+    let certUploadData = null;
+    if (tlsMode === 'CUSTOM_CERT') {
+        const certSource = document.getElementById('cert-source-select')?.value || 'upload';
+        if (certSource === 'upload') {
+            const certPem = document.getElementById('cert-pem-input')?.value?.trim();
+            const keyPem = document.getElementById('key-pem-input')?.value?.trim();
+            const chainPem = document.getElementById('chain-pem-input')?.value?.trim();
+            if (certPem && keyPem) {
+                certUploadData = { certPem, keyPem, chainPem };
+            }
+        } else {
+            // Using existing certificate
+            certificateId = certSource;
+        }
+    }
+
+    // Validation
+    const errors = [];
+    if (!containerId) errors.push('Please select a container');
+    if (!hostname) errors.push('Hostname is required');
+    if (hostname && !/^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*$/.test(hostname)) {
+        errors.push('Invalid hostname format');
+    }
+    if (port < 1 || port > 65535) errors.push('Port must be between 1 and 65535');
+    if (!pathPrefix.startsWith('/')) errors.push('Path prefix must start with /');
+
+    if (errors.length > 0) {
+        const errorsDiv = document.getElementById('validation-errors');
+        errorsDiv.innerHTML = errors.map(e => `<div class="error-item">${e}</div>`).join('');
+        errorsDiv.classList.remove('hidden');
+        return;
+    }
+
+    // Get preview with warnings
+    try {
+        const preview = await ingressApi.previewExposeApp(state.currentHostId, {
+            containerId,
+            containerName: container?.names?.[0]?.replace(/^\//, '') || containerId.substring(0, 12),
+            hostname,
+            targetPort: port,
+            pathPrefix,
+            tlsMode,
+            protocol,
+            authEnabled: false,
+            authType: null,
+            authConfig: null,
+            certificateId,
+            forceHttpsRedirect,
+        });
+
+        // Show preview/confirmation if there are warnings
+        if (preview.warnings?.length > 0 || tlsMode !== 'NONE') {
+            const confirmed = await showRoutePreviewDialog(preview, { containerId, hostname, port, pathPrefix, protocol, tlsMode, forceHttpsRedirect, container, certificateId, certUploadData });
+            if (confirmed) {
+                await handleCreateRoute(containerId, hostname, port, pathPrefix, protocol, tlsMode, forceHttpsRedirect, certificateId, certUploadData);
+                backToIngressMain();
+            }
+        } else {
+            await handleCreateRoute(containerId, hostname, port, pathPrefix, protocol, tlsMode, forceHttpsRedirect, certificateId, certUploadData);
+            backToIngressMain();
+        }
+    } catch (error) {
+        const errorsDiv = document.getElementById('validation-errors');
+        errorsDiv.innerHTML = `<div class="error-item">${error.message}</div>`;
+        errorsDiv.classList.remove('hidden');
+    }
+}
+
+async function backToIngressMain() {
+    currentView = 'main';
+    await loadIngressStatus();
 }
 
 async function showRoutePreviewDialog(preview, routeConfig) {
@@ -1505,7 +1701,7 @@ async function handleCheckDns(hostname) {
     }
 }
 
-async function handleCreateRoute(containerId, hostname, port, pathPrefix, protocol, tlsMode) {
+async function handleCreateRoute(containerId, hostname, port, pathPrefix, protocol, tlsMode, forceHttpsRedirect = false, certificateId = null, certUploadData = null) {
     const hostId = state.currentHostId;
     const container = containers.find(c => c.id === containerId);
 
@@ -1521,12 +1717,27 @@ async function handleCreateRoute(containerId, hostname, port, pathPrefix, protoc
             tlsMode: tlsMode,
             protocol: protocol,
             authEnabled: false,
+            forceHttpsRedirect: forceHttpsRedirect,
+            certificateId: certificateId,
         });
 
         showToast('Route created successfully!', 'success');
 
-        // If TLS was requested, show certificate status
-        if (tlsMode !== 'NONE' && result?.certificateId) {
+        // If custom cert upload data was provided, upload the certificate now
+        if (tlsMode === 'CUSTOM_CERT' && certUploadData && result?.certificateId) {
+            try {
+                showToast('Uploading certificate...', 'info');
+                await ingressApi.uploadCertificate(
+                    result.certificateId,
+                    certUploadData.certPem,
+                    certUploadData.keyPem,
+                    certUploadData.chainPem || null
+                );
+                showToast('Certificate uploaded successfully!', 'success');
+            } catch (certError) {
+                showToast(`Route created but certificate upload failed: ${certError.message}`, 'warning');
+            }
+        } else if (tlsMode !== 'NONE' && result?.certificateId) {
             showToast(`Certificate requested for ${hostname}`, 'info');
         }
 

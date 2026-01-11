@@ -60,16 +60,10 @@ public class CertificateService {
         this.nginxConfigGenerator = nginxConfigGenerator;
     }
 
-    /** Get a certificate by ID. */
     public Optional<IngressCertificate> getCertificate(String certificateId) {
         return certificateRepository.findById(certificateId);
     }
 
-    /**
-     * Request a new Let's Encrypt certificate. This is an async operation that: 1. Creates an ACME
-     * account (if needed) 2. Submits a certificate order 3. Sets up HTTP-01 challenge 4. Waits for
-     * challenge validation 5. Downloads and stores the certificate
-     */
     @Async
     public void requestLetsEncryptCertificate(
             String certificateId, String userId, String username) {
@@ -102,7 +96,6 @@ public class CertificateService {
                     userId,
                     username);
 
-            // Step 1: Get or create account
             updateCertificateStatus(cert, CertificateStatus.PENDING, "Creating ACME account...");
             Session session = new Session(config.getAcmeDirectoryUrl());
             KeyPair accountKeyPair = getOrCreateAccountKeyPair(config.getId());
@@ -117,7 +110,6 @@ public class CertificateService {
                     userId,
                     username);
 
-            // Step 2: Create order
             updateCertificateStatus(
                     cert, CertificateStatus.PENDING, "Creating certificate order...");
             Order order = account.newOrder().domain(cert.getHostname()).create();
@@ -132,10 +124,9 @@ public class CertificateService {
                     userId,
                     username);
 
-            // Step 3: Process authorizations
             for (Authorization auth : order.getAuthorizations()) {
                 if (auth.getStatus() == Status.VALID) {
-                    continue; // Already authorized
+                    continue;
                 }
 
                 updateCertificateStatus(
@@ -146,7 +137,6 @@ public class CertificateService {
                 processAuthorization(cert, config, auth, userId, username);
             }
 
-            // Step 4: Wait for order to be ready
             updateCertificateStatus(
                     cert, CertificateStatus.PENDING, "Waiting for order to be ready...");
             int attempts = 0;
@@ -163,7 +153,6 @@ public class CertificateService {
                 throw new AcmeException("Order did not become ready in time");
             }
 
-            // Step 5: Generate CSR and finalize order
             updateCertificateStatus(
                     cert, CertificateStatus.PENDING, "Generating certificate signing request...");
             KeyPair domainKeyPair = KeyPairUtils.createKeyPair(2048);
@@ -182,7 +171,6 @@ public class CertificateService {
                     userId,
                     username);
 
-            // Step 6: Wait for certificate
             updateCertificateStatus(
                     cert, CertificateStatus.PENDING, "Waiting for certificate issuance...");
             attempts = 0;
@@ -199,20 +187,17 @@ public class CertificateService {
                 throw new AcmeException("Certificate was not issued in time");
             }
 
-            // Step 7: Download certificate
             updateCertificateStatus(cert, CertificateStatus.PENDING, "Downloading certificate...");
             Certificate certificate = order.getCertificate();
             X509Certificate x509Cert = certificate.getCertificate();
             List<X509Certificate> chain = certificate.getCertificateChain();
 
-            // Store certificate and key
             StringWriter certWriter = new StringWriter();
             StringWriter keyWriter = new StringWriter();
             StringWriter chainWriter = new StringWriter();
 
             KeyPairUtils.writeKeyPair(domainKeyPair, keyWriter);
 
-            // Write certificate PEM
             java.io.PrintWriter pw = new java.io.PrintWriter(certWriter);
             pw.println("-----BEGIN CERTIFICATE-----");
             pw.println(
@@ -221,7 +206,6 @@ public class CertificateService {
             pw.println("-----END CERTIFICATE-----");
             pw.flush();
 
-            // Write chain PEM
             pw = new java.io.PrintWriter(chainWriter);
             for (X509Certificate chainCert : chain) {
                 if (!chainCert.equals(x509Cert)) {
@@ -244,12 +228,11 @@ public class CertificateService {
             cert.setExpiresAt(x509Cert.getNotAfter().getTime());
             cert.setStatus(CertificateStatus.ACTIVE);
             cert.setStatusMessage("Certificate issued successfully!");
-            cert.setAcmeChallengeToken(null); // Clear challenge data
+            cert.setAcmeChallengeToken(null);
             cert.setAcmeChallengeContent(null);
 
             certificateRepository.save(cert);
 
-            // Clean up challenge from memory
             if (cert.getAcmeChallengeToken() != null) {
                 activeChallenges.remove(cert.getAcmeChallengeToken());
             }
@@ -269,7 +252,6 @@ public class CertificateService {
                     userId,
                     username);
 
-            // Step 8: Deploy certificate to nginx
             deployCertificateToNginx(cert, config);
 
         } catch (Exception e) {
@@ -304,13 +286,11 @@ public class CertificateService {
         String domain = auth.getIdentifier().getDomain();
         log.info("Processing authorization for domain: {}", domain);
 
-        // Find HTTP-01 challenge
         Http01Challenge challenge = auth.findChallenge(Http01Challenge.class).orElse(null);
         if (challenge == null) {
             throw new AcmeException("No HTTP-01 challenge available for " + domain);
         }
 
-        // Store challenge for the challenge endpoint
         String token = challenge.getToken();
         String content = challenge.getAuthorization();
 
@@ -325,7 +305,6 @@ public class CertificateService {
                         + token);
         certificateRepository.save(cert);
 
-        // Also store in memory for fast access
         activeChallenges.put(token, content);
 
         log.info("Challenge ready: token={}", token);
@@ -340,12 +319,10 @@ public class CertificateService {
                 userId,
                 username);
 
-        // Trigger the challenge
         updateCertificateStatus(
                 cert, CertificateStatus.PENDING, "Triggering HTTP-01 challenge verification...");
         challenge.trigger();
 
-        // Wait for challenge to be validated
         int attempts = 0;
         while (challenge.getStatus() != Status.VALID && attempts < 30) {
             if (challenge.getStatus() == Status.INVALID) {
@@ -380,21 +357,17 @@ public class CertificateService {
                 username);
     }
 
-    /** Get challenge response for HTTP-01 validation. This is called by the challenge endpoint. */
     public Optional<String> getChallengeResponse(String token) {
-        // First check memory cache
         String content = activeChallenges.get(token);
         if (content != null) {
             return Optional.of(content);
         }
 
-        // Fall back to database
         return certificateRepository
                 .findByAcmeChallengeToken(token)
                 .map(IngressCertificate::getAcmeChallengeContent);
     }
 
-    /** Renew a certificate that is expiring soon. */
     @Async
     public void renewCertificate(String certificateId, String userId, String username) {
         log.info("Starting certificate renewal for {}", certificateId);
@@ -415,7 +388,6 @@ public class CertificateService {
                                         new IllegalStateException(
                                                 "Config not found for certificate"));
 
-        // Mark as renewal pending
         cert.setStatus(CertificateStatus.RENEWAL_PENDING);
         cert.setStatusMessage("Renewal in progress...");
         cert.setLastRenewalAttempt(System.currentTimeMillis());
@@ -428,18 +400,15 @@ public class CertificateService {
                 userId,
                 username);
 
-        // Reuse the same flow as initial request
         requestLetsEncryptCertificate(certificateId, userId, username);
     }
 
-    /** Get certificates that need renewal (expiring within 30 days). */
     public List<IngressCertificate> getCertificatesNeedingRenewal() {
         long thirtyDaysFromNow = System.currentTimeMillis() + Duration.ofDays(30).toMillis();
         return certificateRepository.findByStatusAndExpiresAtBefore(
                 CertificateStatus.ACTIVE, thirtyDaysFromNow);
     }
 
-    /** Retry a failed certificate request. */
     public void retryCertificateRequest(String certificateId, String userId, String username) {
         IngressCertificate cert =
                 certificateRepository
@@ -453,7 +422,6 @@ public class CertificateService {
             throw new IllegalArgumentException("Only Let's Encrypt certificates can be retried");
         }
 
-        // Reset status and retry
         cert.setStatus(CertificateStatus.PENDING);
         cert.setStatusMessage("Retrying certificate request...");
         cert.setLastRenewalError(null);
@@ -462,7 +430,6 @@ public class CertificateService {
         requestLetsEncryptCertificate(certificateId, userId, username);
     }
 
-    /** Delete a certificate. */
     @Transactional
     public void deleteCertificate(String certificateId, String userId, String username) {
         IngressCertificate cert =
@@ -483,7 +450,6 @@ public class CertificateService {
 
         String hostname = cert.getHostname();
 
-        // Remove certificate files from nginx container if they exist
         try {
             DockerHost host =
                     hostRepository
@@ -506,12 +472,10 @@ public class CertificateService {
             log.warn("Failed to remove certificate files from nginx: {}", e.getMessage());
         }
 
-        // Clean up any active challenges
         if (cert.getAcmeChallengeToken() != null) {
             activeChallenges.remove(cert.getAcmeChallengeToken());
         }
 
-        // Delete from database
         certificateRepository.delete(cert);
 
         auditLog(
@@ -524,7 +488,6 @@ public class CertificateService {
         log.info("Certificate deleted for {}", hostname);
     }
 
-    /** Set auto-renewal flag for a certificate. */
     @Transactional
     public IngressCertificate setAutoRenew(
             String certificateId, boolean autoRenew, String userId, String username) {
@@ -565,7 +528,6 @@ public class CertificateService {
         return cert;
     }
 
-    /** Upload a custom certificate. */
     @Transactional
     public IngressCertificate uploadCertificate(
             String certificateId,
@@ -591,16 +553,12 @@ public class CertificateService {
                                                 "Config not found for certificate"));
 
         try {
-            // Parse and validate certificate
             java.security.cert.CertificateFactory cf =
                     java.security.cert.CertificateFactory.getInstance("X.509");
             X509Certificate x509Cert =
                     (X509Certificate)
                             cf.generateCertificate(
                                     new java.io.ByteArrayInputStream(certificatePem.getBytes()));
-
-            // Validate hostname matches
-            // (In production, do proper SAN/CN validation)
 
             cert.setCertificatePem(certificatePem);
             cert.setPrivateKeyPem(privateKeyPem);
@@ -625,7 +583,6 @@ public class CertificateService {
                     userId,
                     username);
 
-            // Deploy to nginx
             deployCertificateToNginx(cert, config);
 
             return cert;
@@ -636,7 +593,6 @@ public class CertificateService {
         }
     }
 
-    /** Deploy a certificate to the nginx container. */
     private void deployCertificateToNginx(IngressCertificate cert, IngressConfig config) {
         try {
             DockerHost host =
@@ -653,50 +609,42 @@ public class CertificateService {
 
             String containerId = config.getNginxContainerId();
             String hostname = cert.getHostname();
-
-            // Create certificate directory
             String certDir = "/etc/nginx/certs/" + hostname;
             api.execCommand(containerId, "mkdir", "-p", certDir);
 
-            // Write certificate files using heredoc through sh
             String fullchain = cert.getCertificatePem();
             if (cert.getChainPem() != null && !cert.getChainPem().isEmpty()) {
                 fullchain += "\n" + cert.getChainPem();
             }
 
-            // Write certificate file
+            String base64Fullchain =
+                    java.util.Base64.getEncoder().encodeToString(fullchain.getBytes());
             api.execCommand(
                     containerId,
                     "sh",
                     "-c",
-                    "cat > " + certDir + "/fullchain.pem << 'CERTEOF'\n" + fullchain + "\nCERTEOF");
+                    "echo '" + base64Fullchain + "' | base64 -d > " + certDir + "/fullchain.pem");
 
-            // Write private key file
+            String base64PrivKey =
+                    java.util.Base64.getEncoder()
+                            .encodeToString(cert.getPrivateKeyPem().getBytes());
             api.execCommand(
                     containerId,
                     "sh",
                     "-c",
-                    "cat > "
-                            + certDir
-                            + "/privkey.pem << 'KEYEOF'\n"
-                            + cert.getPrivateKeyPem()
-                            + "\nKEYEOF");
+                    "echo '" + base64PrivKey + "' | base64 -d > " + certDir + "/privkey.pem");
 
-            // Set proper permissions
             api.execCommand(containerId, "chmod", "600", certDir + "/privkey.pem");
             api.execCommand(containerId, "chmod", "644", certDir + "/fullchain.pem");
 
-            // Regenerate nginx config to enable HTTPS
             regenerateNginxConfig(config, host);
 
-            // Reload nginx
-            api.execCommand(containerId, "nginx", "-s", "reload");
+            reloadOrStartNginx(api, containerId);
 
             log.info("Certificate deployed to nginx for {}", hostname);
 
         } catch (Exception e) {
             log.error("Failed to deploy certificate to nginx: {}", e.getMessage(), e);
-            // Don't throw - certificate is still valid, just not deployed
         }
     }
 
@@ -716,27 +664,35 @@ public class CertificateService {
         config.setCurrentNginxConfig(nginxConfig);
         configRepository.save(config);
 
-        // Apply config to container
         try {
             DockerAPI api =
                     dockerService.dockerAPI(
                             dockerService.createClientCached(host.getDockerHostUrl()));
             String containerId = config.getNginxContainerId();
 
-            // Write nginx.conf
+            String base64Config =
+                    java.util.Base64.getEncoder().encodeToString(nginxConfig.getBytes());
             api.execCommand(
                     containerId,
                     "sh",
                     "-c",
-                    "cat > /etc/nginx/nginx.conf << 'CONFEOF'\n" + nginxConfig + "\nCONFEOF");
+                    "echo '" + base64Config + "' | base64 -d > /etc/nginx/nginx.conf");
 
-            // Test config
             String testResult = api.execCommand(containerId, "nginx", "-t");
-            log.debug("Nginx config test: {}", testResult);
+            log.info("Nginx config test: {}", testResult);
 
         } catch (Exception e) {
             log.error("Failed to apply nginx config: {}", e.getMessage(), e);
         }
+    }
+
+    /** Reload nginx by sending HUP signal to the master process (PID 1 in container). */
+    private void reloadOrStartNginx(DockerAPI api, String containerId) {
+        log.info("Sending SIGHUP to nginx master process (PID 1)");
+        String reloadResult = api.execCommand(containerId, "kill", "-HUP", "1");
+        log.info(
+                "Nginx reload result: {}",
+                reloadResult.isEmpty() ? "(success - no output)" : reloadResult);
     }
 
     private Account findOrRegisterAccount(Session session, KeyPair accountKeyPair, String email)

@@ -69,35 +69,23 @@ public class DockerService {
         return DockerClientImpl.getInstance(config, httpClient);
     }
 
-    /**
-     * Deploy containers from docker-compose YAML content
-     *
-     * @param dockerHostUrl The Docker host URL
-     * @param composeContent The docker-compose.yml content
-     * @param projectName Optional project name (used as prefix for container names)
-     * @return List of log lines from the deployment
-     */
     public List<String> deployCompose(
             String dockerHostUrl, String composeContent, String projectName)
             throws IOException, InterruptedException {
 
-        // Fix common URL format issue: unix://var -> unix:///var
         String dockerHost = dockerHostUrl;
         if (dockerHost.startsWith("unix://") && !dockerHost.startsWith("unix:///")) {
             dockerHost = "unix:///" + dockerHost.substring(7);
             log.warn("Fixed Docker host URL format: {}", dockerHost);
         }
 
-        // Create temp directory for compose file
         Path tempDir = Files.createTempDirectory("compose-deploy-");
         Path composeFile = tempDir.resolve("docker-compose.yml");
 
         try {
-            // Write compose content to file
             Files.writeString(composeFile, composeContent);
             log.info("Written compose file to: {}", composeFile);
 
-            // Build docker compose command
             List<String> command = new ArrayList<>();
             command.add("docker");
             command.add("-H");
@@ -145,7 +133,6 @@ public class DockerService {
             return output;
 
         } finally {
-            // Cleanup temp files
             try {
                 Files.deleteIfExists(composeFile);
                 Files.deleteIfExists(tempDir);

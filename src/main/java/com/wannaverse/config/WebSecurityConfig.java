@@ -36,7 +36,7 @@ public class WebSecurityConfig {
 
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
-        http.csrf(AbstractHttpConfigurer::disable) // Disabled for stateless JWT API
+        http.csrf(AbstractHttpConfigurer::disable)
                 .cors(cors -> cors.configurationSource(corsConfigurationSource()))
                 .sessionManagement(
                         session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
@@ -52,9 +52,7 @@ public class WebSecurityConfig {
                                         .frameOptions(HeadersConfigurer.FrameOptionsConfig::deny))
                 .authorizeHttpRequests(
                         auth ->
-                                auth
-                                        // Public static resources
-                                        .requestMatchers(
+                                auth.requestMatchers(
                                                 "/",
                                                 "/index.html",
                                                 "/css/**",
@@ -62,19 +60,14 @@ public class WebSecurityConfig {
                                                 "/assets/**",
                                                 "/favicon.ico")
                                         .permitAll()
-                                        // Public API endpoints
                                         .requestMatchers(
                                                 "/api/auth/login",
                                                 "/api/auth/refresh",
                                                 "/api/git/webhook/**",
                                                 "/api/ingress/acme/**")
                                         .permitAll()
-                                        // All other requests need authentication
-                                        // (actual permission checking done by
-                                        // PermissionInterceptor)
                                         .anyRequest()
-                                        .permitAll()) // JWT filter handles auth, interceptor
-                // handles permissions
+                                        .permitAll())
                 .addFilterBefore(
                         new JwtAuthenticationFilter(jwtService),
                         UsernamePasswordAuthenticationFilter.class);
@@ -86,7 +79,6 @@ public class WebSecurityConfig {
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration configuration = new CorsConfiguration();
 
-        // Use allowedOriginPatterns for wildcard support with credentials
         if ("*".equals(allowedOrigins.trim())) {
             configuration.setAllowedOriginPatterns(List.of("*"));
         } else {

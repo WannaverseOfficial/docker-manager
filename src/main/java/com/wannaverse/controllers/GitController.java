@@ -53,8 +53,6 @@ public class GitController {
         this.baseUrl = baseUrl;
     }
 
-    // ==================== Repository Management ====================
-
     @GetMapping("/repositories")
     @RequirePermission(resource = Resource.GIT_REPOS, action = "list")
     public ResponseEntity<List<GitRepositoryResponse>> getAllRepositories() {
@@ -175,7 +173,6 @@ public class GitController {
                             try {
                                 gitService.deleteRepository(id);
                             } catch (IOException e) {
-                                // Ignore
                             }
                             gitRepoRepository.deleteById(id);
                         });
@@ -197,8 +194,6 @@ public class GitController {
         repo = gitRepoRepository.save(repo);
         return ResponseEntity.ok(GitRepositoryResponse.fromEntity(repo, baseUrl));
     }
-
-    // ==================== Deployment Operations ====================
 
     @PostMapping("/repositories/{id}/deploy")
     @RequirePermission(resource = Resource.GIT_REPOS, action = "deploy")
@@ -334,8 +329,6 @@ public class GitController {
         return ResponseEntity.ok(DeploymentJobResponse.fromEntity(job));
     }
 
-    // ==================== Drift Detection ====================
-
     @GetMapping("/drift")
     @RequirePermission(resource = Resource.GIT_REPOS, action = "list")
     public ResponseEntity<List<DriftDetectionService.GitDriftInfo>> getAllDriftStatus() {
@@ -371,8 +364,6 @@ public class GitController {
         GitRepository repo = driftDetectionService.checkGitDriftById(id);
         return ResponseEntity.ok(GitRepositoryResponse.fromEntity(repo, baseUrl));
     }
-
-    // ==================== Webhook ====================
 
     @PostMapping("/webhook/{secret}")
     public ResponseEntity<Map<String, String>> handleWebhook(

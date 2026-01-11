@@ -30,14 +30,12 @@ public class DockerRegistry {
     @Column(nullable = false)
     private RegistryType registryType = RegistryType.PRIVATE;
 
-    // Basic auth credentials (encrypted)
     @Column(columnDefinition = "TEXT")
     private String username;
 
     @Column(columnDefinition = "TEXT")
     private String password;
 
-    // AWS ECR specific fields
     private String awsRegion;
 
     @Column(columnDefinition = "TEXT")
@@ -46,13 +44,11 @@ public class DockerRegistry {
     @Column(columnDefinition = "TEXT")
     private String awsSecretKey;
 
-    // Google Container Registry specific fields
     private String gcpProjectId;
 
     @Column(columnDefinition = "TEXT")
     private String gcpServiceAccountJson;
 
-    // Azure Container Registry specific fields
     private String azureClientId;
 
     @Column(columnDefinition = "TEXT")

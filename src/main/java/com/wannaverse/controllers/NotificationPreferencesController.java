@@ -89,7 +89,6 @@ public class NotificationPreferencesController {
                 updatedPrefs.add(preferenceRepository.save(pref));
 
             } catch (IllegalArgumentException e) {
-                // Invalid event type, skip
             }
         }
 

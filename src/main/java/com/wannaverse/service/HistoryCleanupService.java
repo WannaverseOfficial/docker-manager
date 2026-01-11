@@ -28,7 +28,6 @@ public class HistoryCleanupService {
         this.snapshotRepository = snapshotRepository;
     }
 
-    /** Scheduled cleanup job runs daily at 3 AM */
     @Scheduled(cron = "0 0 3 * * *")
     @Transactional
     public void cleanupOldHistory() {
@@ -38,7 +37,6 @@ public class HistoryCleanupService {
                 System.currentTimeMillis() - (retentionDays * 24L * 60L * 60L * 1000L);
 
         try {
-            // Find old operations
             List<DockerOperation> oldOperations =
                     operationRepository.findOlderThan(cutoffTimestamp);
 
@@ -53,7 +51,6 @@ public class HistoryCleanupService {
             int deletedOperations = 0;
 
             for (DockerOperation operation : oldOperations) {
-                // Delete associated snapshots first
                 List<StateSnapshot> snapshots =
                         snapshotRepository.findByOperationIdOrderByCreatedAtAsc(operation.getId());
 
@@ -62,7 +59,6 @@ public class HistoryCleanupService {
                     deletedSnapshots += snapshots.size();
                 }
 
-                // Delete operation
                 operationRepository.delete(operation);
                 deletedOperations++;
             }
@@ -77,7 +73,6 @@ public class HistoryCleanupService {
         }
     }
 
-    /** Manual cleanup endpoint for admin use */
     @Transactional
     public CleanupResult manualCleanup(int days) {
         log.info("Manual cleanup requested (retention: {} days)", days);

@@ -39,7 +39,6 @@ public class ContainerDriftStatus {
 
     private String imageName;
 
-    // Image drift
     @Enumerated(EnumType.STRING)
     private DriftStatus imageDriftStatus;
 
@@ -47,7 +46,6 @@ public class ContainerDriftStatus {
 
     private String latestImageDigest;
 
-    // Config drift
     @Enumerated(EnumType.STRING)
     private DriftStatus configDriftStatus;
 

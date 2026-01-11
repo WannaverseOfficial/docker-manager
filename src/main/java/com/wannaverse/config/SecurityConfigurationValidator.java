@@ -8,13 +8,6 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 
-/**
- * Validates security-critical configuration at startup. Fails fast if required secrets are not
- * properly configured.
- *
- * <p>This validator is disabled in the "dev" profile to allow local development without setting up
- * secrets. In production, always ensure proper secrets are configured.
- */
 @Component
 @Profile("!dev")
 public class SecurityConfigurationValidator {

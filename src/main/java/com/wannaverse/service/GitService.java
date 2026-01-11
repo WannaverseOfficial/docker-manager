@@ -44,6 +44,38 @@ public class GitService {
         }
     }
 
+    public Path cloneOrPullRepositoryTo(GitRepository repository, Path targetPath)
+            throws GitAPIException, IOException {
+        if (Files.exists(targetPath.resolve(".git"))) {
+            return pullRepository(repository, targetPath);
+        } else {
+            return cloneRepository(repository, targetPath);
+        }
+    }
+
+    public Path cloneOrPullRepositoryTo(String repoUrl, String branch, Path targetPath)
+            throws GitAPIException, IOException {
+        if (Files.exists(targetPath.resolve(".git"))) {
+            // Pull existing repo
+            try (Git git = Git.open(targetPath.toFile())) {
+                git.pull().setRemoteBranchName(branch).call();
+            }
+            return targetPath;
+        } else {
+            // Clone new repo
+            Files.createDirectories(targetPath);
+            try (Git git =
+                    Git.cloneRepository()
+                            .setURI(repoUrl)
+                            .setDirectory(targetPath.toFile())
+                            .setBranch(branch)
+                            .setCloneAllBranches(false)
+                            .call()) {
+                return targetPath;
+            }
+        }
+    }
+
     public Path cloneRepository(GitRepository repository, Path targetPath)
             throws GitAPIException, IOException {
         Files.createDirectories(targetPath);

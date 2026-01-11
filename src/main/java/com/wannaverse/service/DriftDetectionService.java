@@ -48,8 +48,6 @@ public class DriftDetectionService {
         return dockerService.dockerAPI(dockerService.createClientCached(host.getDockerHostUrl()));
     }
 
-    // ========== Git Drift Detection ==========
-
     @Scheduled(fixedDelayString = "${app.drift.git-check-interval-ms:300000}")
     @Transactional
     public void checkAllGitDrift() {
@@ -74,7 +72,6 @@ public class DriftDetectionService {
             if (latestSha == null) {
                 repo.setDriftStatus(DriftStatus.ERROR);
             } else if (repo.getLastCommitSha() == null) {
-                // Never deployed
                 repo.setDriftStatus(DriftStatus.BEHIND);
                 if (repo.getDriftDetectedAt() == null) {
                     repo.setDriftDetectedAt(System.currentTimeMillis());
@@ -120,8 +117,6 @@ public class DriftDetectionService {
                                         repo.getLastDriftCheckAt()))
                 .toList();
     }
-
-    // ========== Container Drift Detection ==========
 
     @Scheduled(fixedDelayString = "${app.drift.container-check-interval-ms:600000}")
     @Transactional
@@ -171,7 +166,6 @@ public class DriftDetectionService {
             log.error("Failed to list containers for host {}: {}", host.getId(), e.getMessage());
         }
 
-        // Clean up drift status for containers that no longer exist
         cleanupStaleContainerDrift(hostId, results);
 
         return results;
@@ -197,7 +191,6 @@ public class DriftDetectionService {
 
     private ContainerDriftStatus checkSingleContainerDrift(
             DockerHost host, String containerId, Object containerInfo) {
-        // Get or create drift status record
         ContainerDriftStatus status =
                 containerDriftStatusRepository
                         .findByDockerHostIdAndContainerId(host.getId(), containerId)
@@ -227,7 +220,6 @@ public class DriftDetectionService {
         String imageId = inspect.getImageId();
         status.setRunningImageDigest(imageId);
 
-        // Find the most recent "AFTER" snapshot for this container
         List<StateSnapshot> snapshots =
                 stateSnapshotRepository.findByHostAndResourceAndType(
                         host.getId(), containerId, StateSnapshot.SnapshotType.AFTER);
@@ -260,7 +252,6 @@ public class DriftDetectionService {
             StateSnapshot baseline, InspectContainerResponse current) {
         List<DriftDetail> drifts = new ArrayList<>();
 
-        // Compare environment variables
         Set<String> baselineEnv = parseEnvSet(baseline.getEnvironmentVars());
         Set<String> currentEnv = new HashSet<>();
         if (current.getConfig() != null && current.getConfig().getEnv() != null) {
@@ -282,7 +273,6 @@ public class DriftDetectionService {
             }
         }
 
-        // Compare image
         if (baseline.getImageId() != null && current.getImageId() != null) {
             if (!baseline.getImageId().equals(current.getImageId())) {
                 drifts.add(
@@ -296,7 +286,6 @@ public class DriftDetectionService {
             }
         }
 
-        // Compare volume bindings
         Set<String> baselineVolumes = parseVolumeSet(baseline.getVolumeBindings());
         Set<String> currentVolumes = new HashSet<>();
         if (current.getHostConfig() != null && current.getHostConfig().getBinds() != null) {
@@ -308,7 +297,6 @@ public class DriftDetectionService {
             drifts.add(new DriftDetail("volumes", "Volume bindings changed", null));
         }
 
-        // Compare port bindings
         String baselinePorts = baseline.getPortBindings();
         String currentPorts = extractPortBindings(current);
         if (baselinePorts != null && currentPorts != null && !baselinePorts.equals(currentPorts)) {
@@ -383,8 +371,6 @@ public class DriftDetectionService {
             }
         }
     }
-
-    // ========== DTOs ==========
 
     public record GitDriftInfo(
             String id,

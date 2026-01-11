@@ -54,19 +54,16 @@ public class IngressAuditLog {
     private long timestamp;
 
     public enum IngressAction {
-        // Ingress lifecycle
         INGRESS_ENABLED,
         INGRESS_DISABLED,
         INGRESS_ERROR,
 
-        // Route management
         ROUTE_CREATED,
         ROUTE_UPDATED,
         ROUTE_ENABLED,
         ROUTE_DISABLED,
         ROUTE_DELETED,
 
-        // Certificate management
         CERTIFICATE_REQUESTED,
         CERTIFICATE_ISSUED,
         CERTIFICATE_RENEWED,
@@ -76,19 +73,16 @@ public class IngressAuditLog {
         CERTIFICATE_UPDATED,
         CERTIFICATE_ERROR,
 
-        // ACME challenge tracking (for transparency)
         ACME_ACCOUNT_CREATED,
         ACME_CHALLENGE_STARTED,
         ACME_CHALLENGE_COMPLETED,
         ACME_CHALLENGE_FAILED,
 
-        // Nginx operations
         NGINX_CONFIG_UPDATED,
         NGINX_RELOADED,
         NGINX_RESTART,
         NGINX_ERROR,
 
-        // Network operations
         CONTAINER_CONNECTED,
         CONTAINER_DISCONNECTED
     }
@@ -98,7 +92,6 @@ public class IngressAuditLog {
         timestamp = System.currentTimeMillis();
     }
 
-    /** Factory method for creating success audit log. */
     public static IngressAuditLog success(
             String ingressConfigId,
             IngressAction action,
@@ -115,7 +108,6 @@ public class IngressAuditLog {
         return log;
     }
 
-    /** Factory method for creating failure audit log. */
     public static IngressAuditLog failure(
             String ingressConfigId,
             IngressAction action,

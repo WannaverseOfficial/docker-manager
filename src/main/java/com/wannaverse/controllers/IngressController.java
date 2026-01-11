@@ -24,8 +24,6 @@ public class IngressController {
         this.certificateService = certificateService;
     }
 
-    // ========== Ingress Status & Config ==========
-
     @GetMapping("/hosts/{hostId}/status")
     @RequirePermission(resource = Resource.INGRESS, action = "read", hostIdParam = "hostId")
     public ResponseEntity<IngressStatusResponse> getIngressStatus(@PathVariable String hostId) {
@@ -77,8 +75,6 @@ public class IngressController {
         return ResponseEntity.ok(IngressConfigResponse.fromEntity(config));
     }
 
-    // ========== Enable/Disable Flows ==========
-
     @PostMapping("/hosts/{hostId}/enable/preview")
     @RequirePermission(resource = Resource.INGRESS, action = "enable", hostIdParam = "hostId")
     public ResponseEntity<EnableIngressPreview> previewEnable(
@@ -112,8 +108,6 @@ public class IngressController {
         var result = ingressService.disableIngress(hostId, userId, username);
         return ResponseEntity.ok(result);
     }
-
-    // ========== Routes (Expose App) ==========
 
     @GetMapping("/hosts/{hostId}/routes")
     @RequirePermission(resource = Resource.INGRESS_ROUTES, action = "list", hostIdParam = "hostId")
@@ -169,8 +163,6 @@ public class IngressController {
         return ResponseEntity.noContent().build();
     }
 
-    // ========== Nginx Inspection ==========
-
     @GetMapping("/hosts/{hostId}/nginx/config")
     @RequirePermission(resource = Resource.INGRESS, action = "read", hostIdParam = "hostId")
     public ResponseEntity<NginxConfigResponse> getNginxConfig(@PathVariable String hostId) {
@@ -199,8 +191,6 @@ public class IngressController {
         ingressService.regenerateNginxConfig(hostId, userId, username);
         return ResponseEntity.noContent().build();
     }
-
-    // ========== Certificates ==========
 
     @GetMapping("/hosts/{hostId}/certificates")
     @RequirePermission(
@@ -287,8 +277,6 @@ public class IngressController {
         return ResponseEntity.ok(CertificateResponse.fromEntity(cert));
     }
 
-    // ========== Audit Logs ==========
-
     @GetMapping("/hosts/{hostId}/audit")
     @RequirePermission(resource = Resource.INGRESS, action = "audit", hostIdParam = "hostId")
     public ResponseEntity<List<IngressAuditLogResponse>> getAuditLogs(@PathVariable String hostId) {
@@ -298,8 +286,6 @@ public class IngressController {
                         .toList();
         return ResponseEntity.ok(logs);
     }
-
-    // ========== Response DTOs ==========
 
     public record IngressStatusResponse(
             String hostId,

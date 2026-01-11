@@ -65,7 +65,6 @@ public class GitRepository {
 
     private long lastDeployedAt;
 
-    // Drift detection fields
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     private DriftStatus driftStatus = DriftStatus.UNKNOWN;
@@ -88,10 +87,10 @@ public class GitRepository {
     }
 
     public enum DriftStatus {
-        SYNCED, // lastCommitSha == latestRemoteCommitSha
-        BEHIND, // Remote has newer commits
-        UNKNOWN, // Never checked or check failed
-        ERROR // Failed to check remote
+        SYNCED,
+        BEHIND,
+        UNKNOWN,
+        ERROR
     }
 
     @PrePersist

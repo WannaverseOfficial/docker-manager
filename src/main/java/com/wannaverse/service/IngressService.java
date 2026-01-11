@@ -19,7 +19,6 @@ import java.util.stream.Collectors;
 public class IngressService {
     private static final Logger log = LoggerFactory.getLogger(IngressService.class);
 
-    // Constants for managed resources
     public static final String NGINX_IMAGE = "nginx:alpine";
     public static final String NGINX_CONTAINER_PREFIX = "managed-ingress-proxy-";
     public static final String INGRESS_NETWORK_PREFIX = "managed-ingress-network-";
@@ -51,8 +50,6 @@ public class IngressService {
         this.nginxConfigGenerator = nginxConfigGenerator;
         this.objectMapper = objectMapper;
     }
-
-    // ========== Query Methods ==========
 
     public Optional<IngressConfig> getIngressConfig(String hostId) {
         return configRepository.findByDockerHostId(hostId);
@@ -90,9 +87,6 @@ public class IngressService {
                 .orElse(Collections.emptyList());
     }
 
-    // ========== Enable/Disable Operations ==========
-
-    /** Preview what enabling ingress will do - returns a plan without executing. */
     public EnableIngressPreview previewEnableIngress(String hostId, EnableIngressRequest request) {
         List<String> actions = new ArrayList<>();
         List<String> warnings = new ArrayList<>();
@@ -105,12 +99,10 @@ public class IngressService {
         actions.add("Create nginx container: " + containerName);
         actions.add("Start nginx container");
 
-        // Check if host exists
         if (!hostRepository.existsById(hostId)) {
             warnings.add("Docker host not found: " + hostId);
         }
 
-        // Check if already enabled
         if (isIngressEnabled(hostId)) {
             warnings.add("Ingress is already enabled for this host");
         }
@@ -125,7 +117,6 @@ public class IngressService {
                 warnings);
     }
 
-    /** Enable managed ingress for a Docker host. */
     @Transactional
     public EnableIngressResult enableIngress(
             String hostId, EnableIngressRequest request, String userId, String username) {
@@ -137,13 +128,11 @@ public class IngressService {
                         .orElseThrow(
                                 () -> new IllegalArgumentException("Host not found: " + hostId));
 
-        // Check if already enabled
         Optional<IngressConfig> existing = configRepository.findByDockerHostId(hostId);
         if (existing.isPresent() && existing.get().getStatus() == IngressStatus.ENABLED) {
             throw new IllegalStateException("Ingress already enabled for this host");
         }
 
-        // Create or update config
         IngressConfig config = existing.orElseGet(IngressConfig::new);
         config.setDockerHostId(hostId);
         config.setStatus(IngressStatus.ENABLING);
@@ -167,26 +156,20 @@ public class IngressService {
         try {
             DockerAPI api = getDockerAPI(host);
 
-            // Step 1: Pull nginx image
             log.debug("Pulling nginx image: {}", NGINX_IMAGE);
             api.pullImage(NGINX_IMAGE);
 
-            // Step 2: Create or reuse network
             log.debug("Setting up ingress network: {}", networkName);
             String networkId = findOrCreateNetwork(api, networkName);
             config.setIngressNetworkId(networkId);
 
-            // Step 3: Remove existing container if present (to ensure correct port bindings)
             removeExistingContainer(api, containerName);
 
-            // Step 4: Create nginx container
-            // Port mapping: container port -> host port
             log.debug("Creating nginx container: {}", containerName);
             Map<Integer, Integer> ports = new HashMap<>();
-            ports.put(80, request.httpPort()); // container:80 -> host:httpPort
-            ports.put(443, request.httpsPort()); // container:443 -> host:httpsPort
+            ports.put(80, request.httpPort());
+            ports.put(443, request.httpsPort());
 
-            // Add host.docker.internal for ACME challenge proxying (needed on Linux)
             List<String> extraHosts = List.of("host.docker.internal:host-gateway");
 
             var containerResponse =
@@ -200,38 +183,34 @@ public class IngressService {
                             extraHosts);
             config.setNginxContainerId(containerResponse.getId());
 
-            // Step 5: Start container
             log.debug("Starting nginx container: {}", containerName);
             api.startContainer(containerResponse.getId());
 
-            // Update status
             config.setStatus(IngressStatus.ENABLED);
             config.setEnabledAt(System.currentTimeMillis());
             config.setEnabledByUserId(userId);
             config.setEnabledByUsername(username);
 
-            // Generate initial nginx config
             String nginxConfig = generateNginxConfig(config);
             config.setCurrentNginxConfig(nginxConfig);
 
-            // Step 6: Write nginx config to container and reload
             log.debug("Applying nginx config to container");
             String containerId = containerResponse.getId();
+
+            String base64Config =
+                    java.util.Base64.getEncoder().encodeToString(nginxConfig.getBytes());
             api.execCommand(
                     containerId,
                     "sh",
                     "-c",
-                    "cat > /etc/nginx/nginx.conf << 'CONFEOF'\n" + nginxConfig + "\nCONFEOF");
+                    "echo '" + base64Config + "' | base64 -d > /etc/nginx/nginx.conf");
 
-            // Test and reload nginx
             String testResult = api.execCommand(containerId, "nginx", "-t");
-            log.debug("Nginx config test: {}", testResult);
-            api.execCommand(containerId, "nginx", "-s", "reload");
-            log.debug("Nginx reloaded");
+            log.info("Nginx config test: {}", testResult);
+            reloadOrStartNginx(api, containerId);
 
             config = configRepository.save(config);
 
-            // Audit log
             auditLogRepository.save(
                     IngressAuditLog.success(
                             config.getId(),
@@ -256,7 +235,6 @@ public class IngressService {
             config.setLastError(e.getMessage());
             configRepository.save(config);
 
-            // Audit log failure
             auditLogRepository.save(
                     IngressAuditLog.failure(
                             config.getId(),
@@ -266,7 +244,6 @@ public class IngressService {
                             userId,
                             username));
 
-            // Attempt cleanup
             try {
                 cleanupFailedEnable(host, config);
             } catch (Exception cleanupError) {
@@ -277,7 +254,6 @@ public class IngressService {
         }
     }
 
-    /** Preview what disabling will break - lists all routes that will stop working. */
     public DisableIngressPreview previewDisableIngress(String hostId) {
         IngressConfig config =
                 configRepository
@@ -318,7 +294,6 @@ public class IngressService {
         return new DisableIngressPreview(affectedRoutes, actions, warning);
     }
 
-    /** Disable managed ingress for a Docker host. */
     @Transactional
     public DisableIngressResult disableIngress(String hostId, String userId, String username) {
         log.info("Disabling ingress for host {} by user {}", hostId, username);
@@ -347,19 +322,41 @@ public class IngressService {
         try {
             DockerAPI api = getDockerAPI(host);
 
-            // Count affected routes
             int routesDisabled =
                     routeRepository.countByIngressConfigIdAndEnabled(config.getId(), true);
 
-            // Step 1: Stop and remove nginx container
+            if (config.getIngressNetworkId() != null) {
+                log.debug(
+                        "Disconnecting containers from ingress network: {}",
+                        config.getIngressNetworkId());
+                try {
+                    var network = api.inspectNetwork(config.getIngressNetworkId());
+                    if (network.getContainers() != null) {
+                        for (String containerId : network.getContainers().keySet()) {
+                            log.debug(
+                                    "Disconnecting container {} from ingress network", containerId);
+                            try {
+                                api.disconnectContainerFromNetwork(
+                                        config.getIngressNetworkId(), containerId);
+                            } catch (Exception e) {
+                                log.warn(
+                                        "Failed to disconnect container {}: {}",
+                                        containerId,
+                                        e.getMessage());
+                            }
+                        }
+                    }
+                } catch (Exception e) {
+                    log.debug("Network may not exist: {}", e.getMessage());
+                }
+            }
+
             if (config.getNginxContainerId() != null) {
                 log.debug("Stopping nginx container: {}", config.getNginxContainerId());
                 try {
                     api.stopContainer(config.getNginxContainerId());
                 } catch (Exception e) {
-                    log.warn(
-                            "Failed to stop container (may already be stopped): {}",
-                            e.getMessage());
+                    log.debug("Container may already be stopped: {}", e.getMessage());
                 }
 
                 log.debug("Removing nginx container: {}", config.getNginxContainerId());
@@ -368,21 +365,27 @@ public class IngressService {
                 } catch (Exception e) {
                     log.warn("Failed to remove container: {}", e.getMessage());
                 }
+
+                if (containerExists(api, config.getNginxContainerId())) {
+                    throw new IllegalStateException(
+                            "Failed to remove nginx container: " + config.getNginxContainerId());
+                }
             }
 
-            // Step 2: Disconnect containers from network and remove network
             if (config.getIngressNetworkId() != null) {
                 log.debug("Removing ingress network: {}", config.getIngressNetworkId());
                 try {
-                    // Network removal will fail if containers are still connected
-                    // Docker should auto-disconnect when we removed the proxy container
                     api.removeNetwork(config.getIngressNetworkId());
                 } catch (Exception e) {
                     log.warn("Failed to remove network: {}", e.getMessage());
                 }
+
+                if (networkExists(api, config.getIngressNetworkId())) {
+                    throw new IllegalStateException(
+                            "Failed to remove ingress network: " + config.getIngressNetworkId());
+                }
             }
 
-            // Update config status
             config.setStatus(IngressStatus.DISABLED);
             config.setNginxContainerId(null);
             config.setIngressNetworkId(null);
@@ -390,10 +393,6 @@ public class IngressService {
             config.setCurrentNginxConfig(null);
             configRepository.save(config);
 
-            // Don't delete routes - preserve for re-enable
-            // Just mark them as needing reconnection
-
-            // Audit log
             auditLogRepository.save(
                     IngressAuditLog.success(
                             config.getId(),
@@ -426,9 +425,24 @@ public class IngressService {
         }
     }
 
-    // ========== Route Management ==========
+    private boolean containerExists(DockerAPI api, String containerId) {
+        try {
+            api.inspectContainer(containerId);
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
 
-    /** Preview exposing an app - shows what nginx config will be generated. */
+    private boolean networkExists(DockerAPI api, String networkId) {
+        try {
+            api.inspectNetwork(networkId);
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     public ExposeAppPreview previewExposeApp(String hostId, ExposeAppRequest request) {
         IngressConfig config =
                 configRepository
@@ -442,7 +456,6 @@ public class IngressService {
             throw new IllegalStateException("Ingress is not enabled");
         }
 
-        // Build preview route
         IngressRoute route = new IngressRoute();
         route.setHostname(request.hostname());
         route.setPathPrefix(request.pathPrefix() != null ? request.pathPrefix() : "/");
@@ -451,21 +464,18 @@ public class IngressService {
         route.setTargetPort(request.targetPort());
         route.setProtocol(IngressRoute.Protocol.valueOf(request.protocol()));
         route.setTlsMode(IngressRoute.TlsMode.valueOf(request.tlsMode()));
+        route.setForceHttpsRedirect(request.forceHttpsRedirect());
 
-        // Generate preview nginx block
         String nginxBlock = nginxConfigGenerator.generateServerBlockPreview(route, null);
 
-        // Check for warnings
         List<String> warnings = new ArrayList<>();
 
-        // Check if route already exists
         if (routeRepository.existsByIngressConfigIdAndHostnameAndPathPrefix(
                 config.getId(), request.hostname(), request.pathPrefix())) {
             warnings.add(
                     "A route for " + request.hostname() + request.pathPrefix() + " already exists");
         }
 
-        // Check certificate needs
         boolean certificateNeeded = !request.tlsMode().equals("NONE");
         String certificateStatus = "Not needed";
 
@@ -505,7 +515,6 @@ public class IngressService {
                 nginxBlock, null, certificateNeeded, certificateStatus, warnings);
     }
 
-    /** Expose an app through ingress. */
     @Transactional
     public IngressRoute exposeApp(
             String hostId, ExposeAppRequest request, String userId, String username) {
@@ -533,14 +542,12 @@ public class IngressService {
             throw new IllegalStateException("Ingress is not enabled");
         }
 
-        // Check for duplicate
         if (routeRepository.existsByIngressConfigIdAndHostnameAndPathPrefix(
                 config.getId(), request.hostname(), request.pathPrefix())) {
             throw new IllegalArgumentException(
                     "Route already exists for " + request.hostname() + request.pathPrefix());
         }
 
-        // Create route
         IngressRoute route = new IngressRoute();
         route.setIngressConfigId(config.getId());
         route.setHostname(request.hostname());
@@ -550,11 +557,11 @@ public class IngressService {
         route.setTargetPort(request.targetPort());
         route.setProtocol(IngressRoute.Protocol.valueOf(request.protocol()));
         route.setTlsMode(IngressRoute.TlsMode.valueOf(request.tlsMode()));
+        route.setForceHttpsRedirect(request.forceHttpsRedirect());
         route.setEnabled(true);
         route.setCreatedByUserId(userId);
         route.setCreatedByUsername(username);
 
-        // Create certificate record if TLS is requested
         IngressCertificate certificate = null;
         IngressRoute.TlsMode tlsMode = route.getTlsMode();
         if (tlsMode != IngressRoute.TlsMode.NONE) {
@@ -566,7 +573,6 @@ public class IngressService {
                 case LETS_ENCRYPT:
                     certificate.setSource(IngressCertificate.CertificateSource.LETS_ENCRYPT);
                     certificate.setStatus(IngressCertificate.CertificateStatus.PENDING);
-                    // Log that manual action is needed
                     auditLogRepository.save(
                             IngressAuditLog.success(
                                     config.getId(),
@@ -609,7 +615,6 @@ public class IngressService {
             route.setCertificateId(certificate.getId());
         }
 
-        // Generate nginx block
         String nginxBlock = nginxConfigGenerator.generateServerBlockPreview(route, certificate);
         route.setGeneratedNginxBlock(nginxBlock);
 
@@ -618,7 +623,6 @@ public class IngressService {
         try {
             DockerAPI api = getDockerAPI(host);
 
-            // Connect target container to ingress network
             log.debug("Connecting container {} to ingress network", request.containerId());
             try {
                 api.connectContainerToNetwork(config.getIngressNetworkId(), request.containerId());
@@ -636,10 +640,8 @@ public class IngressService {
                         e.getMessage());
             }
 
-            // Regenerate and apply nginx config
             regenerateAndApplyNginxConfig(config, host);
 
-            // Audit log
             auditLogRepository.save(
                     IngressAuditLog.success(
                             config.getId(),
@@ -664,7 +666,6 @@ public class IngressService {
         } catch (Exception e) {
             log.error("Failed to expose app: {}", e.getMessage(), e);
 
-            // Cleanup the route
             routeRepository.delete(route);
 
             auditLogRepository.save(
@@ -680,7 +681,6 @@ public class IngressService {
         }
     }
 
-    /** Remove a route (unexpose an app). */
     @Transactional
     public void removeRoute(
             String routeId, boolean disconnectFromNetwork, String userId, String username) {
@@ -706,10 +706,9 @@ public class IngressService {
             if (disconnectFromNetwork && config.getStatus() == IngressStatus.ENABLED) {
                 DockerAPI api = getDockerAPI(host);
 
-                // Check if container is still used by other routes
                 List<IngressRoute> containerRoutes =
                         routeRepository.findByTargetContainerId(route.getTargetContainerId());
-                if (containerRoutes.size() == 1) { // Only this route
+                if (containerRoutes.size() == 1) {
                     log.debug(
                             "Disconnecting container {} from ingress network",
                             route.getTargetContainerId());
@@ -732,15 +731,12 @@ public class IngressService {
                 }
             }
 
-            // Delete route
             routeRepository.delete(route);
 
-            // Regenerate nginx config if enabled
             if (config.getStatus() == IngressStatus.ENABLED) {
                 regenerateAndApplyNginxConfig(config, host);
             }
 
-            // Audit log
             auditLogRepository.save(
                     IngressAuditLog.success(
                             config.getId(),
@@ -767,9 +763,6 @@ public class IngressService {
         }
     }
 
-    // ========== Nginx Management ==========
-
-    /** Get current nginx configuration. */
     public String getNginxConfig(String hostId) {
         return configRepository
                 .findByDockerHostId(hostId)
@@ -777,7 +770,6 @@ public class IngressService {
                 .orElse(null);
     }
 
-    /** Get nginx container status. */
     public NginxStatus getNginxStatus(String hostId) {
         IngressConfig config = configRepository.findByDockerHostId(hostId).orElse(null);
 
@@ -825,7 +817,6 @@ public class IngressService {
         }
     }
 
-    /** Force regenerate and reload nginx config. */
     @Transactional
     public void regenerateNginxConfig(String hostId, String userId, String username) {
         log.info("Regenerating nginx config for host {} by user {}", hostId, username);
@@ -859,15 +850,19 @@ public class IngressService {
                         username));
     }
 
-    // ========== Helper Methods ==========
-
     private DockerAPI getDockerAPI(DockerHost host) {
         return dockerService.dockerAPI(dockerService.createClientCached(host.getDockerHostUrl()));
     }
 
-    /** Find existing network by name or create a new one. */
+    private void reloadOrStartNginx(DockerAPI api, String containerId) {
+        log.info("Sending SIGHUP to nginx master process (PID 1)");
+        String reloadResult = api.execCommand(containerId, "kill", "-HUP", "1");
+        log.info(
+                "Nginx reload result: {}",
+                reloadResult.isEmpty() ? "(success - no output)" : reloadResult);
+    }
+
     private String findOrCreateNetwork(DockerAPI api, String networkName) {
-        // Check if network already exists
         var networks = api.listNetworks();
         for (var network : networks) {
             if (networkName.equals(network.getName())) {
@@ -876,20 +871,17 @@ public class IngressService {
             }
         }
 
-        // Create new network
         log.debug("Creating new network: {}", networkName);
         var response = api.createNetwork(networkName);
         return response.getId();
     }
 
-    /** Remove existing container by name if it exists. */
     private void removeExistingContainer(DockerAPI api, String containerName) {
         var containers = api.listAllContainers();
         for (var container : containers) {
             var names = container.getNames();
             if (names != null) {
                 for (var name : names) {
-                    // Container names are prefixed with /
                     if (name.equals("/" + containerName) || name.equals(containerName)) {
                         log.debug(
                                 "Removing existing container: {} ({})",
@@ -927,24 +919,26 @@ public class IngressService {
         config.setCurrentNginxConfig(nginxConfig);
         configRepository.save(config);
 
-        // Apply config to nginx container via docker exec
         if (config.getNginxContainerId() != null) {
             try {
                 DockerAPI api = getDockerAPI(host);
                 String containerId = config.getNginxContainerId();
 
-                // Write nginx config to container
-                api.execCommand(
-                        containerId,
-                        "sh",
-                        "-c",
-                        "cat > /etc/nginx/nginx.conf << 'CONFEOF'\n" + nginxConfig + "\nCONFEOF");
+                String base64Config =
+                        java.util.Base64.getEncoder().encodeToString(nginxConfig.getBytes());
+                String writeResult =
+                        api.execCommand(
+                                containerId,
+                                "sh",
+                                "-c",
+                                "echo '" + base64Config + "' | base64 -d > /etc/nginx/nginx.conf");
+                log.debug("Nginx config write result: {}", writeResult);
 
-                // Test and reload nginx
                 String testResult = api.execCommand(containerId, "nginx", "-t");
-                log.debug("Nginx config test: {}", testResult);
+                log.info("Nginx config test: {}", testResult);
 
-                api.execCommand(containerId, "nginx", "-s", "reload");
+                reloadOrStartNginx(api, containerId);
+
                 log.info("Nginx config applied and reloaded successfully");
 
             } catch (Exception e) {
@@ -977,8 +971,6 @@ public class IngressService {
             }
         }
     }
-
-    // ========== DTOs ==========
 
     public record EnableIngressRequest(
             int httpPort, int httpsPort, int acmeProxyPort, String acmeEmail, boolean useStaging) {
@@ -1026,7 +1018,8 @@ public class IngressService {
             String certificateId,
             boolean authEnabled,
             String authType,
-            String authConfig) {}
+            String authConfig,
+            boolean forceHttpsRedirect) {}
 
     public record ExposeAppPreview(
             String proposedNginxBlock,

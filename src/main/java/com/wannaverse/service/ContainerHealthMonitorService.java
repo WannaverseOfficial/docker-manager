@@ -85,12 +85,10 @@ public class ContainerHealthMonitorService {
         List<String> activeContainerIds =
                 containers.stream().map(Container::getId).collect(Collectors.toList());
 
-        // Clean up stale monitor state entries
         if (!activeContainerIds.isEmpty()) {
             stateRepository.deleteStaleEntries(host.getId(), activeContainerIds);
         }
 
-        // Check each container
         for (Container container : containers) {
             try {
                 checkContainer(host, api, container);
@@ -103,7 +101,6 @@ public class ContainerHealthMonitorService {
             }
         }
 
-        // Resolve events for containers that no longer exist or are now healthy
         resolveOldEvents(host, activeContainerIds);
     }
 
@@ -124,7 +121,6 @@ public class ContainerHealthMonitorService {
                                     return newState;
                                 });
 
-        // Get detailed container info
         InspectContainerResponse inspect;
         try {
             inspect = api.inspectContainer(containerId);
@@ -142,42 +138,34 @@ public class ContainerHealthMonitorService {
         Integer currentRestartCount =
                 inspect.getRestartCount() != null ? inspect.getRestartCount() : 0;
 
-        // Check for OOM kill
         if (Boolean.TRUE.equals(containerState.getOOMKilled())) {
             handleOomKill(host, containerId, containerName, state);
         }
 
-        // Check for crash (exited with non-zero code)
         if ("exited".equalsIgnoreCase(currentStatus)) {
             Integer exitCode = containerState.getExitCode();
             if (exitCode != null && exitCode != 0) {
-                // Only report if this is a new crash (status changed from running)
                 if ("running".equalsIgnoreCase(state.getLastKnownStatus())) {
                     handleCrash(host, containerId, containerName, exitCode, state);
                 }
             }
         }
 
-        // Check for restart loop
         if (state.getLastRestartCount() != null
                 && currentRestartCount > state.getLastRestartCount()) {
             long now = System.currentTimeMillis();
 
-            // Start a new tracking window if not already tracking
             if (state.getLastRestartCountChange() == 0) {
                 state.setLastRestartCountChange(now);
                 state.setRestartCountAtWindowStart(state.getLastRestartCount());
             }
 
-            // Check if the window has expired - if so, start a new window
             long timeSinceWindowStart = now - state.getLastRestartCountChange();
             if (timeSinceWindowStart > restartLoopWindowMs) {
-                // Window expired, start a new one from the previous poll's count
                 state.setLastRestartCountChange(now);
                 state.setRestartCountAtWindowStart(state.getLastRestartCount());
             }
 
-            // Calculate restarts since the window started
             Integer baseline = state.getRestartCountAtWindowStart();
             if (baseline == null) {
                 baseline = state.getLastRestartCount();
@@ -195,12 +183,10 @@ public class ContainerHealthMonitorService {
 
             if (restartsSinceWindow >= restartLoopThreshold) {
                 handleRestartLoop(host, containerId, containerName, currentRestartCount, state);
-                // Reset window after triggering to avoid duplicate alerts
                 state.setLastRestartCountChange(0);
                 state.setRestartCountAtWindowStart(null);
             }
         } else if (currentRestartCount.equals(state.getLastRestartCount())) {
-            // Reset window if restart count hasn't changed for longer than the window
             if (state.getLastRestartCountChange() > 0
                     && System.currentTimeMillis() - state.getLastRestartCountChange()
                             > restartLoopWindowMs) {
@@ -209,7 +195,6 @@ public class ContainerHealthMonitorService {
             }
         }
 
-        // Check health status
         if (containerState.getHealth() != null) {
             String healthStatus = containerState.getHealth().getStatus();
             if ("unhealthy".equalsIgnoreCase(healthStatus)) {
@@ -217,7 +202,6 @@ public class ContainerHealthMonitorService {
             }
         }
 
-        // Update state
         state.setContainerName(containerName);
         state.setLastKnownStatus(currentStatus);
         state.setLastRestartCount(currentRestartCount);
@@ -238,7 +222,6 @@ public class ContainerHealthMonitorService {
                 host.getId(),
                 exitCode);
 
-        // Create event
         ContainerHealthEvent event = new ContainerHealthEvent();
         event.setDockerHost(host);
         event.setContainerId(containerId);
@@ -248,7 +231,6 @@ public class ContainerHealthMonitorService {
         event.setErrorMessage("Container exited with code " + exitCode);
         eventRepository.save(event);
 
-        // Send notification if cooldown allows
         if (state.canNotifyCrash(notificationCooldownMs)) {
             try {
                 notificationService.notifyContainerStopped(host, containerId, containerName);
@@ -268,7 +250,6 @@ public class ContainerHealthMonitorService {
             int restartCount,
             ContainerMonitorState state) {
 
-        // Check if there's already an active restart loop event
         if (eventRepository
                 .findByDockerHostIdAndContainerIdAndEventTypeAndResolvedAtIsNull(
                         host.getId(), containerId, ContainerHealthEvent.EventType.RESTART_LOOP)
@@ -283,7 +264,6 @@ public class ContainerHealthMonitorService {
                 host.getId(),
                 restartCount);
 
-        // Create event
         ContainerHealthEvent event = new ContainerHealthEvent();
         event.setDockerHost(host);
         event.setContainerId(containerId);
@@ -298,7 +278,6 @@ public class ContainerHealthMonitorService {
                         + " minutes");
         eventRepository.save(event);
 
-        // Send notification if cooldown allows
         if (state.canNotifyRestartLoop(notificationCooldownMs)) {
             try {
                 notificationService.notifyContainerRestartLoop(
@@ -318,8 +297,7 @@ public class ContainerHealthMonitorService {
             String containerName,
             ContainerMonitorState state) {
 
-        // Check for recent OOM event to avoid duplicates
-        long recentWindow = 60000; // 1 minute
+        long recentWindow = 60000;
         List<ContainerHealthEvent> recentEvents =
                 eventRepository.findRecentEvents(
                         host.getId(),
@@ -333,7 +311,6 @@ public class ContainerHealthMonitorService {
 
         log.info("OOM kill detected: {} ({}) on host {}", containerName, containerId, host.getId());
 
-        // Create event
         ContainerHealthEvent event = new ContainerHealthEvent();
         event.setDockerHost(host);
         event.setContainerId(containerId);
@@ -342,7 +319,6 @@ public class ContainerHealthMonitorService {
         event.setErrorMessage("Container was killed due to out of memory");
         eventRepository.save(event);
 
-        // Send notification
         if (state.canNotifyCrash(notificationCooldownMs)) {
             try {
                 notificationService.notifyContainerOomKilled(host, containerId, containerName);
@@ -361,7 +337,6 @@ public class ContainerHealthMonitorService {
             String containerName,
             ContainerMonitorState state) {
 
-        // Check if there's already an active unhealthy event
         if (eventRepository
                 .findByDockerHostIdAndContainerIdAndEventTypeAndResolvedAtIsNull(
                         host.getId(), containerId, ContainerHealthEvent.EventType.HEALTH_UNHEALTHY)
@@ -375,7 +350,6 @@ public class ContainerHealthMonitorService {
                 containerId,
                 host.getId());
 
-        // Create event
         ContainerHealthEvent event = new ContainerHealthEvent();
         event.setDockerHost(host);
         event.setContainerId(containerId);
@@ -384,7 +358,6 @@ public class ContainerHealthMonitorService {
         event.setErrorMessage("Container health check is failing");
         eventRepository.save(event);
 
-        // Send notification
         if (state.canNotifyHealth(notificationCooldownMs)) {
             try {
                 notificationService.notifyContainerHealthCheckFailed(
@@ -404,7 +377,6 @@ public class ContainerHealthMonitorService {
                         host.getId());
 
         for (ContainerHealthEvent event : activeEvents) {
-            // Resolve if container no longer exists
             if (!activeContainerIds.contains(event.getContainerId())) {
                 event.resolve();
                 eventRepository.save(event);
@@ -412,7 +384,6 @@ public class ContainerHealthMonitorService {
                 continue;
             }
 
-            // For restart loop events, check if container is now stable
             if (event.getEventType() == ContainerHealthEvent.EventType.RESTART_LOOP) {
                 ContainerMonitorState state =
                         stateRepository

@@ -33,10 +33,10 @@ public class SecurityConfig implements WebMvcConfigurer {
         registry.addInterceptor(permissionInterceptor)
                 .addPathPatterns("/api/**")
                 .excludePathPatterns(
-                        "/api/auth/login", // Login must be public
-                        "/api/auth/refresh", // Token refresh must be public
-                        "/api/ingress/acme/**", // ACME challenge must be public
-                        "/api/git/webhook/**"); // Webhooks are authenticated via secret
+                        "/api/auth/login",
+                        "/api/auth/refresh",
+                        "/api/ingress/acme/**",
+                        "/api/git/webhook/**");
     }
 
     @Override

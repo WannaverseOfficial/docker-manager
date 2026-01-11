@@ -58,7 +58,6 @@ public class SmtpController {
 
         Optional<SmtpConfiguration> configOpt = smtpConfigRepository.findFirstByEnabledTrue();
         if (configOpt.isEmpty()) {
-            // Return any existing config, even if disabled
             var allConfigs = smtpConfigRepository.findAll();
             if (allConfigs.isEmpty()) {
                 return ResponseEntity.noContent().build();
@@ -76,7 +75,6 @@ public class SmtpController {
             @Valid @RequestBody SmtpConfigurationRequest request) {
         requireAdmin();
 
-        // Get existing config or create new one
         SmtpConfiguration config =
                 smtpConfigRepository.findAll().stream().findFirst().orElse(new SmtpConfiguration());
 
@@ -88,7 +86,6 @@ public class SmtpController {
         config.setSecurityType(request.getSecurityType());
         config.setEnabled(request.isEnabled());
 
-        // Only update password if provided
         if (request.getPassword() != null && !request.getPassword().isEmpty()) {
             config.setEncryptedPassword(encryptionService.encrypt(request.getPassword()));
         }

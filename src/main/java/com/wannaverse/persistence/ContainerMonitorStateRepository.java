@@ -17,7 +17,6 @@ public interface ContainerMonitorStateRepository
 
     List<ContainerMonitorState> findByDockerHostId(String dockerHostId);
 
-    // Delete stale entries for containers that no longer exist
     @Modifying
     @Transactional
     @Query(
@@ -28,7 +27,6 @@ public interface ContainerMonitorStateRepository
             @Param("hostId") String hostId,
             @Param("activeContainerIds") List<String> activeContainerIds);
 
-    // Delete all entries for a host (when host is removed)
     @Transactional
     void deleteByDockerHostId(String dockerHostId);
 }

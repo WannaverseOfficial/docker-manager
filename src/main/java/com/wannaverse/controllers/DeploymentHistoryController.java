@@ -40,8 +40,6 @@ public class DeploymentHistoryController {
         this.rollbackService = rollbackService;
     }
 
-    // ==================== Operations ====================
-
     @GetMapping("/hosts/{hostId}/operations")
     public ResponseEntity<Map<String, Object>> listOperations(
             @PathVariable String hostId,
@@ -134,8 +132,6 @@ public class DeploymentHistoryController {
                 .orElse(ResponseEntity.notFound().build());
     }
 
-    // ==================== Compose Deployments ====================
-
     @GetMapping("/hosts/{hostId}/compose")
     public ResponseEntity<Map<String, Object>> listComposeDeployments(
             @PathVariable String hostId,
@@ -198,8 +194,6 @@ public class DeploymentHistoryController {
         List<String> projects = composeRepository.findDistinctProjectNames(hostId);
         return ResponseEntity.ok(projects);
     }
-
-    // ==================== Summary ====================
 
     @GetMapping("/hosts/{hostId}/summary")
     @RequirePermission(

@@ -1,31 +1,35 @@
 package com.wannaverse.security;
 
+import com.wannaverse.persistence.Resource;
+import com.wannaverse.service.DockerHostService;
 import com.wannaverse.service.PermissionService;
 
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.method.HandlerMethod;
 import org.springframework.web.servlet.HandlerInterceptor;
 import org.springframework.web.servlet.HandlerMapping;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 
-/**
- * Interceptor that enforces authentication and permission checks on all API endpoints.
- *
- * <p>By default, all endpoints require authentication unless explicitly excluded via the
- * SecurityConfig exclusion patterns. Endpoints with @RequirePermission additionally enforce
- * permission checks.
- */
 @Component
 public class PermissionInterceptor implements HandlerInterceptor {
 
-    private final PermissionService permissionService;
+    private static final Logger log = LoggerFactory.getLogger(PermissionInterceptor.class);
 
-    public PermissionInterceptor(PermissionService permissionService) {
+    private final PermissionService permissionService;
+    private final DockerHostService dockerHostService;
+
+    public PermissionInterceptor(
+            PermissionService permissionService, DockerHostService dockerHostService) {
         this.permissionService = permissionService;
+        this.dockerHostService = dockerHostService;
     }
 
     @Override
@@ -38,11 +42,8 @@ public class PermissionInterceptor implements HandlerInterceptor {
 
         SecurityContext ctx = SecurityContextHolder.getContext();
 
-        // Check for @RequirePermission annotation
         RequirePermission annotation = handlerMethod.getMethodAnnotation(RequirePermission.class);
 
-        // If no @RequirePermission, still require authentication for all API endpoints
-        // This is a fail-safe - endpoints without @RequirePermission still need auth
         if (annotation == null) {
             if (ctx == null || !ctx.isAuthenticated()) {
                 response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
@@ -53,7 +54,6 @@ public class PermissionInterceptor implements HandlerInterceptor {
             return true;
         }
 
-        // For endpoints with @RequirePermission, check authentication and permissions
         if (ctx == null || !ctx.isAuthenticated()) {
             response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
             response.setContentType("application/json");
@@ -80,13 +80,22 @@ public class PermissionInterceptor implements HandlerInterceptor {
             resourceId = pathVars.get(annotation.resourceIdParam());
         }
 
-        boolean hasPermission =
-                permissionService.hasPermission(
-                        ctx.getUserId(),
-                        annotation.resource(),
-                        annotation.action(),
-                        hostId,
-                        resourceId);
+        boolean hasPermission;
+        if ("list".equals(annotation.action())) {
+            hasPermission =
+                    permissionService.hasAnyPermission(
+                            ctx.getUserId(), annotation.resource(), annotation.action(), hostId);
+        } else {
+            List<String> resourceIdentifiers =
+                    getResourceIdentifiers(annotation.resource(), hostId, resourceId);
+            hasPermission =
+                    checkPermissionWithIdentifiers(
+                            ctx.getUserId(),
+                            annotation.resource(),
+                            annotation.action(),
+                            hostId,
+                            resourceIdentifiers);
+        }
 
         if (!hasPermission) {
             response.setStatus(HttpServletResponse.SC_FORBIDDEN);
@@ -102,5 +111,70 @@ public class PermissionInterceptor implements HandlerInterceptor {
         }
 
         return true;
+    }
+
+    private List<String> getResourceIdentifiers(
+            Resource resource, String hostId, String resourceId) {
+        List<String> identifiers = new ArrayList<>();
+        if (resourceId == null) {
+            return identifiers;
+        }
+        identifiers.add(resourceId);
+
+        if (resource == Resource.CONTAINERS && hostId != null) {
+            try {
+                var api = dockerHostService.getDockerAPI(hostId);
+                var containers = api.listAllContainers();
+                for (var container : containers) {
+                    if (container.getId().equals(resourceId)
+                            || container.getId().startsWith(resourceId)
+                            || resourceId.startsWith(container.getId().substring(0, 12))) {
+                        if (container.getNames() != null) {
+                            for (String name : container.getNames()) {
+                                String cleanName = name.startsWith("/") ? name.substring(1) : name;
+                                if (!identifiers.contains(cleanName)) {
+                                    identifiers.add(cleanName);
+                                }
+                            }
+                        }
+                        identifiers.add(container.getId());
+                        identifiers.add(container.getId().substring(0, 12));
+                        break;
+                    }
+                    if (container.getNames() != null) {
+                        for (String name : container.getNames()) {
+                            String cleanName = name.startsWith("/") ? name.substring(1) : name;
+                            if (cleanName.equals(resourceId)) {
+                                identifiers.add(container.getId());
+                                identifiers.add(container.getId().substring(0, 12));
+                                break;
+                            }
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                log.debug("Could not resolve container identifiers: {}", e.getMessage());
+            }
+        }
+
+        return identifiers;
+    }
+
+    private boolean checkPermissionWithIdentifiers(
+            String userId,
+            Resource resource,
+            String action,
+            String hostId,
+            List<String> identifiers) {
+        if (identifiers.isEmpty()) {
+            return permissionService.hasPermission(userId, resource, action, hostId, null);
+        }
+
+        for (String identifier : identifiers) {
+            if (permissionService.hasPermission(userId, resource, action, hostId, identifier)) {
+                return true;
+            }
+        }
+        return false;
     }
 }

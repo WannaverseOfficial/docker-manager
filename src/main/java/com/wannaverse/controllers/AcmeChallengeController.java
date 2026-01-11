@@ -6,15 +6,6 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
-/**
- * ACME HTTP-01 Challenge endpoint. This must be publicly accessible (no authentication) for Let's
- * Encrypt to validate domain ownership.
- *
- * <p>Let's Encrypt will make a request to: http://{domain}/.well-known/acme-challenge/{token} Nginx
- * proxies this to: /api/ingress/acme/{token}
- *
- * <p>And expects to receive the authorization key in response.
- */
 @RestController
 @RequestMapping("/api/ingress/acme")
 public class AcmeChallengeController {

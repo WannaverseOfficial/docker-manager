@@ -37,7 +37,6 @@ public class IngressCertificate {
     @Column(nullable = false)
     private CertificateStatus status = CertificateStatus.PENDING;
 
-    // Certificate data (encrypted at rest)
     @Column(columnDefinition = "TEXT")
     private String certificatePem;
 
@@ -47,7 +46,6 @@ public class IngressCertificate {
     @Column(columnDefinition = "TEXT")
     private String chainPem;
 
-    // Certificate metadata
     private String issuer;
 
     private String subject;
@@ -61,7 +59,6 @@ public class IngressCertificate {
     @Column(name = "expires_at")
     private Long expiresAt;
 
-    // ACME/Let's Encrypt tracking for transparency
     private String acmeOrderUrl;
 
     private String acmeChallengeToken;
@@ -72,7 +69,6 @@ public class IngressCertificate {
     @Enumerated(EnumType.STRING)
     private AcmeChallengeType acmeChallengeType;
 
-    // Human readable status message for UI
     @Column(columnDefinition = "TEXT")
     private String statusMessage;
 
@@ -80,7 +76,6 @@ public class IngressCertificate {
 
     private String lastRenewalError;
 
-    /** Auto-renewal enabled flag. Defaults to true for Let's Encrypt certificates. */
     @Column(nullable = false, columnDefinition = "boolean default true")
     private boolean autoRenew = true;
 
@@ -90,22 +85,22 @@ public class IngressCertificate {
     private long updatedAt;
 
     public enum CertificateSource {
-        LETS_ENCRYPT, // Automatic from Let's Encrypt
-        UPLOADED, // User uploaded certificate
-        EXTERNAL // Externally managed (BYO paths)
+        LETS_ENCRYPT,
+        UPLOADED,
+        EXTERNAL
     }
 
     public enum CertificateStatus {
-        PENDING, // Request in progress
-        ACTIVE, // Valid and in use
-        EXPIRED, // Past expiry date
-        RENEWAL_PENDING, // Renewal in progress
-        ERROR // Something went wrong
+        PENDING,
+        ACTIVE,
+        EXPIRED,
+        RENEWAL_PENDING,
+        ERROR
     }
 
     public enum AcmeChallengeType {
-        HTTP_01, // HTTP challenge
-        DNS_01 // DNS challenge
+        HTTP_01,
+        DNS_01
     }
 
     @PrePersist
@@ -119,11 +114,6 @@ public class IngressCertificate {
         updatedAt = System.currentTimeMillis();
     }
 
-    /**
-     * Calculate days until certificate expiry.
-     *
-     * @return days until expiry, negative if already expired
-     */
     public int getDaysUntilExpiry() {
         if (expiresAt == null) {
             return -1;
@@ -132,7 +122,6 @@ public class IngressCertificate {
         return (int) (diff / (1000 * 60 * 60 * 24));
     }
 
-    /** Check if certificate needs renewal (expires within 30 days). */
     public boolean needsRenewal() {
         return getDaysUntilExpiry() <= 30;
     }
