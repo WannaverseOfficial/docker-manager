@@ -20,13 +20,6 @@ function setupUserMenu() {
         menuBtn.addEventListener('click', () => {
             menu.open = !menu.open;
         });
-
-        // Close menu when clicking outside
-        document.addEventListener('click', (e) => {
-            if (!menuBtn.contains(e.target) && !menu.contains(e.target)) {
-                menu.open = false;
-            }
-        });
     }
 
     // Menu actions
