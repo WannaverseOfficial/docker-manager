@@ -19,11 +19,13 @@ services:
       - JWT_ACCESS_SECRET=bI4pEE+5oVq9gkWyy/plIsRvaZ8ghj54access
       - JWT_REFRESH_SECRET=bI4pEE+5oVq9gkWyy/plIsRvaZ8ghj54refresh
       - ENCRYPTION_KEY=bI4pEE+5oVq9gkWyy/plIsRvaZ8ghj54
+      # Set to your server's public URL - also controls CORS allowed origins
+      - BASE_URL=http://localhost:8080
       # Optional: Increase token expiration
       # - JWT_ACCESS_EXP=900000
       # - JWT_REFRESH_EXP=604800000
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/api/auth/login"]
+      test: ["CMD", "curl", "-f", "http://localhost:8080/"]
       interval: 30s
       timeout: 10s
       retries: 3
