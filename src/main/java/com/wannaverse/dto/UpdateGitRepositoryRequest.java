@@ -17,11 +17,14 @@ public class UpdateGitRepositoryRequest {
     private AuthType authType;
     private String token;
     private String sshKey;
+    private String tokenUsername;
+    private Boolean runContainer;
+    private com.wannaverse.dto.ContainerSpec containerSpec;
     private DeploymentType deploymentType;
     private String dockerfilePath;
     private String composePath;
     private String imageName;
-    private boolean pollingEnabled;
-    private int pollingIntervalSeconds;
-    private boolean webhookEnabled;
+    private Boolean pollingEnabled;
+    private Integer pollingIntervalSeconds;
+    private Boolean webhookEnabled;
 }

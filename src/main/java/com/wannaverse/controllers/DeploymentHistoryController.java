@@ -41,6 +41,10 @@ public class DeploymentHistoryController {
     }
 
     @GetMapping("/hosts/{hostId}/operations")
+    @RequirePermission(
+            resource = Resource.DOCKER_OPERATIONS,
+            action = "read",
+            hostIdParam = "hostId")
     public ResponseEntity<Map<String, Object>> listOperations(
             @PathVariable String hostId,
             @RequestParam(required = false) DockerOperation.OperationType type,
@@ -133,6 +137,10 @@ public class DeploymentHistoryController {
     }
 
     @GetMapping("/hosts/{hostId}/compose")
+    @RequirePermission(
+            resource = Resource.COMPOSE_DEPLOYMENTS,
+            action = "list",
+            hostIdParam = "hostId")
     public ResponseEntity<Map<String, Object>> listComposeDeployments(
             @PathVariable String hostId,
             @RequestParam(defaultValue = "0") int page,

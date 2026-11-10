@@ -14,6 +14,7 @@ public class ContainerStatsResponse {
     private String containerName;
 
     private Double cpuPercent;
+    private Integer onlineCpus;
     private Long cpuUsage;
     private Long systemCpuUsage;
 

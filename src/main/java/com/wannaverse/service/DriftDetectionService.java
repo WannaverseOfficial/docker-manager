@@ -11,7 +11,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.util.*;
 
@@ -49,7 +48,6 @@ public class DriftDetectionService {
     }
 
     @Scheduled(fixedDelayString = "${app.drift.git-check-interval-ms:300000}")
-    @Transactional
     public void checkAllGitDrift() {
         log.debug("Running scheduled git drift check");
         List<GitRepository> repos = gitRepositoryRepository.findAll();
@@ -62,7 +60,6 @@ public class DriftDetectionService {
         }
     }
 
-    @Transactional
     public GitRepository checkGitDrift(GitRepository repo) {
         try {
             String latestSha = gitService.getLatestCommitSha(repo);
@@ -95,7 +92,6 @@ public class DriftDetectionService {
         }
     }
 
-    @Transactional
     public GitRepository checkGitDriftById(String repoId) {
         return gitRepositoryRepository
                 .findById(repoId)
@@ -119,7 +115,6 @@ public class DriftDetectionService {
     }
 
     @Scheduled(fixedDelayString = "${app.drift.container-check-interval-ms:600000}")
-    @Transactional
     public void checkAllContainerDrift() {
         log.debug("Running scheduled container drift check");
         List<DockerHost> hosts = dockerHostRepository.findAll();
@@ -135,7 +130,6 @@ public class DriftDetectionService {
         }
     }
 
-    @Transactional
     public List<ContainerDriftStatus> checkContainerDriftForHost(String hostId) {
         DockerHost host =
                 dockerHostRepository
@@ -162,16 +156,15 @@ public class DriftDetectionService {
                             e.getMessage());
                 }
             }
+            // Only when the host answered: an unreachable host used to wipe all of its drift rows.
+            cleanupStaleContainerDrift(hostId, results);
         } catch (Exception e) {
             log.error("Failed to list containers for host {}: {}", host.getId(), e.getMessage());
         }
 
-        cleanupStaleContainerDrift(hostId, results);
-
         return results;
     }
 
-    @Transactional
     public ContainerDriftStatus checkContainerDrift(String hostId, String containerId) {
         DockerHost host =
                 dockerHostRepository
@@ -293,7 +286,9 @@ public class DriftDetectionService {
                 currentVolumes.add(bind.toString());
             }
         }
-        if (!baselineVolumes.equals(currentVolumes)) {
+        // Older snapshots stored binds in a form that cannot be compared; skip those instead of
+        // reporting drift for every container with a volume.
+        if (baselineVolumes != null && !baselineVolumes.equals(currentVolumes)) {
             drifts.add(new DriftDetail("volumes", "Volume bindings changed", null));
         }
 
@@ -328,7 +323,7 @@ public class DriftDetectionService {
                     objectMapper.readValue(volumeJson, new TypeReference<List<String>>() {});
             return new HashSet<>(volumeList);
         } catch (Exception e) {
-            return new HashSet<>();
+            return null; // not comparable (old snapshot format)
         }
     }
 

@@ -66,6 +66,10 @@ public class IngressConfig {
 
     private String lastError;
 
+    /** ACME account key (PEM), encrypted. */
+    @Column(columnDefinition = "TEXT")
+    private String acmeAccountKeyPem;
+
     public enum IngressStatus {
         DISABLED,
         ENABLING,

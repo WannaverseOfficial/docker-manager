@@ -9,7 +9,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 import java.util.stream.Collectors;
@@ -65,7 +64,6 @@ public class ContainerHealthMonitorService {
         }
     }
 
-    @Transactional
     public void monitorHost(DockerHost host) {
         DockerAPI api;
         try {
@@ -138,7 +136,12 @@ public class ContainerHealthMonitorService {
         Integer currentRestartCount =
                 inspect.getRestartCount() != null ? inspect.getRestartCount() : 0;
 
-        if (Boolean.TRUE.equals(containerState.getOOMKilled())) {
+        // Docker keeps OOMKilled=true until the container starts again, so key the event on
+        // when it stopped. (Previously a new event was recorded every minute, forever.)
+        if (Boolean.TRUE.equals(containerState.getOOMKilled())
+                && containerState.getFinishedAt() != null
+                && !containerState.getFinishedAt().equals(state.getLastOomFinishedAt())) {
+            state.setLastOomFinishedAt(containerState.getFinishedAt());
             handleOomKill(host, containerId, containerName, state);
         }
 
@@ -154,6 +157,7 @@ public class ContainerHealthMonitorService {
         if (state.getLastRestartCount() != null
                 && currentRestartCount > state.getLastRestartCount()) {
             long now = System.currentTimeMillis();
+            state.setLastRestartSeenAt(now);
 
             if (state.getLastRestartCountChange() == 0) {
                 state.setLastRestartCountChange(now);
@@ -195,10 +199,24 @@ public class ContainerHealthMonitorService {
             }
         }
 
-        if (containerState.getHealth() != null) {
+        boolean running = Boolean.TRUE.equals(containerState.getRunning());
+        if (state.getHealthAcknowledgedAt() > 0
+                && startedAfter(containerState.getStartedAt(), state.getHealthAcknowledgedAt())) {
+            state.setHealthAcknowledgedAt(0L); // restarted since: a new failure counts again
+        }
+        if (!running) {
+            // Docker keeps the last health status of a stopped container; it is not checking it
+            // any more, so there is nothing failing. (Stopping and crashing are reported apart.)
+            resolveOpen(host, containerId, ContainerHealthEvent.EventType.HEALTH_UNHEALTHY);
+        } else if (containerState.getHealth() != null) {
             String healthStatus = containerState.getHealth().getStatus();
             if ("unhealthy".equalsIgnoreCase(healthStatus)) {
-                handleUnhealthy(host, containerId, containerName, state);
+                if (state.getHealthAcknowledgedAt() == 0) {
+                    handleUnhealthy(host, containerId, containerName, state);
+                }
+            } else if ("healthy".equalsIgnoreCase(healthStatus)) {
+                resolveOpen(host, containerId, ContainerHealthEvent.EventType.HEALTH_UNHEALTHY);
+                state.setHealthAcknowledgedAt(0L);
             }
         }
 
@@ -206,6 +224,28 @@ public class ContainerHealthMonitorService {
         state.setLastKnownStatus(currentStatus);
         state.setLastRestartCount(currentRestartCount);
         stateRepository.save(state);
+    }
+
+    /** True when the container's StartedAt (an ISO timestamp) is later than {@code millis}. */
+    static boolean startedAfter(String startedAt, long millis) {
+        if (startedAt == null || startedAt.isBlank() || startedAt.startsWith("0001-")) return false;
+        try {
+            return java.time.Instant.parse(startedAt).toEpochMilli() > millis;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private void resolveOpen(
+            DockerHost host, String containerId, ContainerHealthEvent.EventType type) {
+        eventRepository
+                .findByDockerHostIdAndContainerIdAndEventTypeAndResolvedAtIsNull(
+                        host.getId(), containerId, type)
+                .ifPresent(
+                        e -> {
+                            e.resolve();
+                            eventRepository.save(e);
+                        });
     }
 
     private void handleCrash(
@@ -391,9 +431,9 @@ public class ContainerHealthMonitorService {
                                         host.getId(), event.getContainerId())
                                 .orElse(null);
 
-                if (state != null && state.getLastRestartCountChange() > 0) {
+                if (state != null && state.getLastRestartSeenAt() > 0) {
                     long timeSinceLastRestart =
-                            System.currentTimeMillis() - state.getLastRestartCountChange();
+                            System.currentTimeMillis() - state.getLastRestartSeenAt();
                     if (timeSinceLastRestart > restartLoopWindowMs * 2) {
                         event.resolve();
                         eventRepository.save(event);

@@ -18,4 +18,7 @@ public class DockerHost {
 
     @Column(nullable = false)
     private String dockerHostUrl;
+
+    /** Display name, e.g. "Home server". Optional; the UI falls back to the URL. */
+    private String name;
 }

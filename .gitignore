@@ -6,4 +6,12 @@
 git-repos
 database
 node_modules
-*node_modules*
+*node_modules*stacks
+frontend/.next
+frontend/out
+frontend/next-env.d.ts
+# The UI export is copied here at build time
+src/main/resources/static/
+
+# TypeScript incremental build cache
+*.tsbuildinfo

@@ -20,10 +20,18 @@ public class DockerRegistryService {
     private final DockerRegistryRepository registryRepository;
     private final EncryptionService encryptionService;
 
+    private final com.wannaverse.persistence.DockerHostRepository dockerHostRepository;
+    private final DockerService dockerService;
+
     public DockerRegistryService(
-            DockerRegistryRepository registryRepository, EncryptionService encryptionService) {
+            DockerRegistryRepository registryRepository,
+            EncryptionService encryptionService,
+            com.wannaverse.persistence.DockerHostRepository dockerHostRepository,
+            DockerService dockerService) {
         this.registryRepository = registryRepository;
         this.encryptionService = encryptionService;
+        this.dockerHostRepository = dockerHostRepository;
+        this.dockerService = dockerService;
     }
 
     public List<DockerRegistry> getAllRegistries() {
@@ -110,34 +118,56 @@ public class DockerRegistryService {
         registryRepository.save(registry);
     }
 
+    /**
+     * Credentials for pulling {@code imageName}, or null. A stored registry is used only when its
+     * host (and port) is exactly the image's registry host. Docker Hub images only ever get Docker
+     * Hub credentials. (Previously a substring match was used, so credentials for
+     * registry.gitlab.com could be sent to any registry whose name contained part of it, and Docker
+     * Hub pulls received whichever registry was marked default.)
+     */
     public AuthConfig getAuthConfig(String imageName) {
-        String registryUrl = extractRegistryUrl(imageName);
-        if (registryUrl == null) {
-            return getDefaultAuthConfig();
-        }
+        String imageHost = extractRegistryUrl(imageName);
+        boolean dockerHub =
+                imageHost == null
+                        || imageHost.equalsIgnoreCase("docker.io")
+                        || imageHost.equalsIgnoreCase("index.docker.io")
+                        || imageHost.equalsIgnoreCase("registry-1.docker.io");
 
-        return registryRepository.findByUrlContaining(registryUrl).stream()
-                .filter(DockerRegistry::isEnabled)
-                .findFirst()
-                .map(this::buildAuthConfig)
-                .orElse(null);
+        for (DockerRegistry registry : registryRepository.findByEnabledTrue()) {
+            if (dockerHub) {
+                if (registry.getRegistryType() == DockerRegistry.RegistryType.DOCKER_HUB) {
+                    return buildAuthConfig(registry);
+                }
+            } else if (imageHost.equalsIgnoreCase(registryHost(registry.getUrl()))) {
+                return buildAuthConfig(registry);
+            }
+        }
+        return null;
+    }
+
+    /** "https://registry.example.com:5000/v2/" -> "registry.example.com:5000". */
+    static String registryHost(String url) {
+        if (url == null) return "";
+        String s = url.trim();
+        int scheme = s.indexOf("://");
+        if (scheme >= 0) s = s.substring(scheme + 3);
+        int slash = s.indexOf('/');
+        if (slash >= 0) s = s.substring(0, slash);
+        int at = s.lastIndexOf('@');
+        if (at >= 0) s = s.substring(at + 1);
+        return s.toLowerCase(java.util.Locale.ROOT);
     }
 
     public AuthConfig getAuthConfigForRegistry(String registryId) {
         return registryRepository.findById(registryId).map(this::buildAuthConfig).orElse(null);
     }
 
-    private AuthConfig getDefaultAuthConfig() {
-        return registryRepository
-                .findByIsDefaultTrue()
-                .filter(DockerRegistry::isEnabled)
-                .map(this::buildAuthConfig)
-                .orElse(null);
-    }
-
     private AuthConfig buildAuthConfig(DockerRegistry registry) {
         AuthConfig authConfig = new AuthConfig();
-        authConfig.withRegistryAddress(registry.getUrl());
+        authConfig.withRegistryAddress(
+                registry.getRegistryType() == RegistryType.DOCKER_HUB
+                        ? "https://index.docker.io/v1/"
+                        : registryHost(registry.getUrl()));
 
         switch (registry.getRegistryType()) {
             case DOCKER_HUB:
@@ -179,22 +209,36 @@ public class DockerRegistryService {
         return authConfig;
     }
 
-    public boolean testConnection(String id) {
+    public record TestResult(boolean success, String message) {}
+
+    /**
+     * Asks a Docker daemon to sign in to the registry with the stored credentials (what `docker
+     * login` does), so the result reflects whether pulls will actually be authorised. Previously
+     * this only checked that the credentials could be decrypted.
+     */
+    public TestResult testConnection(String id) {
         DockerRegistry registry =
                 registryRepository
                         .findById(id)
                         .orElseThrow(
                                 () -> new IllegalArgumentException("Registry not found: " + id));
 
+        var hosts = dockerHostRepository.findAll();
+        if (hosts.isEmpty()) {
+            return new TestResult(
+                    false, "Add a Docker host first; it is used to test the sign-in.");
+        }
+
         try {
             AuthConfig authConfig = buildAuthConfig(registry);
-            return authConfig != null;
+            var client = dockerService.createClientCached(hosts.get(0).getDockerHostUrl());
+            var response = client.authCmd().withAuthConfig(authConfig).exec();
+            String status = response != null ? response.getStatus() : null;
+            return new TestResult(true, status != null ? status : "Signed in");
         } catch (Exception e) {
-            log.warn(
-                    "Failed to test connection to registry {}: {}",
-                    registry.getName(),
-                    e.getMessage());
-            return false;
+            log.info("Registry sign-in test failed for {}: {}", registry.getName(), e.getMessage());
+            String message = e.getMessage() != null ? e.getMessage() : "Sign-in failed";
+            return new TestResult(false, message);
         }
     }
 

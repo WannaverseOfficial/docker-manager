@@ -74,7 +74,9 @@ public class DockerOperation {
         VOLUME_CREATE,
         VOLUME_DELETE,
         NETWORK_CREATE,
-        NETWORK_DELETE
+        NETWORK_DELETE,
+        /** Recreated with new settings or a newer image. */
+        CONTAINER_UPDATE
     }
 
     public enum OperationStatus {

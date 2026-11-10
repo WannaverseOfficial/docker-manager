@@ -154,6 +154,38 @@ public class PermissionService {
         return allowedIds;
     }
 
+    private static final Set<Resource> HOST_RESOURCES =
+            Set.of(
+                    Resource.DOCKER_HOSTS,
+                    Resource.CONTAINERS,
+                    Resource.IMAGES,
+                    Resource.VOLUMES,
+                    Resource.NETWORKS,
+                    Resource.STACKS,
+                    Resource.DOCKER_OPERATIONS,
+                    Resource.INGRESS,
+                    Resource.INGRESS_ROUTES);
+
+    /**
+     * The hosts a user can work with: every host they hold any permission on. Returns null when
+     * that is every host (admins, and permissions granted without a host scope).
+     */
+    @Transactional(readOnly = true)
+    public Set<String> accessibleHostIds(String userId) {
+        User user = userRepository.findById(userId).orElse(null);
+        if (user == null) return Set.of();
+        if (user.isAdmin()) return null;
+        Set<String> hosts = new HashSet<>();
+        for (PermissionResponse p : getEffectivePermissions(userId)) {
+            if (p.getScopeHostId() != null) {
+                hosts.add(p.getScopeHostId());
+            } else if (HOST_RESOURCES.contains(p.getResource())) {
+                return null;
+            }
+        }
+        return hosts;
+    }
+
     @Transactional(readOnly = true)
     public List<PermissionResponse> getEffectivePermissions(String userId) {
         List<PermissionResponse> result = new ArrayList<>();

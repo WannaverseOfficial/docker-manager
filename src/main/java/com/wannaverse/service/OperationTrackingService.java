@@ -197,7 +197,10 @@ public class OperationTrackingService {
             if (inspect.getHostConfig() != null) {
                 if (inspect.getHostConfig().getBinds() != null) {
                     snapshot.setVolumeBindings(
-                            objectMapper.writeValueAsString(inspect.getHostConfig().getBinds()));
+                            objectMapper.writeValueAsString(
+                                    java.util.Arrays.stream(inspect.getHostConfig().getBinds())
+                                            .map(Object::toString)
+                                            .toList()));
                 }
                 if (inspect.getHostConfig().getPortBindings() != null) {
                     snapshot.setPortBindings(

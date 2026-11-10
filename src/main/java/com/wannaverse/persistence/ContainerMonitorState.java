@@ -42,11 +42,34 @@ public class ContainerMonitorState {
 
     private long lastCheckedAt;
 
+    /** When the latest restart was observed; used to decide a restart loop is over. */
+    private Long lastRestartSeenAt = 0L;
+
+    /** State.FinishedAt of the last OOM kill that was reported, to report each one once. */
+    private String lastOomFinishedAt;
+
     private long lastCrashNotificationAt;
 
     private long lastRestartLoopNotificationAt;
 
     private long lastHealthNotificationAt;
+
+    /**
+     * When someone resolved a failing-health-check issue by hand while it was still failing. No new
+     * issue is raised until the container passes its check again or restarts.
+     */
+    private Long healthAcknowledgedAt = 0L;
+
+    // Nullable in the schema: SQLite can't add a NOT NULL column to an existing (1.x) table. But
+    // databases created by earlier 2.0 builds have them as NOT NULL, so never write null either:
+    // the fields start at 0 and 0 means "not set".
+    public long getLastRestartSeenAt() {
+        return lastRestartSeenAt == null ? 0 : lastRestartSeenAt;
+    }
+
+    public long getHealthAcknowledgedAt() {
+        return healthAcknowledgedAt == null ? 0 : healthAcknowledgedAt;
+    }
 
     @PrePersist
     @PreUpdate

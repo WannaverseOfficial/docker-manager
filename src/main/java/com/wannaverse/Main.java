@@ -1,5 +1,7 @@
 package com.wannaverse;
 
+import com.wannaverse.config.SecretsBootstrap;
+
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
@@ -12,6 +14,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 @EnableScheduling
 public class Main {
     public static void main(String[] args) {
-        SpringApplication.run(Main.class);
+        SecretsBootstrap.apply();
+        SpringApplication.run(Main.class, args);
     }
 }

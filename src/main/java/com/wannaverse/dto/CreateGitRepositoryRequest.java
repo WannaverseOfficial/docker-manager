@@ -17,6 +17,9 @@ public class CreateGitRepositoryRequest {
     private AuthType authType;
     private String token;
     private String sshKey;
+    private String tokenUsername;
+    private Boolean runContainer;
+    private com.wannaverse.dto.ContainerSpec containerSpec;
     private DeploymentType deploymentType;
     private String dockerfilePath;
     private String composePath;

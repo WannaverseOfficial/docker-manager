@@ -256,54 +256,94 @@ public class ImagePolicyService {
         return null;
     }
 
-    private boolean matchesPattern(String imageName, String pattern) {
-        // Convert glob-like pattern to regex
-        // * matches anything
-        // ? matches single character
-        String regex = pattern.replace(".", "\\.").replace("*", ".*").replace("?", ".");
-
-        try {
-            return Pattern.compile("^" + regex + "$", Pattern.CASE_INSENSITIVE)
-                    .matcher(imageName)
-                    .matches();
-        } catch (Exception e) {
-            log.warn("Invalid pattern '{}': {}", pattern, e.getMessage());
-            return false;
+    /**
+     * Glob match ("*" any run of characters, "?" one character) against the canonical image name.
+     * Patterns are written the way people write images, so they are canonicalised the same way:
+     * "nginx*" means "docker.io/library/nginx*" and "bitnami/*" means "docker.io/bitnami/*".
+     * Patterns starting with a wildcard are used as written.
+     */
+    static boolean matchesPattern(String imageName, String pattern) {
+        String p = pattern.trim();
+        if (!p.startsWith("*") && !p.startsWith("?")) {
+            int slash = p.indexOf('/');
+            String first = slash > 0 ? p.substring(0, slash) : null;
+            boolean hasRegistry =
+                    first != null
+                            && (first.contains(".")
+                                    || first.contains(":")
+                                    || first.equals("localhost"));
+            if (!hasRegistry) {
+                p = "docker.io/" + (p.contains("/") ? p : "library/" + p);
+            } else if (first.equalsIgnoreCase("index.docker.io")
+                    || first.equalsIgnoreCase("registry-1.docker.io")) {
+                p = "docker.io" + p.substring(slash);
+            }
         }
+        StringBuilder regex = new StringBuilder("^");
+        StringBuilder literal = new StringBuilder();
+        for (char c : p.toCharArray()) {
+            if (c == '*' || c == '?') {
+                if (!literal.isEmpty()) {
+                    regex.append(Pattern.quote(literal.toString()));
+                    literal.setLength(0);
+                }
+                regex.append(c == '*' ? ".*" : ".");
+            } else {
+                literal.append(c);
+            }
+        }
+        if (!literal.isEmpty()) regex.append(Pattern.quote(literal.toString()));
+        regex.append("$");
+        // A pattern without a tag also matches every tag of that image.
+        boolean patternHasTag = p.lastIndexOf(':') > p.lastIndexOf('/');
+        String target =
+                patternHasTag || p.endsWith("*")
+                        ? imageName
+                        : imageName.replaceFirst(":[^/:@]+$", "");
+        return Pattern.compile(regex.toString(), Pattern.CASE_INSENSITIVE)
+                .matcher(target)
+                .matches();
     }
 
-    private String normalizeImageName(String imageName) {
-        // Normalize image name:
-        // - Add "library/" prefix for official images without namespace
-        // - Add ":latest" tag if no tag specified
-        // - Add "docker.io/" prefix if no registry specified
+    /**
+     * The canonical form Docker itself resolves a reference to, so a rule cannot be dodged by
+     * writing the same image differently: "nginx", "docker.io/nginx",
+     * "index.docker.io/library/nginx" and "registry-1.docker.io/library/nginx:latest" all become
+     * "docker.io/library/nginx:latest". "localhost/x" and "host:5000/x" are private registries, not
+     * Docker Hub.
+     */
+    static String normalizeImageName(String imageName) {
+        String ref = imageName.trim();
+        String digest = "";
+        int at = ref.indexOf('@');
+        if (at >= 0) {
+            digest = ref.substring(at);
+            ref = ref.substring(0, at);
+        }
 
-        String normalized = imageName.trim();
-
-        // Check if has registry (contains . or :port before first /)
-        boolean hasRegistry = false;
-        int firstSlash = normalized.indexOf('/');
+        String registry = "docker.io";
+        String path = ref;
+        int firstSlash = ref.indexOf('/');
         if (firstSlash > 0) {
-            String possibleRegistry = normalized.substring(0, firstSlash);
-            hasRegistry = possibleRegistry.contains(".") || possibleRegistry.contains(":");
-        }
-
-        // If no registry, it's a Docker Hub image
-        if (!hasRegistry) {
-            // Check if it's an official image (no /)
-            if (!normalized.contains("/")) {
-                normalized = "library/" + normalized;
+            String first = ref.substring(0, firstSlash);
+            if (first.contains(".") || first.contains(":") || first.equals("localhost")) {
+                registry = first.toLowerCase(java.util.Locale.ROOT);
+                path = ref.substring(firstSlash + 1);
             }
-            normalized = "docker.io/" + normalized;
+        }
+        if (registry.equals("index.docker.io") || registry.equals("registry-1.docker.io")) {
+            registry = "docker.io";
+        }
+        if (registry.equals("docker.io") && !path.contains("/")) {
+            path = "library/" + path;
         }
 
-        // Add :latest if no tag
-        if (!normalized.contains(":")
-                || normalized.lastIndexOf(':') < normalized.lastIndexOf('/')) {
-            normalized = normalized + ":latest";
+        int colon = path.lastIndexOf(':');
+        boolean hasTag = colon > path.lastIndexOf('/');
+        if (!hasTag && digest.isEmpty()) {
+            path = path + ":latest";
         }
-
-        return normalized;
+        return registry + "/" + path + digest;
     }
 
     private void validatePattern(String pattern) {

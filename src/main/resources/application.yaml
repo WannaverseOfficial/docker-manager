@@ -1,4 +1,9 @@
 spring:
+  servlet:
+    multipart:
+      # Uploads into volumes (Volumes, browse files).
+      max-file-size: 100MB
+      max-request-size: 200MB
   application:
     name: docker-manager-starter
 
@@ -12,7 +17,15 @@ spring:
       minimum-idle: 1
       connection-timeout: 30000
 
+  jackson:
+    deserialization:
+      # Jackson 3 rejects requests that leave out a primitive field (a boolean or a number).
+      # Treat a missing value as false/0 instead, as Jackson 2 did.
+      fail-on-null-for-primitives: false
+      fail-on-unknown-properties: false
+
   jpa:
+    open-in-view: true
     database-platform: org.hibernate.community.dialect.SQLiteDialect
     hibernate.ddl-auto: update
     properties:
@@ -22,6 +35,12 @@ spring:
 
 server:
   port: 8080
+  # Honour X-Forwarded-* only from proxies on private networks (Tomcat's default list), so the
+  # client address used for sign-in rate limiting cannot be spoofed.
+  forward-headers-strategy: native
+  compression:
+    enabled: true
+    mime-types: application/json,text/html,text/css,application/javascript,text/plain,image/svg+xml
   tomcat:
     max-http-form-post-size: 10MB
     max-swallow-size: 10MB
@@ -29,14 +48,20 @@ server:
 logging:
   level:
     root: ${LOG_LEVEL:INFO}
-    com.wannaverse: ${LOG_LEVEL:TRACE}
+    com.wannaverse: ${LOG_LEVEL:INFO}
 
 app:
   encryption:
     key: ${ENCRYPTION_KEY:change-this-in-production-32chars}
   base-url: ${BASE_URL:http://localhost:8080}
+  # Where secrets generated on first start are kept (next to the database).
+  data-dir: ${APP_DATA_DIR:database}
+  # Compose stacks: one folder per stack with compose.yaml and .env. Mount this at the same path
+  # on the host so relative bind mounts in compose files point at the same folder.
+  stacks-dir: ${STACKS_DIR:stacks}
   cors:
-    allowed-origins: ${CORS_ALLOWED_ORIGINS:${BASE_URL:http://localhost:8080}}
+    # Only needed when the UI is served from another origin (e.g. `next dev`).
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:}
   git:
     clone-dir: ${GIT_CLONE_DIR:git-repos}
   jwt:

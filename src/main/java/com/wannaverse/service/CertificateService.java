@@ -42,6 +42,8 @@ public class CertificateService {
     private final DockerHostRepository hostRepository;
     private final DockerService dockerService;
     private final NginxConfigGenerator nginxConfigGenerator;
+    private final NginxApplier applier;
+    private final EncryptionService encryptionService;
 
     public CertificateService(
             IngressCertificateRepository certificateRepository,
@@ -50,7 +52,11 @@ public class CertificateService {
             IngressRouteRepository routeRepository,
             DockerHostRepository hostRepository,
             DockerService dockerService,
-            NginxConfigGenerator nginxConfigGenerator) {
+            NginxConfigGenerator nginxConfigGenerator,
+            NginxApplier applier,
+            EncryptionService encryptionService) {
+        this.applier = applier;
+        this.encryptionService = encryptionService;
         this.certificateRepository = certificateRepository;
         this.configRepository = configRepository;
         this.auditLogRepository = auditLogRepository;
@@ -98,7 +104,7 @@ public class CertificateService {
 
             updateCertificateStatus(cert, CertificateStatus.PENDING, "Creating ACME account...");
             Session session = new Session(config.getAcmeDirectoryUrl());
-            KeyPair accountKeyPair = getOrCreateAccountKeyPair(config.getId());
+            KeyPair accountKeyPair = getOrCreateAccountKeyPair(config);
 
             Account account = findOrRegisterAccount(session, accountKeyPair, config.getAcmeEmail());
             log.info("ACME account ready: {}", account.getLocation());
@@ -219,7 +225,7 @@ public class CertificateService {
             pw.flush();
 
             cert.setCertificatePem(certWriter.toString());
-            cert.setPrivateKeyPem(keyWriter.toString());
+            cert.setPrivateKeyPem(applier.encryptPem(keyWriter.toString()));
             cert.setChainPem(chainWriter.toString());
             cert.setIssuer(x509Cert.getIssuerX500Principal().getName());
             cert.setSubject(x509Cert.getSubjectX500Principal().getName());
@@ -306,6 +312,8 @@ public class CertificateService {
         certificateRepository.save(cert);
 
         activeChallenges.put(token, content);
+        // Served by the proxy itself from its ACME webroot.
+        applier.writeChallenge(config, token, content);
 
         log.info("Challenge ready: token={}", token);
         auditLog(
@@ -331,7 +339,15 @@ public class CertificateService {
                                 .getError()
                                 .flatMap(p -> p.getDetail())
                                 .orElse("Challenge validation failed");
-                throw new AcmeException("Challenge failed: " + error);
+                applier.removeChallenge(config, token);
+                activeChallenges.remove(token);
+                throw new AcmeException(
+                        "Let's Encrypt could not verify "
+                                + domain
+                                + ": "
+                                + error
+                                + ". Check that its DNS record points at this server and that port"
+                                + " 80 is reachable from the internet.");
             }
 
             updateCertificateStatus(
@@ -344,6 +360,8 @@ public class CertificateService {
             attempts++;
         }
 
+        applier.removeChallenge(config, token);
+        activeChallenges.remove(token);
         if (challenge.getStatus() != Status.VALID) {
             throw new AcmeException("Challenge did not pass in time");
         }
@@ -404,9 +422,21 @@ public class CertificateService {
     }
 
     public List<IngressCertificate> getCertificatesNeedingRenewal() {
-        long thirtyDaysFromNow = System.currentTimeMillis() + Duration.ofDays(30).toMillis();
-        return certificateRepository.findByStatusAndExpiresAtBefore(
-                CertificateStatus.ACTIVE, thirtyDaysFromNow);
+        long now = System.currentTimeMillis();
+        long thirtyDaysFromNow = now + Duration.ofDays(30).toMillis();
+        List<IngressCertificate> due =
+                new java.util.ArrayList<>(
+                        certificateRepository.findByStatusAndExpiresAtBefore(
+                                CertificateStatus.ACTIVE, thirtyDaysFromNow));
+        // Renewals that failed are retried at most twice a day until they succeed.
+        for (IngressCertificate c : certificateRepository.findByStatus(CertificateStatus.ERROR)) {
+            boolean expiring = c.getExpiresAt() != null && c.getExpiresAt() < thirtyDaysFromNow;
+            boolean waited =
+                    c.getLastRenewalAttempt() == null
+                            || now - c.getLastRenewalAttempt() > Duration.ofHours(12).toMillis();
+            if (expiring && waited && c.getSource() == CertificateSource.LETS_ENCRYPT) due.add(c);
+        }
+        return due;
     }
 
     public void retryCertificateRequest(String certificateId, String userId, String username) {
@@ -464,9 +494,14 @@ public class CertificateService {
                         dockerService.dockerAPI(
                                 dockerService.createClientCached(host.getDockerHostUrl()));
 
-                String certDir = "/etc/nginx/certs/" + hostname;
-                api.execCommand(config.getNginxContainerId(), "rm", "-rf", certDir);
-                log.info("Removed certificate files for {} from nginx", hostname);
+                certificateRepository.delete(cert);
+                if (config.getStatus() == IngressConfig.IngressStatus.ENABLED)
+                    applier.apply(config);
+                api.exec(
+                        config.getNginxContainerId(),
+                        "rm",
+                        "-rf",
+                        NginxConfigGenerator.CERT_DIR + "/" + hostname);
             }
         } catch (Exception e) {
             log.warn("Failed to remove certificate files from nginx: {}", e.getMessage());
@@ -476,7 +511,7 @@ public class CertificateService {
             activeChallenges.remove(cert.getAcmeChallengeToken());
         }
 
-        certificateRepository.delete(cert);
+        if (certificateRepository.existsById(cert.getId())) certificateRepository.delete(cert);
 
         auditLog(
                 config,
@@ -559,9 +594,14 @@ public class CertificateService {
                     (X509Certificate)
                             cf.generateCertificate(
                                     new java.io.ByteArrayInputStream(certificatePem.getBytes()));
+            CertificateChecks.requireMatchingKey(x509Cert, privateKeyPem);
+            CertificateChecks.requireHostname(x509Cert, cert.getHostname());
+            if (x509Cert.getNotAfter().getTime() < System.currentTimeMillis()) {
+                throw new IllegalArgumentException("This certificate has expired");
+            }
 
-            cert.setCertificatePem(certificatePem);
-            cert.setPrivateKeyPem(privateKeyPem);
+            cert.setCertificatePem(certificatePem.strip());
+            cert.setPrivateKeyPem(applier.encryptPem(privateKeyPem.strip()));
             cert.setChainPem(chainPem);
             cert.setIssuer(x509Cert.getIssuerX500Principal().getName());
             cert.setSubject(x509Cert.getSubjectX500Principal().getName());
@@ -588,111 +628,27 @@ public class CertificateService {
             return cert;
 
         } catch (Exception e) {
-            log.error("Failed to upload certificate: {}", e.getMessage(), e);
-            throw new RuntimeException("Failed to upload certificate: " + e.getMessage(), e);
+            log.warn("Certificate upload rejected: {}", e.getMessage());
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.BAD_REQUEST,
+                    "Could not use this certificate: " + e.getMessage());
         }
     }
 
     private void deployCertificateToNginx(IngressCertificate cert, IngressConfig config) {
+        IngressConfig current = configRepository.findById(config.getId()).orElse(config);
+        if (current.getStatus() != IngressConfig.IngressStatus.ENABLED) return;
         try {
-            DockerHost host =
-                    hostRepository
-                            .findById(config.getDockerHostId())
-                            .orElseThrow(
-                                    () ->
-                                            new IllegalStateException(
-                                                    "Host not found: " + config.getDockerHostId()));
-
-            DockerAPI api =
-                    dockerService.dockerAPI(
-                            dockerService.createClientCached(host.getDockerHostUrl()));
-
-            String containerId = config.getNginxContainerId();
-            String hostname = cert.getHostname();
-            String certDir = "/etc/nginx/certs/" + hostname;
-            api.execCommand(containerId, "mkdir", "-p", certDir);
-
-            String fullchain = cert.getCertificatePem();
-            if (cert.getChainPem() != null && !cert.getChainPem().isEmpty()) {
-                fullchain += "\n" + cert.getChainPem();
-            }
-
-            String base64Fullchain =
-                    java.util.Base64.getEncoder().encodeToString(fullchain.getBytes());
-            api.execCommand(
-                    containerId,
-                    "sh",
-                    "-c",
-                    "echo '" + base64Fullchain + "' | base64 -d > " + certDir + "/fullchain.pem");
-
-            String base64PrivKey =
-                    java.util.Base64.getEncoder()
-                            .encodeToString(cert.getPrivateKeyPem().getBytes());
-            api.execCommand(
-                    containerId,
-                    "sh",
-                    "-c",
-                    "echo '" + base64PrivKey + "' | base64 -d > " + certDir + "/privkey.pem");
-
-            api.execCommand(containerId, "chmod", "600", certDir + "/privkey.pem");
-            api.execCommand(containerId, "chmod", "644", certDir + "/fullchain.pem");
-
-            regenerateNginxConfig(config, host);
-
-            reloadOrStartNginx(api, containerId);
-
-            log.info("Certificate deployed to nginx for {}", hostname);
-
+            applier.apply(current);
+            log.info("Certificate for {} is now served", cert.getHostname());
         } catch (Exception e) {
-            log.error("Failed to deploy certificate to nginx: {}", e.getMessage(), e);
+            log.error(
+                    "Could not apply the certificate for {}: {}",
+                    cert.getHostname(),
+                    e.getMessage());
+            cert.setStatusMessage("Issued, but nginx could not load it: " + e.getMessage());
+            certificateRepository.save(cert);
         }
-    }
-
-    private void regenerateNginxConfig(IngressConfig config, DockerHost host) {
-        List<IngressRoute> routes =
-                routeRepository.findByIngressConfigIdAndEnabled(config.getId(), true);
-        List<IngressCertificate> certs =
-                certificateRepository.findByIngressConfigId(config.getId());
-
-        java.util.Map<String, IngressCertificate> certMap =
-                certs.stream()
-                        .collect(
-                                java.util.stream.Collectors.toMap(
-                                        IngressCertificate::getHostname, c -> c, (a, b) -> a));
-
-        String nginxConfig = nginxConfigGenerator.generateFullConfig(config, routes, certMap);
-        config.setCurrentNginxConfig(nginxConfig);
-        configRepository.save(config);
-
-        try {
-            DockerAPI api =
-                    dockerService.dockerAPI(
-                            dockerService.createClientCached(host.getDockerHostUrl()));
-            String containerId = config.getNginxContainerId();
-
-            String base64Config =
-                    java.util.Base64.getEncoder().encodeToString(nginxConfig.getBytes());
-            api.execCommand(
-                    containerId,
-                    "sh",
-                    "-c",
-                    "echo '" + base64Config + "' | base64 -d > /etc/nginx/nginx.conf");
-
-            String testResult = api.execCommand(containerId, "nginx", "-t");
-            log.info("Nginx config test: {}", testResult);
-
-        } catch (Exception e) {
-            log.error("Failed to apply nginx config: {}", e.getMessage(), e);
-        }
-    }
-
-    /** Reload nginx by sending HUP signal to the master process (PID 1 in container). */
-    private void reloadOrStartNginx(DockerAPI api, String containerId) {
-        log.info("Sending SIGHUP to nginx master process (PID 1)");
-        String reloadResult = api.execCommand(containerId, "kill", "-HUP", "1");
-        log.info(
-                "Nginx reload result: {}",
-                reloadResult.isEmpty() ? "(success - no output)" : reloadResult);
     }
 
     private Account findOrRegisterAccount(Session session, KeyPair accountKeyPair, String email)
@@ -707,16 +663,32 @@ public class CertificateService {
         return builder.create(session);
     }
 
-    private KeyPair getOrCreateAccountKeyPair(String configId) {
-        return accountKeyPairs.computeIfAbsent(
-                configId,
-                k -> {
-                    try {
-                        return KeyPairUtils.createKeyPair(2048);
-                    } catch (Exception e) {
-                        throw new RuntimeException("Failed to create account key pair", e);
-                    }
-                });
+    /**
+     * The ACME account key, kept (encrypted) with the ingress settings. It used to live only in
+     * memory, so every restart registered a new Let's Encrypt account.
+     */
+    private synchronized KeyPair getOrCreateAccountKeyPair(IngressConfig config) {
+        KeyPair cached = accountKeyPairs.get(config.getId());
+        if (cached != null) return cached;
+        try {
+            KeyPair pair;
+            if (config.getAcmeAccountKeyPem() != null) {
+                String pem = encryptionService.decrypt(config.getAcmeAccountKeyPem());
+                pair = KeyPairUtils.readKeyPair(new java.io.StringReader(pem));
+            } else {
+                pair = KeyPairUtils.createKeyPair(2048);
+                StringWriter out = new StringWriter();
+                KeyPairUtils.writeKeyPair(pair, out);
+                IngressConfig fresh = configRepository.findById(config.getId()).orElse(config);
+                fresh.setAcmeAccountKeyPem(encryptionService.encrypt(out.toString()));
+                configRepository.save(fresh);
+            }
+            accountKeyPairs.put(config.getId(), pair);
+            return pair;
+        } catch (Exception e) {
+            throw new IllegalStateException(
+                    "Could not load the ACME account key: " + e.getMessage(), e);
+        }
     }
 
     private void updateCertificateStatus(

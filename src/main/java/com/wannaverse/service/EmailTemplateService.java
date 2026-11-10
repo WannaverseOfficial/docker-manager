@@ -8,8 +8,20 @@ import org.springframework.stereotype.Service;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
+/**
+ * Builds notification emails in the same style as the web app: a white card on a light grey page,
+ * the docker.manager wordmark, a status line, a short explanation, the details as label and value
+ * rows, and one button to the relevant page. Every email has a plain-text version too, sent
+ * alongside the HTML as multipart/alternative.
+ *
+ * <p>Layout uses tables and inline styles, which every mail client renders (Outlook desktop ignores
+ * most CSS otherwise). Clients that support it switch to dark colours.
+ */
 @Service
 public class EmailTemplateService {
 
@@ -17,630 +29,476 @@ public class EmailTemplateService {
     private String baseUrl;
 
     private static final DateTimeFormatter DATE_FORMAT =
-            DateTimeFormatter.ofPattern("MMM dd, yyyy HH:mm:ss z").withZone(ZoneId.systemDefault());
+            DateTimeFormatter.ofPattern("d MMM yyyy, HH:mm z", Locale.ENGLISH)
+                    .withZone(ZoneId.systemDefault());
 
-    public String render(NotificationEventType eventType, Map<String, Object> context) {
-        String content =
-                switch (eventType) {
-                    case DEPLOYMENT_STARTED -> renderDeploymentStarted(context);
-                    case DEPLOYMENT_COMPLETED -> renderDeploymentCompleted(context);
-                    case DEPLOYMENT_FAILED -> renderDeploymentFailed(context);
-                    case CONTAINER_STOPPED_UNEXPECTEDLY -> renderContainerStopped(context);
-                    case CONTAINER_HEALTH_CHECK_FAILED -> renderHealthCheckFailed(context);
-                    case CONTAINER_RESTART_LOOP -> renderContainerRestartLoop(context);
-                    case CONTAINER_OOM_KILLED -> renderContainerOomKilled(context);
-                    case USER_LOGIN -> renderUserLogin(context);
-                    case PASSWORD_CHANGED -> renderPasswordChanged(context);
-                    case HOST_DISCONNECTED -> renderHostDisconnected(context);
-                    case HOST_RECONNECTED -> renderHostReconnected(context);
-                };
-        return wrapInTemplate(eventType.getDisplayName(), content);
+    // The web app's light theme.
+    private static final String FOG = "#fafafa";
+    private static final String PAPER = "#ffffff";
+    private static final String WELL = "#f0f0f0";
+    private static final String LINE = "#e4e4e4";
+    private static final String INK = "#18181b";
+    private static final String SLATE = "#5f5f66";
+    private static final String FONT =
+            "Inter,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif";
+    private static final String MONO = "'JetBrains Mono',SFMono-Regular,Menlo,Consolas,monospace";
+
+    /** The HTML and plain-text versions of one email. */
+    public record Email(String html, String text) {}
+
+    private enum Tone {
+        OK("#1d7a4f"),
+        DANGER("#b4233c"),
+        WARN("#9a5a06"),
+        LIVE("#c98f00"),
+        INFO("#5f5f66");
+
+        final String color;
+
+        Tone(String color) {
+            this.color = color;
+        }
     }
 
-    public String getSubject(NotificationEventType eventType, Map<String, Object> context) {
+    private record Message(
+            Tone tone,
+            String status,
+            String title,
+            String intro,
+            List<String[]> rows,
+            String detail,
+            String actionLabel,
+            String actionPath) {}
+
+    public Email render(NotificationEventType eventType, Map<String, Object> ctx) {
+        return build(message(eventType, ctx));
+    }
+
+    /** The message sent by "Send test email" in Settings. */
+    public Email testEmail(String recipient) {
+        return build(
+                new Message(
+                        Tone.OK,
+                        "Email is working",
+                        "Test email",
+                        "Docker Manager can send email through your SMTP server. Notifications"
+                                + " about deployments, containers and hosts will arrive like this.",
+                        List.of(
+                                new String[] {"Sent to", recipient},
+                                new String[] {"Sent at", formatTimestamp(Instant.now())}),
+                        null,
+                        "Open Docker Manager",
+                        "/"));
+    }
+
+    public String getSubject(NotificationEventType eventType, Map<String, Object> ctx) {
+        String repo = str(ctx, "repoName", "a repository");
+        String container = str(ctx, "containerName", "a container");
+        String host = str(ctx, "hostName", "a host");
         return switch (eventType) {
-            case DEPLOYMENT_STARTED ->
-                    "Deployment Started: " + context.getOrDefault("repoName", "Unknown");
-            case DEPLOYMENT_COMPLETED ->
-                    "Deployment Successful: " + context.getOrDefault("repoName", "Unknown");
-            case DEPLOYMENT_FAILED ->
-                    "Deployment Failed: " + context.getOrDefault("repoName", "Unknown");
-            case CONTAINER_STOPPED_UNEXPECTEDLY ->
-                    "Alert: Container Stopped - "
-                            + context.getOrDefault("containerName", "Unknown");
-            case CONTAINER_HEALTH_CHECK_FAILED ->
-                    "Alert: Health Check Failed - "
-                            + context.getOrDefault("containerName", "Unknown");
-            case CONTAINER_RESTART_LOOP ->
-                    "Alert: Restart Loop Detected - "
-                            + context.getOrDefault("containerName", "Unknown");
-            case CONTAINER_OOM_KILLED ->
-                    "Alert: Container OOM Killed - "
-                            + context.getOrDefault("containerName", "Unknown");
-            case USER_LOGIN -> "New Login to Docker Manager";
-            case PASSWORD_CHANGED -> "Password Changed Successfully";
-            case HOST_DISCONNECTED ->
-                    "Alert: Docker Host Disconnected - "
-                            + context.getOrDefault("hostName", "Unknown");
-            case HOST_RECONNECTED ->
-                    "Docker Host Reconnected - " + context.getOrDefault("hostName", "Unknown");
+            case DEPLOYMENT_STARTED -> "Deploying " + repo;
+            case DEPLOYMENT_COMPLETED -> repo + " deployed";
+            case DEPLOYMENT_FAILED -> "Deployment of " + repo + " failed";
+            case CONTAINER_STOPPED_UNEXPECTEDLY -> container + " stopped unexpectedly";
+            case CONTAINER_HEALTH_CHECK_FAILED -> container + " is failing its health check";
+            case CONTAINER_RESTART_LOOP -> container + " keeps restarting";
+            case CONTAINER_OOM_KILLED -> container + " ran out of memory";
+            case USER_LOGIN -> "New sign-in to Docker Manager";
+            case PASSWORD_CHANGED -> "Your Docker Manager password was changed";
+            case HOST_DISCONNECTED -> "Lost connection to " + host;
+            case HOST_RECONNECTED -> host + " is reachable again";
         };
     }
 
-    private String wrapInTemplate(String title, String content) {
-        return """
-        <!DOCTYPE html>
-        <html lang="en">
-        <head>
-            <meta charset="UTF-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>%s</title>
-            <style>
-                body {
-                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-                    line-height: 1.6;
-                    margin: 0;
-                    padding: 0;
-                    background-color: #f5f5f5;
-                }
-                .container {
-                    max-width: 600px;
-                    margin: 0 auto;
-                    background-color: #ffffff;
-                }
-                .header {
-                    background: linear-gradient(135deg, #1a1c22 0%%, #2d3139 100%%);
-                    padding: 32px 24px;
-                    text-align: center;
-                }
-                .header h1 {
-                    color: #a0c4ff;
-                    margin: 0;
-                    font-size: 24px;
-                    font-weight: 600;
-                }
-                .header .subtitle {
-                    color: #9ca3af;
-                    font-size: 14px;
-                    margin-top: 4px;
-                }
-                .content {
-                    padding: 32px 24px;
-                }
-                .content h2 {
-                    color: #1f2937;
-                    margin: 0 0 16px 0;
-                    font-size: 20px;
-                }
-                .content p {
-                    color: #4b5563;
-                    margin: 0 0 16px 0;
-                }
-                .info-box {
-                    background-color: #f9fafb;
-                    border: 1px solid #e5e7eb;
-                    border-radius: 8px;
-                    padding: 16px;
-                    margin: 16px 0;
-                }
-                .info-row {
-                    display: flex;
-                    justify-content: space-between;
-                    padding: 8px 0;
-                    border-bottom: 1px solid #e5e7eb;
-                }
-                .info-row:last-child {
-                    border-bottom: none;
-                }
-                .info-label {
-                    color: #6b7280;
-                    font-size: 14px;
-                }
-                .info-value {
-                    color: #1f2937;
-                    font-weight: 500;
-                    font-size: 14px;
-                }
-                .status-success {
-                    color: #059669;
-                    font-weight: 600;
-                }
-                .status-failed {
-                    color: #dc2626;
-                    font-weight: 600;
-                }
-                .status-warning {
-                    color: #d97706;
-                    font-weight: 600;
-                }
-                .status-info {
-                    color: #2563eb;
-                    font-weight: 600;
-                }
-                .button {
-                    display: inline-block;
-                    padding: 12px 24px;
-                    background-color: #a0c4ff;
-                    color: #1a1c22;
-                    text-decoration: none;
-                    border-radius: 6px;
-                    font-weight: 600;
-                    margin-top: 16px;
-                }
-                .button:hover {
-                    background-color: #7fb3ff;
-                }
-                .alert-box {
-                    background-color: #fef2f2;
-                    border: 1px solid #fecaca;
-                    border-left: 4px solid #dc2626;
-                    border-radius: 8px;
-                    padding: 16px;
-                    margin: 16px 0;
-                }
-                .alert-box.warning {
-                    background-color: #fffbeb;
-                    border-color: #fde68a;
-                    border-left-color: #d97706;
-                }
-                .alert-box.success {
-                    background-color: #ecfdf5;
-                    border-color: #a7f3d0;
-                    border-left-color: #059669;
-                }
-                .footer {
-                    background-color: #f9fafb;
-                    padding: 24px;
-                    text-align: center;
-                    border-top: 1px solid #e5e7eb;
-                }
-                .footer p {
-                    color: #9ca3af;
-                    font-size: 12px;
-                    margin: 0 0 8px 0;
-                }
-                .footer a {
-                    color: #6b7280;
-                    text-decoration: underline;
-                }
-                code {
-                    background-color: #f3f4f6;
-                    padding: 2px 6px;
-                    border-radius: 4px;
-                    font-family: 'SF Mono', Monaco, Consolas, monospace;
-                    font-size: 13px;
-                }
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <div class="header">
-                    <h1>Docker Manager</h1>
-                    <div class="subtitle">Notification</div>
-                </div>
-                <div class="content">
-                    %s
-                </div>
-                <div class="footer">
-                    <p>This is an automated notification from Docker Manager.</p>
-                    <p><a href="%s/#notification-preferences">Manage notification preferences</a></p>
-                </div>
-            </div>
-        </body>
-        </html>
-        """
-                .formatted(title, content, baseUrl);
+    private Message message(NotificationEventType type, Map<String, Object> ctx) {
+        String repo = str(ctx, "repoName", "Unknown repository");
+        String branch = str(ctx, "branch", "main");
+        String container = str(ctx, "containerName", "Unknown container");
+        String host = str(ctx, "hostName", "Unknown host");
+        String when = formatTimestamp(ctx.get("timestamp"));
+        String repoPath =
+                ctx.get("repoId") != null ? "/git/view/?id=" + ctx.get("repoId") : "/git/";
+        String containerPath =
+                ctx.get("containerId") != null
+                        ? "/containers/view/?id=" + ctx.get("containerId")
+                        : "/containers/";
+
+        return switch (type) {
+            case DEPLOYMENT_STARTED ->
+                    new Message(
+                            Tone.LIVE,
+                            "Deploying",
+                            "Deploying " + repo,
+                            "A deployment of " + repo + " has started.",
+                            rows(
+                                    "Repository",
+                                    repo,
+                                    "Branch",
+                                    branch,
+                                    "Commit",
+                                    shortSha(str(ctx, "commitSha", "")),
+                                    "Started by",
+                                    trigger(str(ctx, "triggerType", ""))),
+                            null,
+                            "Follow the deployment",
+                            repoPath);
+            case DEPLOYMENT_COMPLETED ->
+                    new Message(
+                            Tone.OK,
+                            "Deployed",
+                            repo + " is deployed",
+                            "The deployment finished and the new version is running.",
+                            rows(
+                                    "Repository", repo,
+                                    "Branch", branch,
+                                    "Commit", shortSha(str(ctx, "commitSha", "")),
+                                    "Took", str(ctx, "duration", ""),
+                                    "Finished", when),
+                            null,
+                            "View the deployment",
+                            repoPath);
+            case DEPLOYMENT_FAILED ->
+                    new Message(
+                            Tone.DANGER,
+                            "Deployment failed",
+                            "Deployment of " + repo + " failed",
+                            "The previous version is still running. The error is below, and the"
+                                    + " full log is in Docker Manager.",
+                            rows(
+                                    "Repository", repo,
+                                    "Branch", branch,
+                                    "Commit", shortSha(str(ctx, "commitSha", "")),
+                                    "Failed", when),
+                            str(ctx, "errorMessage", "No error message was recorded."),
+                            "Open the log",
+                            repoPath);
+            case CONTAINER_STOPPED_UNEXPECTEDLY ->
+                    new Message(
+                            Tone.DANGER,
+                            "Stopped",
+                            container + " stopped unexpectedly",
+                            "The container exited with an error. Its logs usually say why.",
+                            rows("Container", container, "Host", host, "When", when),
+                            null,
+                            "View the logs",
+                            containerPath);
+            case CONTAINER_HEALTH_CHECK_FAILED ->
+                    new Message(
+                            Tone.WARN,
+                            "Unhealthy",
+                            container + " is failing its health check",
+                            "The container is running, but its own health check reports a"
+                                    + " problem. It may not be answering requests.",
+                            rows("Container", container, "Host", host, "Since", when),
+                            null,
+                            "View the container",
+                            containerPath);
+            case CONTAINER_RESTART_LOOP ->
+                    new Message(
+                            Tone.DANGER,
+                            "Restart loop",
+                            container + " keeps restarting",
+                            "It crashes soon after starting, and Docker keeps starting it again."
+                                    + " The logs from just before each restart usually show the"
+                                    + " cause.",
+                            rows(
+                                    "Container", container,
+                                    "Host", host,
+                                    "Restarts", str(ctx, "restartCount", ""),
+                                    "Detected", when),
+                            null,
+                            "View the logs",
+                            containerPath);
+            case CONTAINER_OOM_KILLED ->
+                    new Message(
+                            Tone.DANGER,
+                            "Out of memory",
+                            container + " ran out of memory",
+                            "The system stopped it because it used more memory than it is allowed."
+                                    + " Raise its memory limit or find out what uses the memory.",
+                            rows("Container", container, "Host", host, "When", when),
+                            null,
+                            "View the container",
+                            containerPath);
+            case USER_LOGIN ->
+                    new Message(
+                            Tone.INFO,
+                            "New sign-in",
+                            "Someone signed in to your account",
+                            "If this was you, there's nothing to do. If not, change your password"
+                                    + " now.",
+                            rows("From", str(ctx, "ipAddress", "Unknown address"), "When", when),
+                            null,
+                            "Review your account",
+                            "/account/");
+            case PASSWORD_CHANGED ->
+                    new Message(
+                            Tone.INFO,
+                            "Password changed",
+                            "Your password was changed",
+                            "You've been signed out everywhere else. If you didn't change it,"
+                                    + " contact an administrator straight away.",
+                            rows("When", when),
+                            null,
+                            "Open your account",
+                            "/account/");
+            case HOST_DISCONNECTED ->
+                    new Message(
+                            Tone.DANGER,
+                            "Disconnected",
+                            "Lost connection to " + host,
+                            "Docker Manager can't reach this Docker host. Containers on it keep"
+                                    + " running, but can't be managed until it's back.",
+                            rows("Host", host, "Address", str(ctx, "hostUrl", ""), "Since", when),
+                            null,
+                            "Check the host",
+                            "/hosts/");
+            case HOST_RECONNECTED ->
+                    new Message(
+                            Tone.OK,
+                            "Reconnected",
+                            host + " is reachable again",
+                            "Docker Manager is connected to this host again.",
+                            rows("Host", host, "Address", str(ctx, "hostUrl", ""), "When", when),
+                            null,
+                            "Open the host",
+                            "/hosts/");
+        };
     }
 
-    private String renderDeploymentStarted(Map<String, Object> context) {
-        String repoName = (String) context.getOrDefault("repoName", "Unknown");
-        String branch = (String) context.getOrDefault("branch", "main");
-        String triggerType = (String) context.getOrDefault("triggerType", "MANUAL");
-        String commitSha = (String) context.getOrDefault("commitSha", "");
-        String timestamp = formatTimestamp(context.get("timestamp"));
+    // --- rendering ---------------------------------------------------------------------------
 
-        return """
-        <h2>Deployment Started</h2>
-        <p>A new deployment has been initiated for your repository.</p>
-        <div class="info-box">
-            <div class="info-row">
-                <span class="info-label">Repository</span>
-                <span class="info-value">%s</span>
-            </div>
-            <div class="info-row">
-                <span class="info-label">Branch</span>
-                <span class="info-value">%s</span>
-            </div>
-            <div class="info-row">
-                <span class="info-label">Trigger</span>
-                <span class="info-value">%s</span>
-            </div>
-            %s
-            <div class="info-row">
-                <span class="info-label">Started At</span>
-                <span class="info-value">%s</span>
-            </div>
-            <div class="info-row">
-                <span class="info-label">Status</span>
-                <span class="info-value status-info">In Progress</span>
-            </div>
-        </div>
-        <a href="%s/#git-repos" class="button">View Deployment</a>
-        """
-                .formatted(
-                        repoName,
-                        branch,
-                        triggerType,
-                        commitSha.isEmpty()
-                                ? ""
-                                : "<div class=\"info-row\"><span"
-                                        + " class=\"info-label\">Commit</span><span"
-                                        + " class=\"info-value\"><code>"
-                                        + commitSha.substring(0, Math.min(8, commitSha.length()))
-                                        + "</code></span></div>",
-                        timestamp,
-                        baseUrl);
+    private Email build(Message m) {
+        String url = link(m.actionPath());
+        return new Email(html(m, url), text(m, url));
     }
 
-    private String renderDeploymentCompleted(Map<String, Object> context) {
-        String repoName = (String) context.getOrDefault("repoName", "Unknown");
-        String branch = (String) context.getOrDefault("branch", "main");
-        String duration = (String) context.getOrDefault("duration", "Unknown");
-        String timestamp = formatTimestamp(context.get("timestamp"));
-
-        return """
-        <h2>Deployment Successful</h2>
-        <div class="alert-box success">
-            <strong>Great news!</strong> Your deployment completed successfully.
-        </div>
-        <div class="info-box">
-            <div class="info-row">
-                <span class="info-label">Repository</span>
-                <span class="info-value">%s</span>
-            </div>
-            <div class="info-row">
-                <span class="info-label">Branch</span>
-                <span class="info-value">%s</span>
-            </div>
-            <div class="info-row">
-                <span class="info-label">Duration</span>
-                <span class="info-value">%s</span>
-            </div>
-            <div class="info-row">
-                <span class="info-label">Completed At</span>
-                <span class="info-value">%s</span>
-            </div>
-            <div class="info-row">
-                <span class="info-label">Status</span>
-                <span class="info-value status-success">Success</span>
-            </div>
-        </div>
-        <a href="%s/#git-repos" class="button">View Details</a>
-        """
-                .formatted(repoName, branch, duration, timestamp, baseUrl);
-    }
-
-    private String renderDeploymentFailed(Map<String, Object> context) {
-        String repoName = (String) context.getOrDefault("repoName", "Unknown");
-        String branch = (String) context.getOrDefault("branch", "main");
-        String errorMessage = (String) context.getOrDefault("errorMessage", "Unknown error");
-        String timestamp = formatTimestamp(context.get("timestamp"));
-
-        return """
-        <h2>Deployment Failed</h2>
-        <div class="alert-box">
-            <strong>Attention Required!</strong> Your deployment has failed.
-        </div>
-        <div class="info-box">
-            <div class="info-row">
-                <span class="info-label">Repository</span>
-                <span class="info-value">%s</span>
-            </div>
-            <div class="info-row">
-                <span class="info-label">Branch</span>
-                <span class="info-value">%s</span>
-            </div>
-            <div class="info-row">
-                <span class="info-label">Failed At</span>
-                <span class="info-value">%s</span>
-            </div>
-            <div class="info-row">
-                <span class="info-label">Status</span>
-                <span class="info-value status-failed">Failed</span>
-            </div>
-        </div>
-        <p><strong>Error:</strong></p>
-        <div class="info-box">
-            <code>%s</code>
-        </div>
-        <a href="%s/#git-repos" class="button">View Logs</a>
-        """
-                .formatted(repoName, branch, timestamp, escapeHtml(errorMessage), baseUrl);
-    }
-
-    private String renderContainerStopped(Map<String, Object> context) {
-        String containerName = (String) context.getOrDefault("containerName", "Unknown");
-        String containerId = (String) context.getOrDefault("containerId", "");
-        String hostName = (String) context.getOrDefault("hostName", "Unknown");
-        String timestamp = formatTimestamp(context.get("timestamp"));
-
-        return """
-        <h2>Container Stopped Unexpectedly</h2>
-        <div class="alert-box warning">
-            <strong>Warning!</strong> A container has stopped unexpectedly.
-        </div>
-        <div class="info-box">
-            <div class="info-row">
-                <span class="info-label">Container</span>
-                <span class="info-value">%s</span>
-            </div>
-            %s
-            <div class="info-row">
-                <span class="info-label">Host</span>
-                <span class="info-value">%s</span>
-            </div>
-            <div class="info-row">
-                <span class="info-label">Stopped At</span>
-                <span class="info-value">%s</span>
-            </div>
-        </div>
-        <a href="%s/#containers" class="button">View Containers</a>
-        """
-                .formatted(
-                        containerName,
-                        containerId.isEmpty()
-                                ? ""
-                                : "<div class=\"info-row\"><span class=\"info-label\">Container"
-                                        + " ID</span><span class=\"info-value\"><code>"
-                                        + containerId.substring(
-                                                0, Math.min(12, containerId.length()))
-                                        + "</code></span></div>",
-                        hostName,
-                        timestamp,
-                        baseUrl);
-    }
-
-    private String renderHealthCheckFailed(Map<String, Object> context) {
-        String containerName = (String) context.getOrDefault("containerName", "Unknown");
-        String hostName = (String) context.getOrDefault("hostName", "Unknown");
-        String healthStatus = (String) context.getOrDefault("healthStatus", "Unhealthy");
-        String timestamp = formatTimestamp(context.get("timestamp"));
-
-        return """
-        <h2>Health Check Failed</h2>
-        <div class="alert-box">
-            <strong>Alert!</strong> A container health check has failed.
-        </div>
-        <div class="info-box">
-            <div class="info-row">
-                <span class="info-label">Container</span>
-                <span class="info-value">%s</span>
-            </div>
-            <div class="info-row">
-                <span class="info-label">Host</span>
-                <span class="info-value">%s</span>
-            </div>
-            <div class="info-row">
-                <span class="info-label">Health Status</span>
-                <span class="info-value status-failed">%s</span>
-            </div>
-            <div class="info-row">
-                <span class="info-label">Detected At</span>
-                <span class="info-value">%s</span>
-            </div>
-        </div>
-        <a href="%s/#containers" class="button">View Container</a>
-        """
-                .formatted(containerName, hostName, healthStatus, timestamp, baseUrl);
-    }
-
-    private String renderContainerRestartLoop(Map<String, Object> context) {
-        String containerName = (String) context.getOrDefault("containerName", "Unknown");
-        String containerId = (String) context.getOrDefault("containerId", "");
-        String hostName = (String) context.getOrDefault("hostName", "Unknown");
-        Object restartCountObj = context.get("restartCount");
-        String restartCount = restartCountObj != null ? restartCountObj.toString() : "Multiple";
-        String timestamp = formatTimestamp(context.get("timestamp"));
-
-        return """
-        <h2>Container Restart Loop Detected</h2>
-        <div class="alert-box">
-            <strong>Critical Alert!</strong> A container is stuck in a restart loop.
-        </div>
-        <div class="info-box">
-            <div class="info-row">
-                <span class="info-label">Container</span>
-                <span class="info-value">%s</span>
-            </div>
-            %s
-            <div class="info-row">
-                <span class="info-label">Host</span>
-                <span class="info-value">%s</span>
-            </div>
-            <div class="info-row">
-                <span class="info-label">Restart Count</span>
-                <span class="info-value status-failed">%s</span>
-            </div>
-            <div class="info-row">
-                <span class="info-label">Detected At</span>
-                <span class="info-value">%s</span>
-            </div>
-        </div>
-        <p>The container has restarted multiple times in a short period. This usually indicates a configuration issue or application crash.</p>
-        <a href="%s/#container-health" class="button">View Container Health</a>
-        """
-                .formatted(
-                        containerName,
-                        containerId.isEmpty()
-                                ? ""
-                                : "<div class=\"info-row\"><span class=\"info-label\">Container"
-                                        + " ID</span><span class=\"info-value\"><code>"
-                                        + containerId.substring(
-                                                0, Math.min(12, containerId.length()))
-                                        + "</code></span></div>",
-                        hostName,
-                        restartCount,
-                        timestamp,
-                        baseUrl);
-    }
-
-    private String renderContainerOomKilled(Map<String, Object> context) {
-        String containerName = (String) context.getOrDefault("containerName", "Unknown");
-        String containerId = (String) context.getOrDefault("containerId", "");
-        String hostName = (String) context.getOrDefault("hostName", "Unknown");
-        String timestamp = formatTimestamp(context.get("timestamp"));
-
-        return """
-        <h2>Container Killed - Out of Memory</h2>
-        <div class="alert-box">
-            <strong>Critical Alert!</strong> A container was terminated due to memory exhaustion.
-        </div>
-        <div class="info-box">
-            <div class="info-row">
-                <span class="info-label">Container</span>
-                <span class="info-value">%s</span>
-            </div>
-            %s
-            <div class="info-row">
-                <span class="info-label">Host</span>
-                <span class="info-value">%s</span>
-            </div>
-            <div class="info-row">
-                <span class="info-label">Reason</span>
-                <span class="info-value status-failed">OOM Killed</span>
-            </div>
-            <div class="info-row">
-                <span class="info-label">Killed At</span>
-                <span class="info-value">%s</span>
-            </div>
-        </div>
-        <p>The container exceeded its memory limit and was killed by the OOM killer. Consider increasing the memory limit or optimizing the application.</p>
-        <a href="%s/#container-health" class="button">View Container Health</a>
-        """
-                .formatted(
-                        containerName,
-                        containerId.isEmpty()
-                                ? ""
-                                : "<div class=\"info-row\"><span class=\"info-label\">Container"
-                                        + " ID</span><span class=\"info-value\"><code>"
-                                        + containerId.substring(
-                                                0, Math.min(12, containerId.length()))
-                                        + "</code></span></div>",
-                        hostName,
-                        timestamp,
-                        baseUrl);
-    }
-
-    private String renderUserLogin(Map<String, Object> context) {
-        String ipAddress = (String) context.getOrDefault("ipAddress", "Unknown");
-        String timestamp = formatTimestamp(context.get("timestamp"));
-
-        return """
-        <h2>New Login Detected</h2>
-        <p>A new login was detected on your Docker Manager account.</p>
-        <div class="info-box">
-            <div class="info-row">
-                <span class="info-label">IP Address</span>
-                <span class="info-value"><code>%s</code></span>
-            </div>
-            <div class="info-row">
-                <span class="info-label">Time</span>
-                <span class="info-value">%s</span>
-            </div>
-        </div>
-        <p>If this wasn't you, please change your password immediately and contact your administrator.</p>
-        """
-                .formatted(ipAddress, timestamp);
-    }
-
-    private String renderPasswordChanged(Map<String, Object> context) {
-        String timestamp = formatTimestamp(context.get("timestamp"));
-
-        return """
-        <h2>Password Changed</h2>
-        <div class="alert-box success">
-            Your password has been successfully changed.
-        </div>
-        <div class="info-box">
-            <div class="info-row">
-                <span class="info-label">Changed At</span>
-                <span class="info-value">%s</span>
-            </div>
-        </div>
-        <p>If you did not make this change, please contact your administrator immediately.</p>
-        """
-                .formatted(timestamp);
-    }
-
-    private String renderHostDisconnected(Map<String, Object> context) {
-        String hostName = (String) context.getOrDefault("hostName", "Unknown");
-        String hostUrl = (String) context.getOrDefault("hostUrl", "Unknown");
-        String timestamp = formatTimestamp(context.get("timestamp"));
-
-        return """
-        <h2>Docker Host Disconnected</h2>
-        <div class="alert-box">
-            <strong>Alert!</strong> A Docker host has become unreachable.
-        </div>
-        <div class="info-box">
-            <div class="info-row">
-                <span class="info-label">Host</span>
-                <span class="info-value">%s</span>
-            </div>
-            <div class="info-row">
-                <span class="info-label">URL</span>
-                <span class="info-value"><code>%s</code></span>
-            </div>
-            <div class="info-row">
-                <span class="info-label">Disconnected At</span>
-                <span class="info-value">%s</span>
-            </div>
-        </div>
-        <p>Please check the Docker host and network connectivity.</p>
-        <a href="%s/#hosts" class="button">View Hosts</a>
-        """
-                .formatted(hostName, hostUrl, timestamp, baseUrl);
-    }
-
-    private String renderHostReconnected(Map<String, Object> context) {
-        String hostName = (String) context.getOrDefault("hostName", "Unknown");
-        String timestamp = formatTimestamp(context.get("timestamp"));
-
-        return """
-        <h2>Docker Host Reconnected</h2>
-        <div class="alert-box success">
-            <strong>Good news!</strong> A Docker host is back online.
-        </div>
-        <div class="info-box">
-            <div class="info-row">
-                <span class="info-label">Host</span>
-                <span class="info-value">%s</span>
-            </div>
-            <div class="info-row">
-                <span class="info-label">Reconnected At</span>
-                <span class="info-value">%s</span>
-            </div>
-        </div>
-        <a href="%s/#hosts" class="button">View Hosts</a>
-        """
-                .formatted(hostName, timestamp, baseUrl);
-    }
-
-    private String formatTimestamp(Object timestamp) {
-        if (timestamp instanceof Instant instant) {
-            return DATE_FORMAT.format(instant);
-        } else if (timestamp instanceof Long epochMillis) {
-            return DATE_FORMAT.format(Instant.ofEpochMilli(epochMillis));
+    private String html(Message m, String actionUrl) {
+        StringBuilder rows = new StringBuilder();
+        for (String[] r : m.rows()) {
+            rows.append(
+                            "<tr><td class=\"dm-line dm-slate\" style=\"padding:10px"
+                                    + " 0;border-top:1px solid ")
+                    .append(LINE)
+                    .append(";font-size:13px;color:")
+                    .append(SLATE)
+                    .append(";width:34%;vertical-align:top;\">")
+                    .append(esc(r[0]))
+                    .append(
+                            "</td><td class=\"dm-line dm-ink\" style=\"padding:10px"
+                                    + " 0;border-top:1px solid ")
+                    .append(LINE)
+                    .append(";font-size:14px;color:")
+                    .append(INK)
+                    .append(";vertical-align:top;word-break:break-word;\">")
+                    .append(esc(r[1]))
+                    .append("</td></tr>");
         }
+        String detail =
+                m.detail() == null
+                        ? ""
+                        : "<tr><td style=\"padding:4px 0 8px;\"><div class=\"dm-well\""
+                                + " style=\"background:"
+                                + WELL
+                                + ";border-radius:10px;padding:12px 14px;font-family:"
+                                + MONO
+                                + ";font-size:12.5px;line-height:1.55;color:"
+                                + INK
+                                + ";white-space:pre-wrap;word-break:break-word;\">"
+                                + esc(m.detail())
+                                + "</div></td></tr>";
+        String button =
+                "<tr><td style=\"padding:20px 0 4px;\"><a class=\"dm-button\" href=\""
+                        + esc(actionUrl)
+                        + "\" style=\"display:inline-block;background:"
+                        + INK
+                        + ";color:"
+                        + FOG
+                        + ";text-decoration:none;font-size:14px;font-weight:500;line-height:20px;"
+                        + "padding:10px 18px;border-radius:999px;\">"
+                        + esc(m.actionLabel())
+                        + "</a></td></tr>";
+
+        return "<!DOCTYPE html>\n"
+                + "<html lang=\"en\"><head><meta charset=\"utf-8\">"
+                + "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+                + "<meta name=\"color-scheme\" content=\"light dark\">"
+                + "<meta name=\"supported-color-schemes\" content=\"light dark\">"
+                + "<title>"
+                + esc(m.title())
+                + "</title><style>"
+                + "@media (prefers-color-scheme: dark){"
+                + ".dm-page{background:#0b0b0c !important}"
+                + ".dm-card{background:#161618 !important;border-color:#2e2e32 !important}"
+                + ".dm-ink{color:#ececee !important}"
+                + ".dm-slate{color:#a8a8ae !important}"
+                + ".dm-line{border-color:#2e2e32 !important}"
+                + ".dm-well{background:#222225 !important;color:#ececee !important}"
+                + ".dm-button{background:#ececee !important;color:#0a0a0a !important}}"
+                + "@media (max-width:520px){.dm-pad{padding:24px 20px !important}}"
+                + "</style></head>"
+                + "<body class=\"dm-page\" style=\"margin:0;padding:0;background:"
+                + FOG
+                + ";\">"
+                // Preview text in the inbox list, hidden in the message itself.
+                + "<div style=\"display:none;max-height:0;overflow:hidden;opacity:0;\">"
+                + esc(m.intro())
+                + "</div>"
+                + "<table role=\"presentation\" class=\"dm-page\" width=\"100%\" cellpadding=\"0\""
+                + " cellspacing=\"0\" style=\"background:"
+                + FOG
+                + ";font-family:"
+                + FONT
+                + ";\"><tr><td align=\"center\" style=\"padding:32px 16px;\">"
+                + "<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\""
+                + " style=\"max-width:560px;\">"
+                // Wordmark
+                + "<tr><td style=\"padding:0 4px 16px;font-size:20px;font-weight:600;"
+                + "letter-spacing:-0.01em;\"><span class=\"dm-ink\" style=\"color:"
+                + INK
+                + ";\">docker</span><span class=\"dm-slate\" style=\"color:"
+                + SLATE
+                + ";\">.manager</span></td></tr>"
+                // Card
+                + "<tr><td class=\"dm-card dm-pad\" style=\"background:"
+                + PAPER
+                + ";border:1px solid "
+                + LINE
+                + ";border-radius:16px;padding:32px;\">"
+                + "<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\">"
+                + "<tr><td class=\"dm-slate\" style=\"font-size:13px;color:"
+                + SLATE
+                + ";padding-bottom:10px;\"><span style=\"display:inline-block;width:8px;height:8px;"
+                + "border-radius:50%;background:"
+                + m.tone().color
+                + ";margin-right:7px;vertical-align:middle;\"></span><span"
+                + " style=\"vertical-align:middle;\">"
+                + esc(m.status())
+                + "</span></td></tr>"
+                + "<tr><td class=\"dm-ink\" style=\"font-size:22px;line-height:1.3;font-weight:600;"
+                + "letter-spacing:-0.01em;color:"
+                + INK
+                + ";padding-bottom:8px;word-break:break-word;\">"
+                + esc(m.title())
+                + "</td></tr>"
+                + "<tr><td class=\"dm-slate\" style=\"font-size:15px;line-height:1.6;color:"
+                + SLATE
+                + ";padding-bottom:20px;\">"
+                + esc(m.intro())
+                + "</td></tr>"
+                + detail
+                + (rows.isEmpty()
+                        ? ""
+                        : "<tr><td><table role=\"presentation\" width=\"100%\" cellpadding=\"0\""
+                                + " cellspacing=\"0\">"
+                                + rows
+                                + "</table></td></tr>")
+                + button
+                + "</table></td></tr>"
+                // Footer
+                + "<tr><td class=\"dm-slate\" style=\"padding:16px 4px 0;font-size:12px;"
+                + "line-height:1.6;color:"
+                + SLATE
+                + ";\">Sent by Docker Manager at <a class=\"dm-slate\" href=\""
+                + esc(baseUrl())
+                + "\" style=\"color:"
+                + SLATE
+                + ";\">"
+                + esc(displayUrl())
+                + "</a>. Choose which emails you get under <a class=\"dm-slate\" href=\""
+                + esc(link("/settings/"))
+                + "\" style=\"color:"
+                + SLATE
+                + ";\">Settings, Notifications</a>.</td></tr>"
+                + "</table></td></tr></table></body></html>";
+    }
+
+    private String text(Message m, String actionUrl) {
+        StringBuilder sb = new StringBuilder();
+        sb.append(m.status().toUpperCase(Locale.ROOT)).append("\n\n");
+        sb.append(m.title()).append("\n\n");
+        sb.append(m.intro()).append("\n\n");
+        if (m.detail() != null) sb.append(m.detail()).append("\n\n");
+        int width = 0;
+        for (String[] r : m.rows()) width = Math.max(width, r[0].length());
+        for (String[] r : m.rows()) {
+            sb.append(String.format(Locale.ROOT, "%-" + (width + 2) + "s%s%n", r[0] + ":", r[1]));
+        }
+        if (!m.rows().isEmpty()) sb.append('\n');
+        sb.append(m.actionLabel()).append(": ").append(actionUrl).append("\n\n");
+        sb.append("--\nSent by Docker Manager at ")
+                .append(baseUrl())
+                .append(". Choose which emails you get under Settings, Notifications.\n");
+        return sb.toString();
+    }
+
+    // --- helpers -----------------------------------------------------------------------------
+
+    /** Label/value pairs; pairs with an empty value are left out. */
+    private static List<String[]> rows(String... pairs) {
+        List<String[]> rows = new ArrayList<>();
+        for (int i = 0; i + 1 < pairs.length; i += 2) {
+            if (pairs[i + 1] != null && !pairs[i + 1].isBlank()) {
+                rows.add(new String[] {pairs[i], pairs[i + 1]});
+            }
+        }
+        return rows;
+    }
+
+    private String baseUrl() {
+        String b = baseUrl == null || baseUrl.isBlank() ? "http://localhost:8080" : baseUrl;
+        return b.endsWith("/") ? b.substring(0, b.length() - 1) : b;
+    }
+
+    private String displayUrl() {
+        return baseUrl().replaceFirst("^https?://", "");
+    }
+
+    private String link(String path) {
+        return baseUrl() + (path == null || path.isEmpty() ? "/" : path);
+    }
+
+    private static String str(Map<String, Object> ctx, String key, String fallback) {
+        Object v = ctx == null ? null : ctx.get(key);
+        String s = v == null ? "" : String.valueOf(v).trim();
+        return s.isEmpty() ? fallback : s;
+    }
+
+    private static String shortSha(String sha) {
+        return sha == null || sha.isBlank() ? "" : sha.substring(0, Math.min(8, sha.length()));
+    }
+
+    private static String trigger(String t) {
+        return switch (t.toUpperCase(Locale.ROOT)) {
+            case "WEBHOOK" -> "A push (webhook)";
+            case "POLLING" -> "A new commit (polling)";
+            case "MANUAL" -> "Someone in Docker Manager";
+            case "" -> "";
+            default -> t.charAt(0) + t.substring(1).toLowerCase(Locale.ROOT);
+        };
+    }
+
+    private static String formatTimestamp(Object timestamp) {
+        if (timestamp instanceof Instant instant) return DATE_FORMAT.format(instant);
+        if (timestamp instanceof Long millis)
+            return DATE_FORMAT.format(Instant.ofEpochMilli(millis));
         return DATE_FORMAT.format(Instant.now());
     }
 
-    private String escapeHtml(String text) {
-        if (text == null) return "";
-        return text.replace("&", "&amp;")
-                .replace("<", "&lt;")
-                .replace(">", "&gt;")
-                .replace("\"", "&quot;")
-                .replace("'", "&#39;");
+    /** Every value can be user-controlled (names, branches, error output), so all are escaped. */
+    static String esc(String s) {
+        if (s == null) return "";
+        StringBuilder sb = new StringBuilder(s.length() + 16);
+        for (char c : s.toCharArray()) {
+            switch (c) {
+                case '&' -> sb.append("&amp;");
+                case '<' -> sb.append("&lt;");
+                case '>' -> sb.append("&gt;");
+                case '"' -> sb.append("&quot;");
+                case '\'' -> sb.append("&#39;");
+                default -> sb.append(c);
+            }
+        }
+        return sb.toString();
     }
 }

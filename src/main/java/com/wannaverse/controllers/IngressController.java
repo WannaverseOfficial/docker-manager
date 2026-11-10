@@ -69,7 +69,9 @@ public class IngressController {
                             false,
                             null,
                             null,
-                            null));
+                            null,
+                            null,
+                            false));
         }
 
         return ResponseEntity.ok(IngressConfigResponse.fromEntity(config));
@@ -150,6 +152,38 @@ public class IngressController {
         String username = SecurityContextHolder.getCurrentUsername();
         var route = ingressService.exposeApp(hostId, request, userId, username);
         return ResponseEntity.ok(IngressRouteResponse.fromEntity(route));
+    }
+
+    public record UpdateRouteRequest(IngressService.ExposeAppRequest route, Boolean enabled) {}
+
+    @PutMapping("/routes/{routeId}")
+    @RequirePermission(resource = Resource.INGRESS_ROUTES, action = "update")
+    public ResponseEntity<IngressRouteResponse> updateRoute(
+            @PathVariable String routeId, @RequestBody UpdateRouteRequest request) {
+        var route =
+                ingressService.updateRoute(
+                        routeId,
+                        request.route(),
+                        request.enabled(),
+                        SecurityContextHolder.getCurrentUserId(),
+                        SecurityContextHolder.getCurrentUsername());
+        return ResponseEntity.ok(IngressRouteResponse.fromEntity(route));
+    }
+
+    public record SettingsRequest(String acmeEmail, Boolean useStaging) {}
+
+    @PatchMapping("/hosts/{hostId}/settings")
+    @RequirePermission(resource = Resource.INGRESS, action = "configure", hostIdParam = "hostId")
+    public ResponseEntity<IngressConfigResponse> updateSettings(
+            @PathVariable String hostId, @RequestBody SettingsRequest request) {
+        var config =
+                ingressService.updateSettings(
+                        hostId,
+                        request.acmeEmail(),
+                        request.useStaging(),
+                        SecurityContextHolder.getCurrentUserId(),
+                        SecurityContextHolder.getCurrentUsername());
+        return ResponseEntity.ok(IngressConfigResponse.fromEntity(config));
     }
 
     @DeleteMapping("/routes/{routeId}")
@@ -312,7 +346,9 @@ public class IngressController {
             boolean acmeEnabled,
             String acmeDirectoryUrl,
             Long enabledAt,
-            String enabledByUsername) {
+            String enabledByUsername,
+            String lastError,
+            boolean staging) {
         public static IngressConfigResponse fromEntity(IngressConfig c) {
             return new IngressConfigResponse(
                     c.getId(),
@@ -329,7 +365,9 @@ public class IngressController {
                     c.isAcmeEnabled(),
                     c.getAcmeDirectoryUrl(),
                     c.getEnabledAt(),
-                    c.getEnabledByUsername());
+                    c.getEnabledByUsername(),
+                    c.getLastError(),
+                    c.getAcmeDirectoryUrl() != null && c.getAcmeDirectoryUrl().contains("staging"));
         }
     }
 
@@ -346,8 +384,13 @@ public class IngressController {
             boolean enabled,
             String certificateId,
             long createdAt,
-            String createdByUsername) {
+            String createdByUsername,
+            boolean forceHttpsRedirect,
+            String authUsername,
+            List<String> authUsernames) {
         public static IngressRouteResponse fromEntity(IngressRoute r) {
+            List<String> users = IngressService.authUsernames(r.getAuthConfig());
+            String authUser = users.isEmpty() ? null : users.get(0);
             return new IngressRouteResponse(
                     r.getId(),
                     r.getHostname(),
@@ -361,7 +404,10 @@ public class IngressController {
                     r.isEnabled(),
                     r.getCertificateId(),
                     r.getCreatedAt(),
-                    r.getCreatedByUsername());
+                    r.getCreatedByUsername(),
+                    r.isForceHttpsRedirect(),
+                    authUser,
+                    users);
         }
     }
 

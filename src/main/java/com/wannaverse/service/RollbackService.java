@@ -24,6 +24,8 @@ public class RollbackService {
     private final DockerService dockerService;
     private final OperationTrackingService trackingService;
     private final ObjectMapper objectMapper;
+    private final ContainerSpecService specService;
+    private final StackService stackService;
 
     public RollbackService(
             DockerOperationRepository operationRepository,
@@ -31,7 +33,11 @@ public class RollbackService {
             ComposeDeploymentRepository composeRepository,
             DockerHostRepository hostRepository,
             DockerService dockerService,
-            OperationTrackingService trackingService) {
+            OperationTrackingService trackingService,
+            ContainerSpecService specService,
+            StackService stackService) {
+        this.specService = specService;
+        this.stackService = stackService;
         this.operationRepository = operationRepository;
         this.snapshotRepository = snapshotRepository;
         this.composeRepository = composeRepository;
@@ -40,6 +46,9 @@ public class RollbackService {
         this.trackingService = trackingService;
         this.objectMapper = new ObjectMapper();
         this.objectMapper.configure(SerializationFeature.FAIL_ON_EMPTY_BEANS, false);
+        this.objectMapper.configure(
+                com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES,
+                false);
     }
 
     public RollbackValidation validateRollback(String operationId) {
@@ -55,7 +64,10 @@ public class RollbackService {
                                 operationId, StateSnapshot.SnapshotType.BEFORE)
                         .orElse(null);
 
-        if (beforeSnapshot == null) {
+        // Undoing a create just removes the container, so it needs no earlier state.
+        boolean needsBefore =
+                operation.getOperationType() != DockerOperation.OperationType.CONTAINER_CREATE;
+        if (beforeSnapshot == null && needsBefore) {
             return new RollbackValidation(false, "No before state snapshot available", operation);
         }
 
@@ -71,7 +83,7 @@ public class RollbackService {
                     false, "Operation has already been rolled back", operation);
         }
 
-        if (isContainerOperation(operation.getOperationType())) {
+        if (beforeSnapshot != null && isContainerOperation(operation.getOperationType())) {
             String imageName = beforeSnapshot.getImageName();
             if (imageName != null) {
                 try {
@@ -106,7 +118,7 @@ public class RollbackService {
                 snapshotRepository
                         .findByOperationIdAndSnapshotType(
                                 operationId, StateSnapshot.SnapshotType.BEFORE)
-                        .orElseThrow();
+                        .orElse(null);
 
         try {
             DockerOperation rollbackOp =
@@ -157,6 +169,14 @@ public class RollbackService {
 
         return switch (operation.getOperationType()) {
             case CONTAINER_DELETE -> recreateContainerFromSnapshot(api, beforeSnapshot);
+            case CONTAINER_UPDATE ->
+                    specService.recreate(
+                            api,
+                            operation.getResourceId(),
+                            specService.specFrom(inspectFrom(beforeSnapshot)),
+                            false,
+                            // Restores the container's own recorded settings.
+                            true);
             case CONTAINER_STOP -> {
                 api.startContainer(operation.getResourceId());
                 yield operation.getResourceId();
@@ -179,137 +199,51 @@ public class RollbackService {
         };
     }
 
+    /**
+     * Recreates a deleted container from its full `docker inspect` snapshot, so its restart policy,
+     * command, labels, capabilities, limits, UDP ports and all networks come back too. (Previously
+     * only the image, environment, TCP ports and one network were restored, and volume binds failed
+     * to parse.)
+     */
     private String recreateContainerFromSnapshot(DockerAPI api, StateSnapshot snapshot)
             throws Exception {
-        String inspectJson = trackingService.getDecompressedInspectData(snapshot);
+        com.github.dockerjava.api.command.InspectContainerResponse inspect = inspectFrom(snapshot);
+        return specService.createFromInspect(api, inspect);
+    }
 
+    private com.github.dockerjava.api.command.InspectContainerResponse inspectFrom(
+            StateSnapshot snapshot) throws Exception {
+        String inspectJson = trackingService.getDecompressedInspectData(snapshot);
         if (inspectJson == null) {
             throw new IllegalStateException("No inspect data available in snapshot");
         }
-
-        JsonNode inspect = objectMapper.readTree(inspectJson);
-
-        String imageName = snapshot.getImageName();
-        String containerName = snapshot.getResourceName();
-        if (containerName != null && containerName.startsWith("/")) {
-            containerName = containerName.substring(1);
+        JsonNode tree = objectMapper.readTree(inspectJson);
+        // Mounts are restored from the top-level "Mounts" list; the HostConfig copies may have
+        // been stored in a form that does not read back.
+        if (tree.get("HostConfig") instanceof com.fasterxml.jackson.databind.node.ObjectNode host) {
+            host.remove("Binds");
+            host.remove("Mounts");
         }
-
-        List<String> env = new ArrayList<>();
-        if (snapshot.getEnvironmentVars() != null) {
-            JsonNode envNode = objectMapper.readTree(snapshot.getEnvironmentVars());
-            if (envNode.isArray()) {
-                envNode.forEach(e -> env.add(e.asText()));
-            }
-        }
-
-        Map<Integer, Integer> portBindings = new HashMap<>();
-        if (snapshot.getPortBindings() != null) {
-            JsonNode portsNode = objectMapper.readTree(snapshot.getPortBindings());
-            portsNode
-                    .fields()
-                    .forEachRemaining(
-                            entry -> {
-                                String containerPort = entry.getKey().split("/")[0];
-                                JsonNode bindings = entry.getValue();
-                                if (bindings.isArray() && bindings.size() > 0) {
-                                    String hostPort = bindings.get(0).get("HostPort").asText();
-                                    try {
-                                        portBindings.put(
-                                                Integer.parseInt(containerPort),
-                                                Integer.parseInt(hostPort));
-                                    } catch (NumberFormatException e) {
-                                        log.warn(
-                                                "Could not parse port binding: {} -> {}",
-                                                containerPort,
-                                                hostPort);
-                                    }
-                                }
-                            });
-        }
-
-        List<String> volumeBindings = new ArrayList<>();
-        if (snapshot.getVolumeBindings() != null) {
-            JsonNode volumesNode = objectMapper.readTree(snapshot.getVolumeBindings());
-            if (volumesNode.isArray()) {
-                volumesNode.forEach(v -> volumeBindings.add(v.asText()));
-            }
-        }
-
-        String networkName = null;
-        if (snapshot.getNetworkSettings() != null) {
-            JsonNode networkNode = objectMapper.readTree(snapshot.getNetworkSettings());
-            JsonNode networks = networkNode.get("Networks");
-            if (networks != null && networks.isObject()) {
-                Iterator<String> networkNames = networks.fieldNames();
-                if (networkNames.hasNext()) {
-                    networkName = networkNames.next();
-                }
-            }
-        }
-
-        var response =
-                api.createContainer(
-                        imageName,
-                        containerName,
-                        env.isEmpty() ? null : env,
-                        portBindings.isEmpty() ? null : portBindings,
-                        volumeBindings.isEmpty() ? null : volumeBindings,
-                        networkName);
-
-        String newContainerId = response.getId();
-
-        api.startContainer(newContainerId);
-
-        log.info("Recreated container {} from snapshot", newContainerId);
-
-        return newContainerId;
+        return objectMapper.treeToValue(
+                tree, com.github.dockerjava.api.command.InspectContainerResponse.class);
     }
 
-    @Transactional
+    /** Redeploys an earlier version of a stack (see {@link StackService#rollback}). */
     public RollbackResult rollbackComposeDeployment(String deploymentId, int targetVersion) {
         ComposeDeployment current = composeRepository.findById(deploymentId).orElse(null);
-
         if (current == null) {
             return new RollbackResult(false, "Deployment not found", null);
         }
-
-        DockerHost host = current.getDockerHost();
-        String projectName = current.getProjectName();
-
-        ComposeDeployment target =
-                composeRepository
-                        .findByDockerHostIdAndProjectNameAndVersion(
-                                host.getId(), projectName, targetVersion)
-                        .orElse(null);
-
-        if (target == null) {
-            return new RollbackResult(false, "Target version not found: " + targetVersion, null);
-        }
-
         try {
-            ComposeDeployment newDeployment =
-                    trackingService.createComposeDeployment(
-                            host.getId(),
-                            projectName,
-                            target.getComposeContent(),
-                            target.getEnvFileContent(),
-                            target.getCommitSha(),
-                            target.getGitRepository());
-
-            List<String> logs =
-                    dockerService.deployCompose(
-                            host.getDockerHostUrl(), target.getComposeContent(), projectName);
-
-            newDeployment.setLogs(String.join("\n", logs));
-            trackingService.completeComposeDeployment(newDeployment, true, null);
-
-            current.setStatus(ComposeDeployment.DeploymentStatus.ROLLED_BACK);
-            composeRepository.save(current);
-
-            return new RollbackResult(
-                    true, "Rolled back to version " + targetVersion, newDeployment.getId());
-
+            var ctx = com.wannaverse.security.SecurityContextHolder.getContext();
+            var job =
+                    stackService.rollback(
+                            current.getDockerHost().getId(),
+                            current.getProjectName(),
+                            targetVersion,
+                            ctx != null ? ctx.getUsername() : null,
+                            ctx != null && ctx.isAdmin());
+            return new RollbackResult(true, "Rolling back to version " + targetVersion, job.id);
         } catch (Exception e) {
             log.error("Compose rollback failed: {}", e.getMessage(), e);
             return new RollbackResult(false, "Rollback failed: " + e.getMessage(), null);
@@ -347,7 +281,12 @@ public class RollbackService {
 
     private boolean isRollbackSupported(DockerOperation.OperationType type) {
         return switch (type) {
-            case CONTAINER_CREATE, CONTAINER_DELETE, CONTAINER_START, CONTAINER_STOP -> true;
+            case CONTAINER_CREATE,
+                    CONTAINER_DELETE,
+                    CONTAINER_START,
+                    CONTAINER_STOP,
+                    CONTAINER_UPDATE ->
+                    true;
             default -> false;
         };
     }

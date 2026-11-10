@@ -7,6 +7,7 @@ import com.wannaverse.dto.UpdateGroupRequest;
 import com.wannaverse.dto.UserGroupResponse;
 import com.wannaverse.persistence.GroupPermissionRepository;
 import com.wannaverse.persistence.Resource;
+import com.wannaverse.security.AdminOnly;
 import com.wannaverse.security.Auditable;
 import com.wannaverse.security.RequirePermission;
 import com.wannaverse.service.UserService;
@@ -20,6 +21,7 @@ import org.springframework.web.bind.annotation.*;
 import java.util.List;
 
 @RestController
+@AdminOnly
 @RequestMapping("/api/groups")
 public class GroupController {
 

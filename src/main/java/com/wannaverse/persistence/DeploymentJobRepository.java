@@ -11,6 +11,10 @@ public interface DeploymentJobRepository extends JpaRepository<DeploymentJob, St
 
     List<DeploymentJob> findAllByOrderByCreatedAtDesc();
 
+    List<DeploymentJob> findTop200ByOrderByCreatedAtDesc();
+
+    List<DeploymentJob> findByStatusIn(java.util.Collection<DeploymentJob.JobStatus> statuses);
+
     List<DeploymentJob> findByGitRepositoryIdAndStatus(
             String gitRepositoryId, DeploymentJob.JobStatus status);
 }

@@ -79,16 +79,9 @@ No paid tiers. No hidden costs. Just Docker management done right.
 
 ## 🚀 Running Wannaverse Docker Manager
 
-The recommended approach is using a `docker-compose.yml`
+The recommended approach is a `docker-compose.yml`:
 
-Please ensure to change the SECRETS in the file. To generate values you can run the command:
-
-```
-openssl rand -base64 48 | tr -dc 'A-Za-z0-9!@#$%^&*()_+-=' | head -c 32 ; echo
-```
-
-docker-compose.yml
-```
+```yaml
 services:
   docker-manager:
     image: wannaverse/docker-manager:latest
@@ -98,55 +91,92 @@ services:
     ports:
       - "8080:8080"
     volumes:
-      # Mount Docker socket for container management
+      # Lets Docker Manager control this host's Docker
       - /var/run/docker.sock:/var/run/docker.sock
-      # Persist database
+      # Database, and the secrets generated on first start
       - docker_manager_data:/app/database
-      # Persist git repositories
+      # Checked-out git repositories
       - docker_manager_repos:/app/git-repos
+      # Compose stacks. Keep the same path on both sides (see below)
+      - /opt/docker-manager/stacks:/opt/docker-manager/stacks
     environment:
-      # Java options
-      - JAVA_OPTS=-Xms256m -Xmx512m
-      # Security - CHANGE THESE IN PRODUCTION
-      - JWT_ACCESS_SECRET=bI4pEE+5oVq9gkWyy/plIsRvaZ8ghj54access
-      - JWT_REFRESH_SECRET=bI4pEE+5oVq9gkWyy/plIsRvaZ8ghj54refresh
-      - ENCRYPTION_KEY=bI4pEE+5oVq9gkWyy/plIsRvaZ8ghj54
-      # Optional: Increase token expiration
-      # - JWT_ACCESS_EXP=900000
-      # - JWT_REFRESH_EXP=604800000
-      # Public URL for webhooks - set to your public domain
+      # The address you open Docker Manager at; used for webhook URLs and email links
       - BASE_URL=http://your-domain.com
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/api/auth/login"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
 
 volumes:
   docker_manager_data:
   docker_manager_repos:
 ```
 
-Alternatively, for testing, run:
+The image already has a health check, so none is needed in the compose file.
+
+Alternatively, for a quick try:
 ```
-docker run -d \
-  -p 8080:8080 \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  wannaverse/docker-manager
+docker run -d -p 8080:8080 -v /var/run/docker.sock:/var/run/docker.sock wannaverse/docker-manager
 ```
-By default, the application runs on port 8080.
-To change it, modify the host port (for example: 4000:8080).
+
+The Docker host whose socket is mounted is added automatically on first start.
+
+### Secrets
+
+Strong random secrets for sign-in tokens and for encrypting stored credentials are generated on first start and kept
+in the data volume (`/app/database/.secrets.properties`). To manage them yourself, set `JWT_ACCESS_SECRET`,
+`JWT_REFRESH_SECRET` and `ENCRYPTION_KEY` to random values of at least 32 characters, for example from
+`openssl rand -base64 48`.
+
+Never reuse the example secrets that older versions of this README showed: they are public. Docker Manager replaces
+public or weak JWT secrets with generated ones automatically.
+
+### Stacks folder
+
+Each stack's `compose.yaml` and `.env` are stored in `STACKS_DIR` (default `/opt/docker-manager/stacks`). Docker
+resolves relative bind mounts in a compose file (like `./data:/data`) on the **host**, so mount that folder at the
+same path on the host and in the container, as in the example above.
+
+### Settings
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `BASE_URL` | `http://localhost:8080` | Public address, used for webhook URLs and email links |
+| `STACKS_DIR` | `/opt/docker-manager/stacks` | Where stack files are kept |
+| `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`, `ENCRYPTION_KEY` | generated | See Secrets |
+| `JWT_ACCESS_EXP`, `JWT_REFRESH_EXP` | 15 minutes, 7 days | Session lengths in milliseconds |
+| `CORS_ALLOWED_ORIGINS` | none | Only needed to run the UI from another origin during development |
+| `LOG_LEVEL` | `INFO` | Server log level |
+
+### Upgrading from 1.x
+
+* Everyone signs in again once: sign-in tokens are now derived differently.
+* Compose deployments made with 1.x were never saved anywhere; they show up under **Stacks** as "not managed here".
+  Use **Import** on the stack page to manage them.
+* If you never set `ENCRYPTION_KEY`, existing stored credentials keep working; set a new key only together with
+  re-entering them.
+* Git repositories that deploy a Dockerfile now also run the built image. Check their container settings.
+* Creating and editing users, groups, git repositories and pipelines is now limited to administrators.
 
 ## 🔐 Logging In
 Username: `admin`
 
-Password: Printed to the container logs on first startup
+Password: printed to the container logs on first start. You choose your own on first sign-in.
 
-Retrieve it with:
 ```
 docker logs docker-manager
 ```
+
+## 🛠️ Development
+
+The server is Spring Boot (Java 25) in `src/`; the UI is a Next.js static export in `frontend/`.
+
+```
+# Server on :8099, allowing the dev UI's origin
+SERVER_PORT=8099 CORS_ALLOWED_ORIGINS=http://localhost:3099 ./gradlew bootRun
+
+# UI on :3099 (reads NEXT_PUBLIC_API_BASE from frontend/.env.development)
+cd frontend && npm install && npm run dev
+```
+
+`npm run build` in `frontend/` writes `frontend/out`, which `./gradlew bootJar` bundles into the jar. The Docker image
+does both.
 
 ## 🖼️ Screenshot
 <img width="1000" alt="image" src="https://github.com/user-attachments/assets/75d668d6-2f5b-495d-bc78-5cda425999a2" />

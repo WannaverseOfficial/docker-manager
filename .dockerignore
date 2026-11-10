@@ -48,3 +48,12 @@ docker-compose*.yml
 # OS files
 .DS_Store
 Thumbs.db
+
+# UI build outputs and dependencies (rebuilt inside the image)
+**/node_modules
+**/.next
+frontend/out
+frontend/next-env.d.ts
+
+# Runtime data
+stacks/

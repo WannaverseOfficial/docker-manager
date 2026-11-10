@@ -153,46 +153,73 @@ public class DiffService {
                 before.equals(after));
     }
 
+    /**
+     * Line diff. Common leading and trailing lines are matched first, then an LCS table is built
+     * for the changed middle and walked back iteratively. (The previous version recursed once per
+     * line and built the table for the whole file, so large compose files overflowed the stack or
+     * ran out of memory.) Very large changed regions fall back to "all removed, all added".
+     */
     private List<DiffLine> computeUnifiedDiff(String[] before, String[] after) {
         List<DiffLine> result = new ArrayList<>();
+        int m = before.length, n = after.length;
+        int start = 0;
+        while (start < m && start < n && before[start].equals(after[start])) start++;
+        int endB = m, endA = n;
+        while (endB > start && endA > start && before[endB - 1].equals(after[endA - 1])) {
+            endB--;
+            endA--;
+        }
+        for (int k = 0; k < start; k++) {
+            result.add(new DiffLine(DiffLineType.CONTEXT, before[k], k + 1, k + 1));
+        }
 
-        // Simple LCS-based diff
-        int[][] lcs = computeLCS(before, after);
-        collectDiff(before, after, lcs, before.length, after.length, result);
-
-        return result;
-    }
-
-    private int[][] computeLCS(String[] before, String[] after) {
-        int m = before.length;
-        int n = after.length;
-        int[][] dp = new int[m + 1][n + 1];
-
-        for (int i = 1; i <= m; i++) {
-            for (int j = 1; j <= n; j++) {
-                if (before[i - 1].equals(after[j - 1])) {
-                    dp[i][j] = dp[i - 1][j - 1] + 1;
+        int rows = endB - start, cols = endA - start;
+        if ((long) rows * cols > 4_000_000L) {
+            for (int i = start; i < endB; i++)
+                result.add(new DiffLine(DiffLineType.REMOVED, before[i], i + 1, null));
+            for (int j = start; j < endA; j++)
+                result.add(new DiffLine(DiffLineType.ADDED, after[j], null, j + 1));
+        } else {
+            int[][] dp = new int[rows + 1][cols + 1];
+            for (int i = rows - 1; i >= 0; i--) {
+                for (int j = cols - 1; j >= 0; j--) {
+                    dp[i][j] =
+                            before[start + i].equals(after[start + j])
+                                    ? dp[i + 1][j + 1] + 1
+                                    : Math.max(dp[i + 1][j], dp[i][j + 1]);
+                }
+            }
+            int i = 0, j = 0;
+            while (i < rows || j < cols) {
+                if (i < rows && j < cols && before[start + i].equals(after[start + j])) {
+                    result.add(
+                            new DiffLine(
+                                    DiffLineType.CONTEXT,
+                                    before[start + i],
+                                    start + i + 1,
+                                    start + j + 1));
+                    i++;
+                    j++;
+                } else if (i < rows && (j == cols || dp[i + 1][j] >= dp[i][j + 1])) {
+                    result.add(
+                            new DiffLine(
+                                    DiffLineType.REMOVED, before[start + i], start + i + 1, null));
+                    i++;
                 } else {
-                    dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
+                    result.add(
+                            new DiffLine(
+                                    DiffLineType.ADDED, after[start + j], null, start + j + 1));
+                    j++;
                 }
             }
         }
 
-        return dp;
-    }
-
-    private void collectDiff(
-            String[] before, String[] after, int[][] lcs, int i, int j, List<DiffLine> result) {
-        if (i > 0 && j > 0 && before[i - 1].equals(after[j - 1])) {
-            collectDiff(before, after, lcs, i - 1, j - 1, result);
-            result.add(new DiffLine(DiffLineType.CONTEXT, before[i - 1], i, j));
-        } else if (j > 0 && (i == 0 || lcs[i][j - 1] >= lcs[i - 1][j])) {
-            collectDiff(before, after, lcs, i, j - 1, result);
-            result.add(new DiffLine(DiffLineType.ADDED, after[j - 1], null, j));
-        } else if (i > 0 && (j == 0 || lcs[i][j - 1] < lcs[i - 1][j])) {
-            collectDiff(before, after, lcs, i - 1, j, result);
-            result.add(new DiffLine(DiffLineType.REMOVED, before[i - 1], i, null));
+        for (int k = 0; k < m - endB; k++) {
+            result.add(
+                    new DiffLine(
+                            DiffLineType.CONTEXT, before[endB + k], endB + k + 1, endA + k + 1));
         }
+        return result;
     }
 
     private List<SideBySideLine> computeSideBySideDiff(String[] before, String[] after) {

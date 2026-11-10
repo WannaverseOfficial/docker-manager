@@ -11,6 +11,8 @@ import java.util.Optional;
 public interface RefreshTokenRepository extends JpaRepository<RefreshToken, String> {
     Optional<RefreshToken> findByTokenHash(String tokenHash);
 
+    boolean existsByFamilyAndRevokedFalseAndCreatedAtAfter(String family, Instant after);
+
     @Modifying
     @Query("UPDATE RefreshToken r SET r.revoked = true WHERE r.family = :family")
     void revokeFamily(@Param("family") String family);

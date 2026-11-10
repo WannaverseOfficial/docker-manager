@@ -33,7 +33,13 @@ public final class ResourceActions {
                                     "logs",
                                     "inspect",
                                     "processes",
-                                    "health")),
+                                    "health",
+                                    "update")),
+                    entry(
+                            Resource.STACKS,
+                            Set.of(
+                                    "list", "read", "create", "update", "delete", "deploy", "stop",
+                                    "logs")),
                     entry(
                             Resource.IMAGES,
                             Set.of("list", "read", "pull", "delete", "inspect", "cleanup")),
@@ -85,15 +91,17 @@ public final class ResourceActions {
                     entry(Resource.AUDIT_LOGS, Set.of("list", "read", "export")),
                     entry(
                             Resource.NOTIFICATIONS,
-                            Set.of("list", "read", "create", "update", "delete", "test")),
-                    entry(Resource.DOCKER_OPERATIONS, Set.of("prune", "system_info")),
+                            Set.of("list", "read", "create", "update", "delete", "test", "manage")),
+                    entry(
+                            Resource.DOCKER_OPERATIONS,
+                            Set.of("list", "read", "prune", "system_info")),
                     entry(
                             Resource.STATE_SNAPSHOTS,
                             Set.of("list", "read", "create", "delete", "restore")),
                     entry(
                             Resource.COMPOSE_DEPLOYMENTS,
                             Set.of("list", "read", "create", "update", "delete", "start", "stop")),
-                    entry(Resource.ROLLBACK, Set.of("execute", "list", "read")),
+                    entry(Resource.ROLLBACK, Set.of("execute", "list", "read", "validate")),
                     entry(
                             Resource.IMAGE_POLICIES,
                             Set.of("list", "read", "create", "update", "delete")),
@@ -102,7 +110,14 @@ public final class ResourceActions {
                             Set.of("list", "read", "create", "update", "delete", "test")),
                     entry(
                             Resource.INGRESS,
-                            Set.of("read", "enable", "disable", "reload", "configure")),
+                            Set.of(
+                                    "read",
+                                    "enable",
+                                    "disable",
+                                    "reload",
+                                    "configure",
+                                    "manage",
+                                    "audit")),
                     entry(
                             Resource.INGRESS_ROUTES,
                             Set.of("list", "read", "create", "update", "delete", "preview")),
@@ -110,7 +125,7 @@ public final class ResourceActions {
                             Resource.INGRESS_CERTIFICATES,
                             Set.of(
                                     "list", "read", "create", "delete", "upload", "request",
-                                    "renew")),
+                                    "renew", "manage")),
                     entry(
                             Resource.TEMPLATES,
                             Set.of("list", "read", "create", "update", "delete", "deploy")),
@@ -126,7 +141,14 @@ public final class ResourceActions {
                                     "duplicate")),
                     entry(
                             Resource.PIPELINE_EXECUTIONS,
-                            Set.of("list", "read", "cancel", "logs", "stream_logs", "artifacts")),
+                            Set.of(
+                                    "list",
+                                    "read",
+                                    "cancel",
+                                    "logs",
+                                    "stream_logs",
+                                    "artifacts",
+                                    "trigger")),
                     entry(
                             Resource.DEPLOYMENT_ENVIRONMENTS,
                             Set.of(

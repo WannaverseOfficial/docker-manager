@@ -238,8 +238,123 @@ public class DockerAPI {
         return output.toString();
     }
 
+    /** Output and exit code of a command run inside a container. */
+    public record ExecResult(int exitCode, String output) {
+        public boolean ok() {
+            return exitCode == 0;
+        }
+    }
+
+    /**
+     * Runs a command in a container and returns its exit code as well as its output. (The plain
+     * {@link #execCommand} only returns output, so failures such as an invalid nginx config went
+     * unnoticed.)
+     */
+    public ExecResult exec(String containerId, String... command) {
+        ExecCreateCmdResponse execCreate =
+                dockerClient
+                        .execCreateCmd(containerId)
+                        .withAttachStdout(true)
+                        .withAttachStderr(true)
+                        .withCmd(command)
+                        .exec();
+
+        StringBuilder output = new StringBuilder();
+        try {
+            dockerClient
+                    .execStartCmd(execCreate.getId())
+                    .exec(
+                            new ResultCallback.Adapter<Frame>() {
+                                @Override
+                                public void onNext(Frame frame) {
+                                    output.append(
+                                            new String(
+                                                    frame.getPayload(),
+                                                    java.nio.charset.StandardCharsets.UTF_8));
+                                }
+                            })
+                    .awaitCompletion(120, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+
+        Long exit = dockerClient.inspectExecCmd(execCreate.getId()).exec().getExitCodeLong();
+        return new ExecResult(exit == null ? -1 : exit.intValue(), output.toString());
+    }
+
+    /**
+     * Writes files into a container (running or stopped) through the archive API, so contents never
+     * pass through a shell command line. Keys are absolute paths inside the container. Missing
+     * parent directories are created.
+     */
+    public void putFiles(String containerId, Map<String, byte[]> files, int mode) {
+        java.io.ByteArrayOutputStream buffer = new java.io.ByteArrayOutputStream();
+        try (var tar =
+                new org.apache.commons.compress.archivers.tar.TarArchiveOutputStream(buffer)) {
+            tar.setLongFileMode(
+                    org.apache.commons.compress.archivers.tar.TarArchiveOutputStream
+                            .LONGFILE_POSIX);
+            java.util.Set<String> dirs = new java.util.TreeSet<>();
+            for (String path : files.keySet()) {
+                String rel = path.replaceFirst("^/+", "");
+                int idx = rel.indexOf('/');
+                while (idx > 0) {
+                    dirs.add(rel.substring(0, idx + 1));
+                    idx = rel.indexOf('/', idx + 1);
+                }
+            }
+            for (String dir : dirs) {
+                var entry = new org.apache.commons.compress.archivers.tar.TarArchiveEntry(dir);
+                entry.setMode(040755);
+                tar.putArchiveEntry(entry);
+                tar.closeArchiveEntry();
+            }
+            for (var file : files.entrySet()) {
+                String rel = file.getKey().replaceFirst("^/+", "");
+                var entry = new org.apache.commons.compress.archivers.tar.TarArchiveEntry(rel);
+                entry.setSize(file.getValue().length);
+                entry.setMode(0100000 | mode);
+                tar.putArchiveEntry(entry);
+                tar.write(file.getValue());
+                tar.closeArchiveEntry();
+            }
+            tar.finish();
+        } catch (IOException e) {
+            throw new IllegalStateException("Could not build archive: " + e.getMessage(), e);
+        }
+
+        dockerClient
+                .copyArchiveToContainerCmd(containerId)
+                .withRemotePath("/")
+                .withTarInputStream(new java.io.ByteArrayInputStream(buffer.toByteArray()))
+                .exec();
+    }
+
+    public long pruneBuildCache() {
+        Long reclaimed = dockerClient.pruneCmd(PruneType.BUILD).exec().getSpaceReclaimed();
+        return reclaimed == null ? 0 : reclaimed;
+    }
+
+    public void pruneNetworks() {
+        dockerClient.pruneCmd(PruneType.NETWORKS).exec();
+    }
+
+    public List<InspectVolumeResponse> listUnusedVolumes() {
+        ListVolumesResponse response =
+                dockerClient.listVolumesCmd().withDanglingFilter(true).exec();
+        return response.getVolumes() == null ? List.of() : response.getVolumes();
+    }
+
+    public DockerClient client() {
+        return dockerClient;
+    }
+
+    /**
+     * Top-level images, as `docker images` shows them. (This used to pass showAll, which also
+     * returns intermediate build layers and inflated the image count.)
+     */
     public List<Image> listImages() {
-        return dockerClient.listImagesCmd().withShowAll(true).exec();
+        return dockerClient.listImagesCmd().exec();
     }
 
     public List<Image> listDanglingImages() {

@@ -110,7 +110,7 @@ public class TemplateController {
     }
 
     @PostMapping("/reseed")
-    @RequirePermission(resource = Resource.TEMPLATES, action = "admin")
+    @com.wannaverse.security.AdminOnly
     public ResponseEntity<Map<String, Object>> reseedTemplates() {
         int count = seederService.reseedTemplates();
         return ResponseEntity.ok(Map.of("message", "System templates reseeded", "count", count));

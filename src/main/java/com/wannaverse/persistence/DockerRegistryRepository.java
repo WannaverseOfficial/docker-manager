@@ -25,9 +25,6 @@ public interface DockerRegistryRepository extends JpaRepository<DockerRegistry, 
 
     boolean existsByUrl(String url);
 
-    @Query("SELECT r FROM DockerRegistry r WHERE r.url LIKE %:urlPart% AND r.enabled = true")
-    List<DockerRegistry> findByUrlContaining(String urlPart);
-
     @Modifying
     @Query("UPDATE DockerRegistry r SET r.isDefault = false WHERE r.isDefault = true")
     void clearDefaultRegistry();

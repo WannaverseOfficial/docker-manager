@@ -22,9 +22,13 @@ import java.util.Map;
 public class ContainerHealthController {
 
     private final ContainerHealthEventRepository eventRepository;
+    private final com.wannaverse.persistence.ContainerMonitorStateRepository stateRepository;
 
-    public ContainerHealthController(ContainerHealthEventRepository eventRepository) {
+    public ContainerHealthController(
+            ContainerHealthEventRepository eventRepository,
+            com.wannaverse.persistence.ContainerMonitorStateRepository stateRepository) {
         this.eventRepository = eventRepository;
+        this.stateRepository = stateRepository;
     }
 
     @GetMapping("/active")
@@ -110,6 +114,21 @@ public class ContainerHealthController {
                         event -> {
                             event.resolve();
                             eventRepository.save(event);
+                            // A health check that is still failing would otherwise be reported
+                            // again on the next check, a minute later.
+                            if (event.getEventType()
+                                    == ContainerHealthEvent.EventType.HEALTH_UNHEALTHY) {
+                                stateRepository
+                                        .findByDockerHostIdAndContainerId(
+                                                event.getDockerHost().getId(),
+                                                event.getContainerId())
+                                        .ifPresent(
+                                                st -> {
+                                                    st.setHealthAcknowledgedAt(
+                                                            System.currentTimeMillis());
+                                                    stateRepository.save(st);
+                                                });
+                            }
                             return ResponseEntity.ok(
                                     ContainerHealthEventResponse.fromEntity(event));
                         })

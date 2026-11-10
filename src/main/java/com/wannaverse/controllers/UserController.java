@@ -7,6 +7,7 @@ import com.wannaverse.dto.PermissionResponse;
 import com.wannaverse.dto.UpdateUserRequest;
 import com.wannaverse.dto.UserResponse;
 import com.wannaverse.persistence.Resource;
+import com.wannaverse.security.AdminOnly;
 import com.wannaverse.security.Auditable;
 import com.wannaverse.security.RequirePermission;
 import com.wannaverse.service.PermissionService;
@@ -22,6 +23,7 @@ import java.util.List;
 import java.util.Map;
 
 @RestController
+@AdminOnly
 @RequestMapping("/api/users")
 public class UserController {
 
@@ -37,6 +39,15 @@ public class UserController {
     @RequirePermission(resource = Resource.USERS, action = "list")
     public ResponseEntity<List<UserResponse>> listUsers() {
         return ResponseEntity.ok(userService.listUsers());
+    }
+
+    /** Every resource and the actions that can be granted on it, for the permission editor. */
+    @GetMapping("/permission-catalog")
+    public ResponseEntity<java.util.Map<String, java.util.List<String>>> permissionCatalog() {
+        java.util.Map<String, java.util.List<String>> out = new java.util.TreeMap<>();
+        com.wannaverse.security.ResourceActions.ACTIONS.forEach(
+                (r, actions) -> out.put(r.name(), actions.stream().sorted().toList()));
+        return ResponseEntity.ok(out);
     }
 
     @GetMapping("/{id}")

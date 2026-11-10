@@ -30,6 +30,7 @@ public class GitController {
     private final BuildService buildService;
     private final PollingService pollingService;
     private final DriftDetectionService driftDetectionService;
+    private final ContainerSpecService specService;
     private final String baseUrl;
 
     public GitController(
@@ -41,7 +42,9 @@ public class GitController {
             BuildService buildService,
             PollingService pollingService,
             DriftDetectionService driftDetectionService,
+            ContainerSpecService specService,
             @Value("${app.base-url}") String baseUrl) {
+        this.specService = specService;
         this.gitRepoRepository = gitRepoRepository;
         this.jobRepository = jobRepository;
         this.hostRepository = hostRepository;
@@ -57,9 +60,7 @@ public class GitController {
     @RequirePermission(resource = Resource.GIT_REPOS, action = "list")
     public ResponseEntity<List<GitRepositoryResponse>> getAllRepositories() {
         List<GitRepositoryResponse> responses =
-                gitRepoRepository.findAll().stream()
-                        .map(repo -> GitRepositoryResponse.fromEntity(repo, baseUrl))
-                        .toList();
+                gitRepoRepository.findAll().stream().map(repo -> view(repo)).toList();
         return ResponseEntity.ok(responses);
     }
 
@@ -68,7 +69,7 @@ public class GitController {
     public ResponseEntity<GitRepositoryResponse> getRepository(@PathVariable String id) {
         return gitRepoRepository
                 .findById(id)
-                .map(repo -> ResponseEntity.ok(GitRepositoryResponse.fromEntity(repo, baseUrl)))
+                .map(repo -> ResponseEntity.ok(view(repo)))
                 .orElse(ResponseEntity.notFound().build());
     }
 
@@ -78,12 +79,13 @@ public class GitController {
             @PathVariable String hostId) {
         List<GitRepositoryResponse> responses =
                 gitRepoRepository.findByDockerHostId(hostId).stream()
-                        .map(repo -> GitRepositoryResponse.fromEntity(repo, baseUrl))
+                        .map(repo -> view(repo))
                         .toList();
         return ResponseEntity.ok(responses);
     }
 
     @PostMapping("/repositories")
+    @com.wannaverse.security.AdminOnly
     @RequirePermission(resource = Resource.GIT_REPOS, action = "create")
     public ResponseEntity<GitRepositoryResponse> createRepository(
             @RequestBody CreateGitRepositoryRequest request) {
@@ -95,37 +97,62 @@ public class GitController {
                                         new ResponseStatusException(
                                                 HttpStatus.NOT_FOUND, "Docker host not found"));
 
+        if (request.getName() == null || request.getName().isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Enter a name");
+        }
+        GitService.validateUrl(request.getRepositoryUrl());
+        validateBranch(request.getBranch());
+        validatePaths(request.getDockerfilePath(), request.getComposePath());
+        if (request.getDeploymentType() == null) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST, "Choose how to deploy: Dockerfile or Docker Compose");
+        }
+        GitRepository.AuthType authType =
+                request.getAuthType() == null ? GitRepository.AuthType.NONE : request.getAuthType();
+        if (authType == GitRepository.AuthType.PAT && isBlank(request.getToken())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Enter the access token");
+        }
+        if (authType == GitRepository.AuthType.SSH_KEY && isBlank(request.getSshKey())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Paste the private SSH key");
+        }
+        if (request.getContainerSpec() != null) {
+            validateSpec(request.getContainerSpec());
+        }
+
         GitRepository repo = new GitRepository();
-        repo.setName(request.getName());
-        repo.setRepositoryUrl(request.getRepositoryUrl());
-        repo.setBranch(request.getBranch() != null ? request.getBranch() : "main");
-        repo.setAuthType(request.getAuthType());
+        repo.setName(request.getName().trim());
+        repo.setRepositoryUrl(request.getRepositoryUrl().trim());
+        repo.setBranch(isBlank(request.getBranch()) ? "main" : request.getBranch().trim());
+        repo.setAuthType(authType);
+        repo.setTokenUsername(blankToNull(request.getTokenUsername()));
         repo.setDeploymentType(request.getDeploymentType());
-        repo.setDockerfilePath(request.getDockerfilePath());
-        repo.setComposePath(request.getComposePath());
-        repo.setImageName(request.getImageName());
+        repo.setDockerfilePath(blankToNull(request.getDockerfilePath()));
+        repo.setComposePath(blankToNull(request.getComposePath()));
+        repo.setImageName(blankToNull(request.getImageName()));
+        repo.setRunContainer(request.getRunContainer() == null || request.getRunContainer());
+        repo.setContainerSpecJson(GitRepositoryResponse.writeSpec(request.getContainerSpec()));
         repo.setDockerHost(host);
         repo.setPollingEnabled(request.isPollingEnabled());
         repo.setPollingIntervalSeconds(
-                request.getPollingIntervalSeconds() > 0
+                request.getPollingIntervalSeconds() >= 60
                         ? request.getPollingIntervalSeconds()
                         : 300);
         repo.setWebhookEnabled(request.isWebhookEnabled());
         repo.setWebhookSecret(encryptionService.generateWebhookSecret());
 
-        if (request.getToken() != null && !request.getToken().isEmpty()) {
-            repo.setEncryptedToken(encryptionService.encrypt(request.getToken()));
+        if (authType == GitRepository.AuthType.PAT) {
+            repo.setEncryptedToken(encryptionService.encrypt(request.getToken().trim()));
         }
-        if (request.getSshKey() != null && !request.getSshKey().isEmpty()) {
+        if (authType == GitRepository.AuthType.SSH_KEY) {
             repo.setEncryptedSshKey(encryptionService.encrypt(request.getSshKey()));
         }
 
         repo = gitRepoRepository.save(repo);
-        return ResponseEntity.status(HttpStatus.CREATED)
-                .body(GitRepositoryResponse.fromEntity(repo, baseUrl));
+        return ResponseEntity.status(HttpStatus.CREATED).body(view(repo));
     }
 
     @PutMapping("/repositories/{id}")
+    @com.wannaverse.security.AdminOnly
     @RequirePermission(resource = Resource.GIT_REPOS, action = "update")
     public ResponseEntity<GitRepositoryResponse> updateRepository(
             @PathVariable String id, @RequestBody UpdateGitRepositoryRequest request) {
@@ -137,33 +164,60 @@ public class GitController {
                                         new ResponseStatusException(
                                                 HttpStatus.NOT_FOUND, "Repository not found"));
 
-        if (request.getName() != null) repo.setName(request.getName());
-        if (request.getRepositoryUrl() != null) repo.setRepositoryUrl(request.getRepositoryUrl());
-        if (request.getBranch() != null) repo.setBranch(request.getBranch());
+        if (!isBlank(request.getName())) repo.setName(request.getName().trim());
+        if (request.getRepositoryUrl() != null) {
+            GitService.validateUrl(request.getRepositoryUrl());
+            repo.setRepositoryUrl(request.getRepositoryUrl().trim());
+        }
+        if (!isBlank(request.getBranch())) {
+            validateBranch(request.getBranch());
+            repo.setBranch(request.getBranch().trim());
+        }
+        validatePaths(request.getDockerfilePath(), request.getComposePath());
         if (request.getAuthType() != null) repo.setAuthType(request.getAuthType());
+        if (request.getTokenUsername() != null) {
+            repo.setTokenUsername(blankToNull(request.getTokenUsername()));
+        }
         if (request.getDeploymentType() != null)
             repo.setDeploymentType(request.getDeploymentType());
         if (request.getDockerfilePath() != null)
-            repo.setDockerfilePath(request.getDockerfilePath());
-        if (request.getComposePath() != null) repo.setComposePath(request.getComposePath());
-        if (request.getImageName() != null) repo.setImageName(request.getImageName());
-        repo.setPollingEnabled(request.isPollingEnabled());
-        if (request.getPollingIntervalSeconds() > 0)
-            repo.setPollingIntervalSeconds(request.getPollingIntervalSeconds());
-        repo.setWebhookEnabled(request.isWebhookEnabled());
-
-        if (request.getToken() != null && !request.getToken().isEmpty()) {
-            repo.setEncryptedToken(encryptionService.encrypt(request.getToken()));
+            repo.setDockerfilePath(blankToNull(request.getDockerfilePath()));
+        if (request.getComposePath() != null)
+            repo.setComposePath(blankToNull(request.getComposePath()));
+        if (request.getImageName() != null) repo.setImageName(blankToNull(request.getImageName()));
+        if (request.getRunContainer() != null) repo.setRunContainer(request.getRunContainer());
+        if (request.getContainerSpec() != null) {
+            validateSpec(request.getContainerSpec());
+            repo.setContainerSpecJson(GitRepositoryResponse.writeSpec(request.getContainerSpec()));
         }
-        if (request.getSshKey() != null && !request.getSshKey().isEmpty()) {
+        if (request.getPollingEnabled() != null)
+            repo.setPollingEnabled(request.getPollingEnabled());
+        if (request.getPollingIntervalSeconds() != null
+                && request.getPollingIntervalSeconds() >= 60)
+            repo.setPollingIntervalSeconds(request.getPollingIntervalSeconds());
+        if (request.getWebhookEnabled() != null)
+            repo.setWebhookEnabled(request.getWebhookEnabled());
+
+        if (!isBlank(request.getToken())) {
+            repo.setEncryptedToken(encryptionService.encrypt(request.getToken().trim()));
+        }
+        if (!isBlank(request.getSshKey())) {
             repo.setEncryptedSshKey(encryptionService.encrypt(request.getSshKey()));
+        }
+        if (repo.getAuthType() == GitRepository.AuthType.PAT && repo.getEncryptedToken() == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Enter the access token");
+        }
+        if (repo.getAuthType() == GitRepository.AuthType.SSH_KEY
+                && repo.getEncryptedSshKey() == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Paste the private SSH key");
         }
 
         repo = gitRepoRepository.save(repo);
-        return ResponseEntity.ok(GitRepositoryResponse.fromEntity(repo, baseUrl));
+        return ResponseEntity.ok(view(repo));
     }
 
     @DeleteMapping("/repositories/{id}")
+    @com.wannaverse.security.AdminOnly
     @RequirePermission(resource = Resource.GIT_REPOS, action = "delete")
     public ResponseEntity<Void> deleteRepository(@PathVariable String id) {
         gitRepoRepository
@@ -192,7 +246,7 @@ public class GitController {
 
         repo.setWebhookSecret(encryptionService.generateWebhookSecret());
         repo = gitRepoRepository.save(repo);
-        return ResponseEntity.ok(GitRepositoryResponse.fromEntity(repo, baseUrl));
+        return ResponseEntity.ok(view(repo));
     }
 
     @PostMapping("/repositories/{id}/deploy")
@@ -212,6 +266,11 @@ public class GitController {
         job.setGitRepository(repo);
         job.setStatus(JobStatus.PENDING);
         job.setTriggerType(TriggerType.MANUAL);
+        if (request != null
+                && request.getCommitSha() != null
+                && !request.getCommitSha().matches("^[0-9a-fA-F]{7,64}$")) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid commit SHA");
+        }
         if (request != null && request.getCommitSha() != null) {
             job.setCommitSha(request.getCommitSha());
         }
@@ -242,8 +301,9 @@ public class GitController {
     @RequirePermission(resource = Resource.DEPLOYMENTS, action = "list")
     public ResponseEntity<List<DeploymentJobResponse>> getAllJobs() {
         List<DeploymentJobResponse> responses =
-                jobRepository.findAllByOrderByCreatedAtDesc().stream()
+                jobRepository.findTop200ByOrderByCreatedAtDesc().stream()
                         .map(DeploymentJobResponse::fromEntity)
+                        .peek(j -> j.setLogs(null))
                         .toList();
         return ResponseEntity.ok(responses);
     }
@@ -324,6 +384,9 @@ public class GitController {
             job.setStatus(JobStatus.CANCELLED);
             job.setCompletedAt(System.currentTimeMillis());
             job = jobRepository.save(job);
+        } else if (job.getStatus() == JobStatus.RUNNING) {
+            // Stops at the next step boundary (or immediately while an image is building).
+            buildService.cancel(jobId);
         }
 
         return ResponseEntity.ok(DeploymentJobResponse.fromEntity(job));
@@ -362,34 +425,56 @@ public class GitController {
     @RequirePermission(resource = Resource.GIT_REPOS, action = "read")
     public ResponseEntity<GitRepositoryResponse> checkDrift(@PathVariable String id) {
         GitRepository repo = driftDetectionService.checkGitDriftById(id);
-        return ResponseEntity.ok(GitRepositoryResponse.fromEntity(repo, baseUrl));
+        return ResponseEntity.ok(view(repo));
     }
 
+    /**
+     * Push webhook for GitHub, GitLab, Gitea/Forgejo and other services that send a JSON body with
+     * "ref" and "after". The secret in the URL identifies the repository. When the sender also
+     * signs the request (GitHub's X-Hub-Signature-256, Gitea's X-Gitea-Signature or GitLab's
+     * X-Gitlab-Token), the signature must match the same secret.
+     */
     @PostMapping("/webhook/{secret}")
     public ResponseEntity<Map<String, String>> handleWebhook(
             @PathVariable String secret,
-            @RequestBody GitHubWebhookPayload payload,
-            @RequestHeader(value = "X-GitHub-Event", required = false) String event) {
-
-        if (!"push".equals(event)) {
-            return ResponseEntity.ok(Map.of("status", "ignored", "reason", "not a push event"));
-        }
-
+            @RequestBody(required = false) String body,
+            @RequestHeader Map<String, String> headers) {
         GitRepository repo =
                 gitRepoRepository
                         .findByWebhookSecret(secret)
                         .orElseThrow(
                                 () ->
                                         new ResponseStatusException(
-                                                HttpStatus.NOT_FOUND, "Invalid webhook secret"));
+                                                HttpStatus.NOT_FOUND, "Unknown webhook"));
+
+        String payloadText = body == null ? "" : body;
+        if (!signatureValid(repo.getWebhookSecret(), payloadText, headers)) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid webhook signature");
+        }
+
+        String event =
+                first(headers, "x-github-event", "x-gitea-event", "x-gogs-event", "x-gitlab-event");
+        if (event != null && (event.equals("ping") || event.equals("System Hook"))) {
+            return ResponseEntity.ok(Map.of("status", "ok"));
+        }
+        if (event != null && !event.equals("push") && !event.equals("Push Hook")) {
+            return ResponseEntity.ok(Map.of("status", "ignored", "reason", "not a push event"));
+        }
 
         if (!repo.isWebhookEnabled()) {
             return ResponseEntity.ok(
                     Map.of("status", "ignored", "reason", "webhook disabled for this repository"));
         }
 
+        GitHubWebhookPayload payload;
+        try {
+            payload = WEBHOOK_JSON.readValue(payloadText, GitHubWebhookPayload.class);
+        } catch (Exception e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid JSON payload");
+        }
+
         String branch = payload.getBranch();
-        if (!repo.getBranch().equals(branch)) {
+        if (branch == null || !repo.getBranch().equals(branch)) {
             return ResponseEntity.ok(
                     Map.of(
                             "status",
@@ -397,16 +482,136 @@ public class GitController {
                             "reason",
                             "branch mismatch: expected " + repo.getBranch() + ", got " + branch));
         }
+        String after = payload.getAfter();
+        if (after != null && after.matches("^0+$")) {
+            return ResponseEntity.ok(Map.of("status", "ignored", "reason", "branch deleted"));
+        }
 
         DeploymentJob job = new DeploymentJob();
         job.setGitRepository(repo);
         job.setStatus(JobStatus.PENDING);
         job.setTriggerType(TriggerType.WEBHOOK);
-        job.setCommitSha(payload.getAfter());
+        // Only trust the commit from a signed body. Anyone who only knows the URL could otherwise
+        // pin an old commit; without a signature, deploy the branch's current head instead.
+        boolean signed = bodyIsSigned(headers);
+        job.setCommitSha(
+                signed && after != null && after.matches("^[0-9a-f]{7,64}$") ? after : null);
         job = jobRepository.save(job);
 
         buildService.executeDeployment(job);
 
         return ResponseEntity.ok(Map.of("status", "triggered", "jobId", job.getId()));
+    }
+
+    /** The webhook URL contains its secret, so only admins (who manage repositories) see it. */
+    private GitRepositoryResponse view(GitRepository repo) {
+        GitRepositoryResponse response = GitRepositoryResponse.fromEntity(repo, baseUrl);
+        var ctx = com.wannaverse.security.SecurityContextHolder.getContext();
+        if (ctx == null || !ctx.isAdmin()) response.setWebhookUrl(null);
+        return response;
+    }
+
+    /** True when the request carries an HMAC of the body (GitHub, Gitea, Gogs). */
+    static boolean bodyIsSigned(Map<String, String> headers) {
+        return first(headers, "x-hub-signature-256", "x-gitea-signature", "x-gogs-signature")
+                != null;
+    }
+
+    private static final com.fasterxml.jackson.databind.ObjectMapper WEBHOOK_JSON =
+            new com.fasterxml.jackson.databind.ObjectMapper()
+                    .configure(
+                            com.fasterxml.jackson.databind.DeserializationFeature
+                                    .FAIL_ON_UNKNOWN_PROPERTIES,
+                            false);
+
+    static boolean signatureValid(String secret, String body, Map<String, String> headers) {
+        String github = first(headers, "x-hub-signature-256");
+        String gitea = first(headers, "x-gitea-signature", "x-gogs-signature");
+        String gitlab = first(headers, "x-gitlab-token");
+        if (github != null) {
+            return constantTimeEquals(github, "sha256=" + hmacHex(secret, body));
+        }
+        if (gitea != null) {
+            return constantTimeEquals(gitea, hmacHex(secret, body));
+        }
+        if (gitlab != null) {
+            return constantTimeEquals(gitlab, secret);
+        }
+        return true; // Unsigned: the secret URL is the credential.
+    }
+
+    private static String hmacHex(String secret, String body) {
+        try {
+            javax.crypto.Mac mac = javax.crypto.Mac.getInstance("HmacSHA256");
+            mac.init(
+                    new javax.crypto.spec.SecretKeySpec(
+                            secret.getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                            "HmacSHA256"));
+            return java.util.HexFormat.of()
+                    .formatHex(mac.doFinal(body.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    private static boolean constantTimeEquals(String a, String b) {
+        return java.security.MessageDigest.isEqual(
+                a.trim()
+                        .toLowerCase(java.util.Locale.ROOT)
+                        .getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                b.toLowerCase(java.util.Locale.ROOT)
+                        .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    }
+
+    static String first(Map<String, String> headers, String... names) {
+        for (String name : names) {
+            for (var e : headers.entrySet()) {
+                if (e.getKey().equalsIgnoreCase(name)) return e.getValue();
+            }
+        }
+        return null;
+    }
+
+    private static final java.util.regex.Pattern BRANCH =
+            java.util.regex.Pattern.compile("^[A-Za-z0-9._/-]{1,200}$");
+
+    private static void validateBranch(String branch) {
+        if (branch == null || branch.isBlank()) return;
+        String b = branch.trim();
+        if (!BRANCH.matcher(b).matches() || b.contains("..") || b.startsWith("-")) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid branch name");
+        }
+    }
+
+    private static void validatePaths(String... paths) {
+        for (String p : paths) {
+            if (p == null || p.isBlank()) continue;
+            String t = p.trim().replace('\\', '/');
+            if (t.startsWith("/") || t.equals("..") || t.startsWith("../") || t.contains("/../")) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST,
+                        "File paths must be relative to the repository root");
+            }
+        }
+    }
+
+    private void validateSpec(com.wannaverse.dto.ContainerSpec spec) {
+        // The image is supplied by the build; validate the rest with a placeholder.
+        String image = spec.getImage();
+        spec.setImage("placeholder:latest");
+        try {
+            var ctx = com.wannaverse.security.SecurityContextHolder.getContext();
+            specService.validateSettings(spec, ctx != null && ctx.isAdmin());
+        } finally {
+            spec.setImage(image);
+        }
+    }
+
+    private static boolean isBlank(String s) {
+        return s == null || s.isBlank();
+    }
+
+    private static String blankToNull(String s) {
+        return isBlank(s) ? null : s.trim();
     }
 }

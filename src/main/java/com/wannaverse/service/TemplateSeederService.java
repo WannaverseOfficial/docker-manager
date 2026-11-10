@@ -31,20 +31,42 @@ public class TemplateSeederService {
         this.objectMapper = objectMapper;
     }
 
+    /**
+     * Brings the system templates in line with the bundled file on every start: existing ones are
+     * updated in place (keeping their IDs), new ones are added and retired ones removed. (It used
+     * to seed only into an empty table, so fixes to the bundled templates never reached existing
+     * installs.) User templates are never touched.
+     */
     @PostConstruct
     public void seedTemplates() {
-        long existingCount = templateRepository.countBySystemTrue();
-        if (existingCount > 0) {
-            log.info("System templates already exist ({}), skipping seed", existingCount);
-            return;
-        }
-
         try {
-            List<ContainerTemplate> templates = loadTemplatesFromJson();
-            if (!templates.isEmpty()) {
-                templateRepository.saveAll(templates);
-                log.info("Seeded {} system templates", templates.size());
+            List<ContainerTemplate> bundled = loadTemplatesFromJson();
+            if (bundled.isEmpty()) return;
+            java.util.Map<String, ContainerTemplate> existing = new java.util.HashMap<>();
+            for (ContainerTemplate t : templateRepository.findBySystemTrue()) {
+                existing.putIfAbsent(t.getName(), t);
             }
+            java.util.Set<String> names = new java.util.HashSet<>();
+            List<ContainerTemplate> toSave = new ArrayList<>();
+            for (ContainerTemplate t : bundled) {
+                names.add(t.getName());
+                ContainerTemplate current = existing.get(t.getName());
+                if (current != null) {
+                    t.setId(current.getId());
+                    t.setCreatedAt(current.getCreatedAt());
+                }
+                toSave.add(t);
+            }
+            templateRepository.saveAll(toSave);
+            List<ContainerTemplate> retired =
+                    templateRepository.findBySystemTrue().stream()
+                            .filter(t -> !names.contains(t.getName()))
+                            .toList();
+            templateRepository.deleteAll(retired);
+            log.info(
+                    "System templates up to date ({} bundled, {} retired)",
+                    toSave.size(),
+                    retired.size());
         } catch (Exception e) {
             log.error("Failed to seed system templates: {}", e.getMessage(), e);
         }

@@ -18,25 +18,33 @@ import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 @Service
 public class AuditService {
 
     private static final Logger log = LoggerFactory.getLogger(AuditService.class);
-    private static final Set<String> SENSITIVE_FIELDS =
-            Set.of(
+
+    /**
+     * A request field is redacted when its name contains any of these. Matching by substring covers
+     * camelCase names (sshKey, privateKeyPem, encryptedToken) and anything that can carry
+     * credentials (environment variables, compose files and .env content, exec commands).
+     */
+    private static final List<String> SENSITIVE_NAME_PARTS =
+            List.of(
                     "password",
-                    "token",
-                    "sshKey",
-                    "encryptedToken",
-                    "encryptedSshKey",
-                    "passwordHash",
+                    "passwd",
                     "secret",
-                    "apiKey",
-                    "accessToken",
-                    "refreshToken");
+                    "token",
+                    "key",
+                    "credential",
+                    "auth",
+                    "env",
+                    "compose",
+                    "command",
+                    "pem",
+                    "cert");
 
     private final AuditLogRepository auditLogRepository;
     private final ObjectMapper objectMapper;
@@ -118,16 +126,8 @@ public class AuditService {
             if (attributes != null) {
                 HttpServletRequest request = attributes.getRequest();
 
-                String xForwardedFor = request.getHeader("X-Forwarded-For");
-                if (xForwardedFor != null && !xForwardedFor.isEmpty()) {
-                    return xForwardedFor.split(",")[0].trim();
-                }
-
-                String xRealIp = request.getHeader("X-Real-IP");
-                if (xRealIp != null && !xRealIp.isEmpty()) {
-                    return xRealIp;
-                }
-
+                // Proxy headers are already applied for trusted proxies by
+                // server.forward-headers-strategy; reading them directly is spoofable.
                 return request.getRemoteAddr();
             }
         } catch (Exception e) {
@@ -136,22 +136,34 @@ public class AuditService {
         return null;
     }
 
+    static boolean isSensitive(String key) {
+        String k = key.toLowerCase(java.util.Locale.ROOT);
+        for (String part : SENSITIVE_NAME_PARTS) {
+            if (k.contains(part)) return true;
+        }
+        return false;
+    }
+
     @SuppressWarnings("unchecked")
     private Map<String, Object> sanitizeDetails(Map<String, Object> details) {
         Map<String, Object> sanitized = new HashMap<>();
         for (Map.Entry<String, Object> entry : details.entrySet()) {
             String key = entry.getKey();
             Object value = entry.getValue();
-
-            if (SENSITIVE_FIELDS.contains(key.toLowerCase())) {
-                sanitized.put(key, "[REDACTED]");
-            } else if (value instanceof Map) {
-                sanitized.put(key, sanitizeDetails((Map<String, Object>) value));
-            } else {
-                sanitized.put(key, value);
-            }
+            sanitized.put(key, isSensitive(key) ? "[REDACTED]" : sanitizeValue(value));
         }
         return sanitized;
+    }
+
+    @SuppressWarnings("unchecked")
+    private Object sanitizeValue(Object value) {
+        if (value instanceof Map<?, ?> map) {
+            return sanitizeDetails((Map<String, Object>) map);
+        }
+        if (value instanceof List<?> list) {
+            return list.stream().map(this::sanitizeValue).toList();
+        }
+        return value;
     }
 
     private String truncate(String str, int maxLength) {

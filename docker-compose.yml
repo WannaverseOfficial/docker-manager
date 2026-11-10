@@ -1,35 +1,30 @@
 services:
   docker-manager:
     build: .
+    image: wannaverse/docker-manager:latest
     container_name: docker-manager
     restart: unless-stopped
     ports:
       - "8080:8080"
     volumes:
-      # Mount Docker socket for container management
+      # Lets Docker Manager control this host's Docker.
       - /var/run/docker.sock:/var/run/docker.sock
-      # Persist database
+      # Database, and the secrets generated on first start.
       - docker_manager_data:/app/database
-      # Persist git repositories
+      # Checked-out git repositories.
       - docker_manager_repos:/app/git-repos
+      # Compose stacks. Keep the same path on both sides: Docker resolves relative bind mounts
+      # in a stack's compose file (./data) on the host, so the folder must exist there too.
+      - /opt/docker-manager/stacks:/opt/docker-manager/stacks
     environment:
-      # Java options
-      - JAVA_OPTS=-Xms256m -Xmx512m
-      # Security - CHANGE THESE IN PRODUCTION
-      - JWT_ACCESS_SECRET=bI4pEE+5oVq9gkWyy/plIsRvaZ8ghj54access
-      - JWT_REFRESH_SECRET=bI4pEE+5oVq9gkWyy/plIsRvaZ8ghj54refresh
-      - ENCRYPTION_KEY=bI4pEE+5oVq9gkWyy/plIsRvaZ8ghj54
-      # Set to your server's public URL - also controls CORS allowed origins
+      # The address you open Docker Manager at. Used for webhook URLs and links in emails.
       - BASE_URL=http://localhost:8080
-      # Optional: Increase token expiration
-      # - JWT_ACCESS_EXP=900000
-      # - JWT_REFRESH_EXP=604800000
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
+      # Optional. Strong random secrets are generated on first start and kept in the data
+      # volume. To manage them yourself, set each to a random value of 32+ characters:
+      #   openssl rand -base64 48
+      # - JWT_ACCESS_SECRET=
+      # - JWT_REFRESH_SECRET=
+      # - ENCRYPTION_KEY=
 
 volumes:
   docker_manager_data:

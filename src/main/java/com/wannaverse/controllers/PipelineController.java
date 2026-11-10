@@ -1,5 +1,6 @@
 package com.wannaverse.controllers;
 
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.wannaverse.dto.PipelineExecutionResponse;
 import com.wannaverse.dto.PipelineRequest;
 import com.wannaverse.dto.PipelineResponse;
@@ -28,6 +29,8 @@ import java.util.stream.Collectors;
 @RestController
 @RequestMapping("/api/pipelines")
 public class PipelineController {
+    private static final com.fasterxml.jackson.databind.ObjectMapper WEBHOOK_JSON =
+            new com.fasterxml.jackson.databind.ObjectMapper();
 
     private final PipelineService pipelineService;
     private final PipelineExecutionService executionService;
@@ -61,15 +64,20 @@ public class PipelineController {
     }
 
     @PostMapping
+    @com.wannaverse.security.AdminOnly
     @RequirePermission(resource = Resource.PIPELINES, action = "create")
     public ResponseEntity<PipelineResponse> createPipeline(
             @RequestBody PipelineRequest request, Authentication authentication) {
-        String createdBy = authentication != null ? authentication.getName() : "system";
+        String createdBy =
+                java.util.Objects.requireNonNullElse(
+                        com.wannaverse.security.SecurityContextHolder.getCurrentUsername(),
+                        "system");
         PipelineResponse response = pipelineService.createPipeline(request, createdBy);
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }
 
     @PutMapping("/{id}")
+    @com.wannaverse.security.AdminOnly
     @RequirePermission(resource = Resource.PIPELINES, action = "update")
     public ResponseEntity<PipelineResponse> updatePipeline(
             @PathVariable String id, @RequestBody PipelineRequest request) {
@@ -77,6 +85,7 @@ public class PipelineController {
     }
 
     @DeleteMapping("/{id}")
+    @com.wannaverse.security.AdminOnly
     @RequirePermission(resource = Resource.PIPELINES, action = "delete")
     public ResponseEntity<Void> deletePipeline(@PathVariable String id) {
         pipelineService.deletePipeline(id);
@@ -84,18 +93,23 @@ public class PipelineController {
     }
 
     @PostMapping("/{id}/duplicate")
+    @com.wannaverse.security.AdminOnly
     @RequirePermission(resource = Resource.PIPELINES, action = "create")
     public ResponseEntity<PipelineResponse> duplicatePipeline(
             @PathVariable String id,
             @RequestBody(required = false) Map<String, String> body,
             Authentication authentication) {
         String newName = body != null ? body.get("name") : null;
-        String createdBy = authentication != null ? authentication.getName() : "system";
+        String createdBy =
+                java.util.Objects.requireNonNullElse(
+                        com.wannaverse.security.SecurityContextHolder.getCurrentUsername(),
+                        "system");
         PipelineResponse response = pipelineService.duplicatePipeline(id, newName, createdBy);
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }
 
     @PatchMapping("/{id}/enabled")
+    @com.wannaverse.security.AdminOnly
     @RequirePermission(resource = Resource.PIPELINES, action = "update")
     public ResponseEntity<PipelineResponse> togglePipelineEnabled(
             @PathVariable String id, @RequestBody Map<String, Boolean> body) {
@@ -111,7 +125,10 @@ public class PipelineController {
             Authentication authentication) {
         String commit = body != null ? body.get("commit") : null;
         String branch = body != null ? body.get("branch") : null;
-        String triggeredBy = authentication != null ? authentication.getName() : "system";
+        String triggeredBy =
+                java.util.Objects.requireNonNullElse(
+                        com.wannaverse.security.SecurityContextHolder.getCurrentUsername(),
+                        "system");
 
         PipelineExecution execution =
                 executionService.triggerExecution(
@@ -212,21 +229,39 @@ public class PipelineController {
         return emitter;
     }
 
+    /**
+     * Push webhook (GitHub, Gitea, Forgejo, GitLab). The secret in the URL identifies the pipeline;
+     * a signature, when sent, must match it. The pushed commit is only trusted from a signed body,
+     * otherwise the branch's latest commit runs.
+     */
     @PostMapping("/webhook/{secret}")
     public ResponseEntity<Map<String, String>> handleWebhook(
             @PathVariable String secret,
-            @RequestBody Map<String, Object> payload,
-            @RequestHeader(value = "X-GitHub-Event", required = false) String event) {
-
-        if (!"push".equals(event)) {
-            return ResponseEntity.ok(Map.of("status", "ignored", "reason", "not a push event"));
-        }
-
+            @RequestBody(required = false) String body,
+            @RequestHeader Map<String, String> headers) {
         Pipeline pipeline;
         try {
             pipeline = pipelineService.findByWebhookSecret(secret);
         } catch (Exception e) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Invalid webhook secret");
+        }
+        String payloadText = body == null ? "" : body;
+        if (!GitController.signatureValid(pipeline.getWebhookSecret(), payloadText, headers)) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid webhook signature");
+        }
+
+        String event =
+                GitController.first(
+                        headers,
+                        "x-github-event",
+                        "x-gitea-event",
+                        "x-gogs-event",
+                        "x-gitlab-event");
+        if (event != null && (event.equals("ping") || event.equals("System Hook"))) {
+            return ResponseEntity.ok(Map.of("status", "ok"));
+        }
+        if (event != null && !event.equals("push") && !event.equals("Push Hook")) {
+            return ResponseEntity.ok(Map.of("status", "ignored", "reason", "not a push event"));
         }
 
         if (!pipeline.isEnabled() || !pipeline.isWebhookEnabled()) {
@@ -234,7 +269,24 @@ public class PipelineController {
                     Map.of("status", "ignored", "reason", "pipeline or webhook disabled"));
         }
 
-        String commit = payload.get("after") != null ? payload.get("after").toString() : null;
+        Map<String, Object> payload;
+        try {
+            payload = WEBHOOK_JSON.readValue(payloadText, new TypeReference<>() {});
+        } catch (Exception e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid JSON payload");
+        }
+
+        Object afterValue = payload.get("after");
+        String after = afterValue != null ? afterValue.toString() : null;
+        if (after != null && after.matches("^0+$")) {
+            return ResponseEntity.ok(Map.of("status", "ignored", "reason", "branch deleted"));
+        }
+        String commit =
+                GitController.bodyIsSigned(headers)
+                                && after != null
+                                && after.matches("^[0-9a-f]{7,64}$")
+                        ? after
+                        : null;
         String ref = payload.get("ref") != null ? payload.get("ref").toString() : null;
         String branch = ref != null ? ref.replace("refs/heads/", "") : null;
 

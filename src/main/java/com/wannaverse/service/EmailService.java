@@ -12,7 +12,9 @@ import jakarta.mail.PasswordAuthentication;
 import jakarta.mail.Session;
 import jakarta.mail.Transport;
 import jakarta.mail.internet.InternetAddress;
+import jakarta.mail.internet.MimeBodyPart;
 import jakarta.mail.internet.MimeMessage;
+import jakarta.mail.internet.MimeMultipart;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -55,7 +57,7 @@ public class EmailService {
             String recipientEmail,
             String recipientUserId,
             String subject,
-            String htmlContent,
+            EmailTemplateService.Email content,
             NotificationEventType eventType,
             String relatedResourceId) {
 
@@ -78,7 +80,7 @@ public class EmailService {
             }
 
             SmtpConfiguration config = configOpt.get();
-            boolean success = doSendEmail(config, recipientEmail, subject, htmlContent);
+            boolean success = doSendEmail(config, recipientEmail, subject, content);
 
             if (success) {
                 emailLog.setStatus(EmailLog.EmailStatus.SENT);
@@ -100,7 +102,8 @@ public class EmailService {
         }
     }
 
-    public boolean sendEmailSync(String recipientEmail, String subject, String htmlContent) {
+    public boolean sendEmailSync(
+            String recipientEmail, String subject, EmailTemplateService.Email content) {
         try {
             Optional<SmtpConfiguration> configOpt = getActiveConfiguration();
             if (configOpt.isEmpty()) {
@@ -108,7 +111,7 @@ public class EmailService {
                 return false;
             }
 
-            return doSendEmail(configOpt.get(), recipientEmail, subject, htmlContent);
+            return doSendEmail(configOpt.get(), recipientEmail, subject, content);
 
         } catch (Exception e) {
             log.error("Failed to send email to {}: {}", recipientEmail, e.getMessage());
@@ -117,7 +120,10 @@ public class EmailService {
     }
 
     private boolean doSendEmail(
-            SmtpConfiguration config, String recipientEmail, String subject, String htmlContent) {
+            SmtpConfiguration config,
+            String recipientEmail,
+            String subject,
+            EmailTemplateService.Email content) {
         try {
             Session session = createMailSession(config);
 
@@ -131,8 +137,17 @@ public class EmailService {
             }
 
             message.setRecipients(Message.RecipientType.TO, InternetAddress.parse(recipientEmail));
-            message.setSubject(subject);
-            message.setContent(htmlContent, "text/html; charset=utf-8");
+            message.setSubject(subject, "UTF-8");
+            // Plain text first, HTML last: clients show the last part they can display, and
+            // anything that can't (or won't) render HTML shows readable text, not markup.
+            MimeBodyPart text = new MimeBodyPart();
+            text.setText(content.text(), "UTF-8", "plain");
+            MimeBodyPart html = new MimeBodyPart();
+            html.setText(content.html(), "UTF-8", "html");
+            MimeMultipart alternative = new MimeMultipart("alternative");
+            alternative.addBodyPart(text);
+            alternative.addBodyPart(html);
+            message.setContent(alternative);
 
             Transport.send(message);
 

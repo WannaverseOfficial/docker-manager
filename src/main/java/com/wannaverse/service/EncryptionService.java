@@ -20,9 +20,11 @@ public class EncryptionService {
 
     private final SecretKey secretKey;
     private final SecureRandom secureRandom;
+    private final byte[] derivationKey;
 
     public EncryptionService(@Value("${app.encryption.key}") String encryptionKey) {
         byte[] keyBytes = encryptionKey.getBytes(StandardCharsets.UTF_8);
+        this.derivationKey = keyBytes.clone();
         if (keyBytes.length < 32) {
             byte[] paddedKey = new byte[32];
             System.arraycopy(keyBytes, 0, paddedKey, 0, keyBytes.length);
@@ -34,6 +36,21 @@ public class EncryptionService {
         }
         this.secretKey = new SecretKeySpec(keyBytes, "AES");
         this.secureRandom = new SecureRandom();
+    }
+
+    /**
+     * A stable secret for one purpose (hex HMAC-SHA256 of {@code purpose} under the encryption
+     * key). The same purpose always gives the same value, and it reveals nothing about the key.
+     */
+    public String deriveKey(String purpose) {
+        try {
+            javax.crypto.Mac mac = javax.crypto.Mac.getInstance("HmacSHA256");
+            mac.init(new SecretKeySpec(derivationKey, "HmacSHA256"));
+            return java.util.HexFormat.of()
+                    .formatHex(mac.doFinal(purpose.getBytes(StandardCharsets.UTF_8)));
+        } catch (java.security.GeneralSecurityException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     public String encrypt(String plainText) {

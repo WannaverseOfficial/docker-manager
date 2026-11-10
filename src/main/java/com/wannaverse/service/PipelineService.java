@@ -100,17 +100,12 @@ public class PipelineService {
             pipeline.setGitRepository(gitRepo);
         }
 
-        // Create stages and steps
+        pipeline.setStages(new ArrayList<>());
+        pipeline = pipelineRepository.saveAndFlush(pipeline);
         if (request.getStages() != null) {
-            List<PipelineStage> stages = new ArrayList<>();
-            for (PipelineRequest.StageRequest stageReq : request.getStages()) {
-                PipelineStage stage = createStageFromRequest(stageReq, pipeline);
-                stages.add(stage);
-            }
-            pipeline.setStages(stages);
+            applyStages(pipeline, request.getStages());
+            pipeline = pipelineRepository.saveAndFlush(pipeline);
         }
-
-        pipeline = pipelineRepository.save(pipeline);
         log.info("Created pipeline: {} with id: {}", pipeline.getName(), pipeline.getId());
 
         return PipelineResponse.fromEntity(pipeline);
@@ -176,13 +171,8 @@ public class PipelineService {
             pipeline.setGitRepository(null);
         }
 
-        // Update stages - clear and recreate for simplicity
         if (request.getStages() != null) {
-            pipeline.getStages().clear();
-            for (PipelineRequest.StageRequest stageReq : request.getStages()) {
-                PipelineStage stage = createStageFromRequest(stageReq, pipeline);
-                pipeline.getStages().add(stage);
-            }
+            applyStages(pipeline, request.getStages());
         }
 
         pipeline = pipelineRepository.save(pipeline);
@@ -270,19 +260,22 @@ public class PipelineService {
             oldIdToOrderIndex.put(originalStage.getId(), originalStage.getOrderIndex());
         }
 
-        for (int i = 0; i < original.getStages().size(); i++) {
-            PipelineStage originalStage = original.getStages().get(i);
-            PipelineStage stageCopy = stages.get(i);
-
-            if (originalStage.getDependsOn() != null && !originalStage.getDependsOn().isEmpty()) {
-                // For now, we'll clear dependencies since IDs will change after save
-                // The visual editor will need to re-establish dependencies
-                stageCopy.setDependsOn(new ArrayList<>());
-            }
-        }
-
         copy.setStages(stages);
+        copy = pipelineRepository.saveAndFlush(copy);
 
+        // Now the copies have IDs: point their dependencies at the copied stages.
+        for (PipelineStage originalStage : original.getStages()) {
+            PipelineStage stageCopy = oldIdToNewStage.get(originalStage.getId());
+            List<String> deps = new ArrayList<>();
+            for (String dep :
+                    originalStage.getDependsOn() == null
+                            ? List.<String>of()
+                            : originalStage.getDependsOn()) {
+                PipelineStage target = oldIdToNewStage.get(dep);
+                if (target != null) deps.add(target.getId());
+            }
+            stageCopy.setDependsOn(deps);
+        }
         copy = pipelineRepository.save(copy);
         log.info("Duplicated pipeline {} to {}", id, copy.getId());
 
@@ -308,6 +301,104 @@ public class PipelineService {
 
     public List<Pipeline> findEnabledPollingPipelines() {
         return pipelineRepository.findEnabledPollingPipelines();
+    }
+
+    /**
+     * Applies the editor's stages to the pipeline. Stages and steps that already exist are updated
+     * in place (so past runs keep pointing at them); new ones are added; missing ones are removed.
+     * Dependencies are sent using the editor's own stage IDs, which for new stages are temporary;
+     * they are translated to the saved IDs here. (Previously they were stored as sent and every
+     * save gave stages new IDs, so no dependency ever matched and every pipeline with more than one
+     * stage failed.)
+     */
+    private void applyStages(Pipeline pipeline, List<PipelineRequest.StageRequest> requests) {
+        java.util.Map<String, PipelineStage> existing = new java.util.HashMap<>();
+        for (PipelineStage st : pipeline.getStages()) existing.put(st.getId(), st);
+
+        java.util.Map<String, PipelineStage> byClientId = new java.util.LinkedHashMap<>();
+        List<PipelineStage> result = new ArrayList<>();
+        int index = 0;
+        for (PipelineRequest.StageRequest req : requests) {
+            PipelineStage stage = req.getId() != null ? existing.remove(req.getId()) : null;
+            if (stage == null) {
+                stage = createStageFromRequest(req, pipeline);
+            } else {
+                updateStageFromRequest(stage, req);
+            }
+            stage.setOrderIndex(index);
+            index++;
+            result.add(stage);
+            if (req.getId() != null) byClientId.put(req.getId(), stage);
+        }
+        pipeline.getStages().clear();
+        pipeline.getStages().addAll(result);
+        // merge() saves copies of new stages; continue with the managed ones it returns, in the
+        // same order as the request.
+        Pipeline saved = pipelineRepository.saveAndFlush(pipeline);
+        List<PipelineStage> managed = new ArrayList<>(saved.getStages());
+        managed.sort(java.util.Comparator.comparingInt(PipelineStage::getOrderIndex));
+
+        java.util.Map<String, String> idFor = new java.util.HashMap<>();
+        for (int i = 0; i < requests.size() && i < managed.size(); i++) {
+            String clientId = requests.get(i).getId();
+            if (clientId != null) idFor.put(clientId, managed.get(i).getId());
+            idFor.put(managed.get(i).getId(), managed.get(i).getId());
+        }
+
+        // Every stage has an ID now; rewrite dependencies, dropping unknown ones and
+        // self-references.
+        for (int i = 0; i < requests.size() && i < managed.size(); i++) {
+            PipelineRequest.StageRequest req = requests.get(i);
+            PipelineStage stage = managed.get(i);
+            List<String> deps = new ArrayList<>();
+            for (String dep : req.getDependsOn() == null ? List.<String>of() : req.getDependsOn()) {
+                String target = idFor.get(dep);
+                if (target != null && !target.equals(stage.getId()) && !deps.contains(target)) {
+                    deps.add(target);
+                }
+            }
+            stage.setDependsOn(deps);
+        }
+    }
+
+    private void updateStageFromRequest(PipelineStage stage, PipelineRequest.StageRequest req) {
+        stage.setName(req.getName());
+        if (req.getOrderIndex() != null) stage.setOrderIndex(req.getOrderIndex());
+        if (req.getExecutionMode() != null) stage.setExecutionMode(req.getExecutionMode());
+        if (req.getPositionX() != null) stage.setPositionX(req.getPositionX());
+        if (req.getPositionY() != null) stage.setPositionY(req.getPositionY());
+        if (req.getStopOnFailure() != null) stage.setStopOnFailure(req.getStopOnFailure());
+
+        java.util.Map<String, PipelineStep> existingSteps = new java.util.HashMap<>();
+        for (PipelineStep step : stage.getSteps()) existingSteps.put(step.getId(), step);
+        List<PipelineStep> steps = new ArrayList<>();
+        int i = 0;
+        for (PipelineRequest.StepRequest stepReq :
+                req.getSteps() == null ? List.<PipelineRequest.StepRequest>of() : req.getSteps()) {
+            PipelineStep step =
+                    stepReq.getId() != null ? existingSteps.remove(stepReq.getId()) : null;
+            PipelineStep fresh = createStepFromRequest(stepReq, stage);
+            if (step == null) {
+                step = fresh;
+            } else {
+                step.setName(fresh.getName());
+                step.setStepType(fresh.getStepType());
+                step.setConfiguration(fresh.getConfiguration());
+                step.setWorkingDirectory(fresh.getWorkingDirectory());
+                step.setTimeoutSeconds(fresh.getTimeoutSeconds());
+                step.setContinueOnFailure(fresh.isContinueOnFailure());
+                step.setEnvironmentVariables(fresh.getEnvironmentVariables());
+                step.setArtifactInputPattern(fresh.getArtifactInputPattern());
+                step.setArtifactOutputPattern(fresh.getArtifactOutputPattern());
+                step.setPositionX(fresh.getPositionX());
+                step.setPositionY(fresh.getPositionY());
+            }
+            step.setOrderIndex(stepReq.getOrderIndex() != null ? stepReq.getOrderIndex() : i);
+            i++;
+            steps.add(step);
+        }
+        stage.getSteps().clear();
+        stage.getSteps().addAll(steps);
     }
 
     private PipelineStage createStageFromRequest(

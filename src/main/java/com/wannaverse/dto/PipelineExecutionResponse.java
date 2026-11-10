@@ -50,8 +50,13 @@ public class PipelineExecutionResponse {
         public static StageExecutionResponse fromEntity(StageExecution stageExec) {
             StageExecutionResponse response = new StageExecutionResponse();
             response.setId(stageExec.getId());
-            response.setStageId(stageExec.getStage().getId());
-            response.setStageName(stageExec.getStage().getName());
+            // The stage may have been removed from the pipeline since this run.
+            try {
+                response.setStageId(stageExec.getStage().getId());
+                response.setStageName(stageExec.getStage().getName());
+            } catch (RuntimeException e) {
+                response.setStageName("(removed stage)");
+            }
             response.setStatus(stageExec.getStatus());
             response.setLogs(stageExec.getLogs());
             response.setStartedAt(stageExec.getStartedAt());
@@ -87,8 +92,12 @@ public class PipelineExecutionResponse {
         public static StepExecutionResponse fromEntity(StepExecution stepExec) {
             StepExecutionResponse response = new StepExecutionResponse();
             response.setId(stepExec.getId());
-            response.setStepId(stepExec.getStep().getId());
-            response.setStepName(stepExec.getStep().getName());
+            try {
+                response.setStepId(stepExec.getStep().getId());
+                response.setStepName(stepExec.getStep().getName());
+            } catch (RuntimeException e) {
+                response.setStepName("(removed step)");
+            }
             response.setStatus(stepExec.getStatus());
             response.setExitCode(stepExec.getExitCode());
             response.setLogs(stepExec.getLogs());

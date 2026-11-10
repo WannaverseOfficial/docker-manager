@@ -35,6 +35,19 @@ public class GitRepository {
     @Column(columnDefinition = "TEXT")
     private String encryptedSshKey;
 
+    /** Username sent with an access token (most servers accept any non-empty value). */
+    private String tokenUsername;
+
+    /**
+     * For Dockerfile repositories: whether to run a container from the built image. Null (older
+     * rows) is treated as true.
+     */
+    private Boolean runContainer;
+
+    /** For Dockerfile repositories: the container to run, as a JSON ContainerSpec. */
+    @Column(columnDefinition = "TEXT")
+    private String containerSpecJson;
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     private DeploymentType deploymentType;

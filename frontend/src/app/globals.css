@@ -1,0 +1,143 @@
+@import "tailwindcss";
+
+/*
+  Docker Manager tokens, shared with wanna.sh. Monochrome on purpose: the paintings carry the colour.
+  fog: page ground   paper: raised surfaces   well: insets and hovers   line: hairlines
+  ink: text           slate: secondary text    accent: primary actions (ink, inverted)
+  marigold: "running right now" only. ok / caution / danger: states and errors.
+  Dark is the default; [data-theme="light"] switches.
+*/
+:root {
+  --fog: #0b0b0c;
+  --paper: #161618;
+  --well: #222225;
+  --line: #2e2e32;
+  --ink: #ececee;
+  --slate: #a8a8ae;
+  --accent: #ececee;
+  --accent-ink: #0a0a0a;
+  --accent-soft: #262626;
+  --marigold: #e8b23a;
+  --danger: #f08a8a;
+  --ok: #7fcf9f;
+  --caution: #e6b566;
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] {
+  --fog: #fafafa;
+  --paper: #ffffff;
+  --well: #f0f0f0;
+  --line: #e4e4e4;
+  --ink: #18181b;
+  --slate: #5f5f66;
+  --accent: #18181b;
+  --accent-ink: #fafafa;
+  --accent-soft: #ececec;
+  --marigold: #c98f00;
+  --danger: #b4233c;
+  --ok: #1d7a4f;
+  --caution: #9a5a06;
+  color-scheme: light;
+}
+
+@theme inline {
+  --color-fog: var(--fog);
+  --color-paper: var(--paper);
+  --color-well: var(--well);
+  --color-line: var(--line);
+  --color-ink: var(--ink);
+  --color-slate: var(--slate);
+  --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
+  --color-accent-soft: var(--accent-soft);
+  --color-marigold: var(--marigold);
+  --color-danger: var(--danger);
+  --color-ok: var(--ok);
+  --color-caution: var(--caution);
+  --font-sans: var(--font-body);
+  --font-display: var(--font-body);
+  --font-mono: var(--font-code);
+}
+
+html {
+  background: var(--fog);
+  color: var(--ink);
+}
+
+body {
+  background: var(--fog);
+  color: var(--ink);
+  font-family: var(--font-body), system-ui, sans-serif;
+  font-size: 16px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+.font-display {
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+@layer base {
+  :focus-visible {
+    outline: 2px solid var(--ink);
+    outline-offset: 2px;
+    border-radius: 6px;
+  }
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]) {
+    cursor: pointer;
+  }
+}
+
+::selection {
+  background: var(--accent-soft);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Logs and terminals: keep long lines scrollable instead of wrapping into unreadable blocks. */
+.log {
+  font-family: var(--font-code), ui-monospace, monospace;
+  font-size: 12.5px;
+  line-height: 1.55;
+  white-space: pre;
+  tab-size: 4;
+}
+.log-wrap {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Code editor (a textarea with a gutter). */
+.code {
+  font-family: var(--font-code), ui-monospace, monospace;
+  font-size: 13px;
+  line-height: 1.6;
+  tab-size: 2;
+}
+
+/* Painting crossfade on the sign-in page */
+.art-fade {
+  transition: opacity 450ms ease;
+}
+
+/* Slim scrollbars in the theme's colours. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+}
+
+/* Tables scroll sideways on narrow screens rather than squashing. */
+.table-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}

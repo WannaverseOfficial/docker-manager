@@ -71,12 +71,23 @@ public class DockerRegistryController {
     @RequirePermission(resource = Resource.REGISTRIES, action = "update")
     public ResponseEntity<RegistryResponse> updateRegistry(
             @PathVariable String id, @RequestBody UpdateRegistryRequest request) {
+        // Fields left out of the request keep their current value.
+        DockerRegistry current =
+                registryService
+                        .getRegistry(id)
+                        .orElseThrow(
+                                () ->
+                                        new org.springframework.web.server.ResponseStatusException(
+                                                org.springframework.http.HttpStatus.NOT_FOUND,
+                                                "Registry not found"));
 
         RegistryUpdateRequest updateRequest =
                 new RegistryUpdateRequest(
-                        request.name(),
+                        request.name() != null && !request.name().isBlank()
+                                ? request.name()
+                                : current.getName(),
                         request.url(),
-                        request.enabled() != null ? request.enabled() : true,
+                        request.enabled() != null ? request.enabled() : current.isEnabled(),
                         request.username(),
                         request.password(),
                         request.awsRegion(),
@@ -87,7 +98,7 @@ public class DockerRegistryController {
                         request.azureClientId(),
                         request.azureClientSecret(),
                         request.azureTenantId(),
-                        request.isDefault() != null && request.isDefault());
+                        request.isDefault() != null ? request.isDefault() : current.isDefault());
 
         DockerRegistry registry = registryService.updateRegistry(id, updateRequest);
         return ResponseEntity.ok(RegistryResponse.fromEntity(registry));
@@ -101,10 +112,10 @@ public class DockerRegistryController {
     }
 
     @PostMapping("/{id}/test")
-    @RequirePermission(resource = Resource.REGISTRIES, action = "read")
+    @RequirePermission(resource = Resource.REGISTRIES, action = "test")
     public ResponseEntity<Map<String, Object>> testConnection(@PathVariable String id) {
-        boolean success = registryService.testConnection(id);
-        return ResponseEntity.ok(Map.of("success", success));
+        DockerRegistryService.TestResult result = registryService.testConnection(id);
+        return ResponseEntity.ok(Map.of("success", result.success(), "message", result.message()));
     }
 
     @PostMapping("/{id}/set-default")

@@ -8,13 +8,14 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 
+/**
+ * Last line of defence after {@link SecretsBootstrap}: refuses to start with JWT secrets that could
+ * be guessed, since anyone holding them can sign in as any user.
+ */
 @Component
 @Profile("!dev")
 public class SecurityConfigurationValidator {
     private static final Logger log = LoggerFactory.getLogger(SecurityConfigurationValidator.class);
-
-    private static final int MIN_SECRET_LENGTH = 32;
-    private static final String PLACEHOLDER_PREFIX = "change-this1";
 
     @Value("${app.encryption.key}")
     private String encryptionKey;
@@ -27,34 +28,30 @@ public class SecurityConfigurationValidator {
 
     @PostConstruct
     public void validateSecurityConfiguration() {
-        validateSecret("ENCRYPTION_KEY (app.encryption.key)", encryptionKey);
-        validateSecret("JWT_ACCESS_SECRET (app.jwt.access-secret)", jwtAccessSecret);
-        validateSecret("JWT_REFRESH_SECRET (app.jwt.refresh-secret)", jwtRefreshSecret);
+        requireStrong("JWT_ACCESS_SECRET", jwtAccessSecret);
+        requireStrong("JWT_REFRESH_SECRET", jwtRefreshSecret);
 
-        // Ensure access and refresh secrets are different
         if (jwtAccessSecret.equals(jwtRefreshSecret)) {
             throw new SecurityConfigurationException(
                     "JWT_ACCESS_SECRET and JWT_REFRESH_SECRET must be different values");
         }
 
-        log.info("Security configuration validated successfully");
+        if (!SecretsBootstrap.isStrong(encryptionKey)) {
+            // Kept on purpose (see SecretsBootstrap): replacing it would lose stored credentials.
+            log.warn(
+                    "ENCRYPTION_KEY is weak or public. Stored credentials are not well protected.");
+        }
+
+        log.info("Security configuration validated");
     }
 
-    private void validateSecret(String name, String value) {
-        if (value == null || value.isBlank()) {
-            throw new SecurityConfigurationException(name + " is not configured");
-        }
-
-        if (value.toLowerCase().startsWith(PLACEHOLDER_PREFIX)) {
+    private void requireStrong(String name, String value) {
+        if (!SecretsBootstrap.isStrong(value)) {
             throw new SecurityConfigurationException(
                     name
-                            + " contains placeholder value. "
-                            + "Set a secure random value in environment variables for production.");
-        }
-
-        if (value.length() < MIN_SECRET_LENGTH) {
-            throw new SecurityConfigurationException(
-                    name + " must be at least " + MIN_SECRET_LENGTH + " characters long");
+                            + " is missing, a placeholder, a published example, or shorter than "
+                            + SecretsBootstrap.MIN_LENGTH
+                            + " characters");
         }
     }
 

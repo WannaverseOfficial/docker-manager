@@ -35,8 +35,12 @@ public class SecurityConfig implements WebMvcConfigurer {
                 .excludePathPatterns(
                         "/api/auth/login",
                         "/api/auth/refresh",
+                        "/api/auth/logout",
+                        "/api/system/status",
                         "/api/ingress/acme/**",
-                        "/api/git/webhook/**");
+                        "/api/git/webhook/**",
+                        // Authenticated by the secret in the URL, like git webhooks.
+                        "/api/pipelines/webhook/**");
     }
 
     @Override

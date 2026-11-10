@@ -1,11 +1,9 @@
 package com.wannaverse.dto;
 
-import jakarta.validation.constraints.NotBlank;
-
 import lombok.Data;
 
+/** Optional body for /api/auth/refresh and /logout. The UI uses the HttpOnly cookie instead. */
 @Data
 public class RefreshTokenRequest {
-    @NotBlank(message = "Refresh token is required")
     private String refreshToken;
 }

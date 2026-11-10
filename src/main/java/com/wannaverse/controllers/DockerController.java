@@ -1,12 +1,10 @@
 package com.wannaverse.controllers;
 
 import com.github.dockerjava.api.command.*;
-import com.github.dockerjava.api.exception.NotFoundException;
 import com.github.dockerjava.api.model.*;
 import com.github.dockerjava.api.model.Statistics;
-import com.wannaverse.dto.ComposeDeployRequest;
+import com.wannaverse.dto.ContainerSpec;
 import com.wannaverse.dto.ContainerStatsResponse;
-import com.wannaverse.dto.CreateContainerRequest;
 import com.wannaverse.dto.ExecCommandRequest;
 import com.wannaverse.dto.HostInfoResponse;
 import com.wannaverse.persistence.ContainerDriftStatus;
@@ -19,6 +17,7 @@ import com.wannaverse.security.Auditable;
 import com.wannaverse.security.InputValidator;
 import com.wannaverse.security.RequirePermission;
 import com.wannaverse.security.SecurityContextHolder;
+import com.wannaverse.service.ContainerSpecService;
 import com.wannaverse.service.DockerAPI;
 import com.wannaverse.service.DockerRegistryService;
 import com.wannaverse.service.DockerService;
@@ -26,6 +25,9 @@ import com.wannaverse.service.DriftDetectionService;
 import com.wannaverse.service.ImagePolicyService;
 import com.wannaverse.service.OperationTrackingService;
 import com.wannaverse.service.PermissionService;
+import com.wannaverse.service.StatsCalculator;
+import com.wannaverse.service.StatsService;
+import com.wannaverse.service.VolumeBrowserService;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -44,6 +46,8 @@ public class DockerController {
     private final ImagePolicyService imagePolicyService;
     private final DockerRegistryService registryService;
     private final DriftDetectionService driftDetectionService;
+    private final StatsService statsService;
+    private final ContainerSpecService specService;
 
     public DockerController(
             DockerService dockerService,
@@ -52,7 +56,11 @@ public class DockerController {
             OperationTrackingService trackingService,
             ImagePolicyService imagePolicyService,
             DockerRegistryService registryService,
-            DriftDetectionService driftDetectionService) {
+            DriftDetectionService driftDetectionService,
+            StatsService statsService,
+            ContainerSpecService specService) {
+        this.statsService = statsService;
+        this.specService = specService;
         this.dockerService = dockerService;
         this.hostRepository = hostRepository;
         this.permissionService = permissionService;
@@ -74,10 +82,19 @@ public class DockerController {
         return dockerService.dockerAPI(dockerService.createClientCached(host.getDockerHostUrl()));
     }
 
+    /**
+     * The hosts the caller can use: all of them for admins, otherwise those they have been given
+     * any permission on (so a user allowed to manage stacks on one host can pick that host).
+     */
     @GetMapping("/hosts")
-    @RequirePermission(resource = Resource.DOCKER_HOSTS, action = "list")
     public ResponseEntity<List<DockerHost>> getAllHosts() {
-        return ResponseEntity.ok(hostRepository.findAll());
+        var ctx = SecurityContextHolder.getContext();
+        Set<String> allowed = permissionService.accessibleHostIds(ctx.getUserId());
+        List<DockerHost> hosts = hostRepository.findAll();
+        if (allowed != null) {
+            hosts = hosts.stream().filter(h -> allowed.contains(h.getId())).toList();
+        }
+        return ResponseEntity.ok(hosts);
     }
 
     @GetMapping("/hosts/{hostId}")
@@ -89,17 +106,55 @@ public class DockerController {
                 .orElse(ResponseEntity.notFound().build());
     }
 
+    public record HostRequest(String name, String dockerHostUrl) {}
+
     @PostMapping("/hosts")
     @RequirePermission(resource = Resource.DOCKER_HOSTS, action = "create")
     @Auditable(resource = Resource.DOCKER_HOSTS, action = "create", captureRequestBody = true)
-    public ResponseEntity<DockerHost> addHost(@RequestBody DockerHost host) {
-        if (!InputValidator.isValidDockerHostUrl(host.getDockerHostUrl())) {
+    public ResponseEntity<DockerHost> addHost(@RequestBody HostRequest request) {
+        String url = request.dockerHostUrl() == null ? "" : request.dockerHostUrl().trim();
+        if (!InputValidator.isValidDockerHostUrl(url)) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,
-                    "Invalid Docker host URL format. Must be unix:///path/to/socket.sock, "
-                            + "tcp://host:port, or ssh://user@host");
+                    "Invalid Docker host URL. Use unix:///var/run/docker.sock, tcp://host:2376 or"
+                            + " ssh://user@host");
         }
+        if (hostRepository.findByDockerHostUrl(url).isPresent()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "This host is already added");
+        }
+        var client = dockerService.createClient(url);
+        try {
+            if (!dockerService.dockerAPI(client).ping()) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST,
+                        "Could not reach Docker at " + url + ". Check the address and access.");
+            }
+        } finally {
+            dockerService.close(client);
+        }
+        DockerHost host = new DockerHost();
+        host.setDockerHostUrl(url);
+        host.setName(
+                request.name() == null || request.name().isBlank() ? null : request.name().trim());
         return ResponseEntity.status(HttpStatus.CREATED).body(hostRepository.save(host));
+    }
+
+    @PutMapping("/hosts/{hostId}")
+    @RequirePermission(resource = Resource.DOCKER_HOSTS, action = "update", hostIdParam = "hostId")
+    @Auditable(resource = Resource.DOCKER_HOSTS, action = "update", resourceIdParam = "hostId")
+    public ResponseEntity<DockerHost> updateHost(
+            @PathVariable String hostId, @RequestBody HostRequest request) {
+        DockerHost host =
+                hostRepository
+                        .findById(hostId)
+                        .orElseThrow(
+                                () ->
+                                        new ResponseStatusException(
+                                                HttpStatus.NOT_FOUND, "Docker host not found"));
+        if (request.name() != null) {
+            host.setName(request.name().isBlank() ? null : request.name().trim());
+        }
+        return ResponseEntity.ok(hostRepository.save(host));
     }
 
     @DeleteMapping("/hosts/{hostId}")
@@ -116,9 +171,14 @@ public class DockerController {
         return ResponseEntity.noContent().build();
     }
 
+    /** Whether the host is reachable; open to anyone who can use the host at all. */
     @GetMapping("/hosts/{hostId}/ping")
-    @RequirePermission(resource = Resource.DOCKER_HOSTS, action = "ping", hostIdParam = "hostId")
     public ResponseEntity<Map<String, Boolean>> ping(@PathVariable String hostId) {
+        Set<String> allowed =
+                permissionService.accessibleHostIds(SecurityContextHolder.getContext().getUserId());
+        if (allowed != null && !allowed.contains(hostId)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "No access to this host");
+        }
         boolean result = getDockerAPI(hostId).ping();
         return ResponseEntity.ok(Map.of("connected", result));
     }
@@ -128,7 +188,8 @@ public class DockerController {
     public ResponseEntity<List<Container>> listContainers(
             @PathVariable String hostId, @RequestParam(defaultValue = "false") boolean all) {
         DockerAPI api = getDockerAPI(hostId);
-        List<Container> containers = all ? api.listAllContainers() : api.listRunningContainers();
+        List<Container> containers =
+                withoutHelpers(all ? api.listAllContainers() : api.listRunningContainers());
 
         String userId = SecurityContextHolder.getCurrentUserId();
         if (userId != null) {
@@ -244,119 +305,124 @@ public class DockerController {
     @PostMapping("/hosts/{hostId}/containers")
     @RequirePermission(resource = Resource.CONTAINERS, action = "create", hostIdParam = "hostId")
     @Auditable(resource = Resource.CONTAINERS, action = "create", captureRequestBody = true)
-    public ResponseEntity<CreateContainerResponse> createContainer(
-            @PathVariable String hostId, @RequestBody CreateContainerRequest request) {
-        if (request.getContainerName() != null
-                && !InputValidator.isValidContainerName(request.getContainerName())) {
-            throw new ResponseStatusException(
-                    HttpStatus.BAD_REQUEST,
-                    "Invalid container name. Use only alphanumeric characters, underscores, "
-                            + "periods, and hyphens.");
-        }
-
-        if (!InputValidator.isValidImageName(request.getImageName())) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid image name format.");
-        }
-
-        imagePolicyService.validateImageForContainerCreation(request.getImageName());
-
+    public ResponseEntity<Map<String, String>> createContainer(
+            @PathVariable String hostId, @RequestBody ContainerSpec spec) {
+        specService.validate(spec, isAdmin());
         DockerAPI dockerAPI = getDockerAPI(hostId);
-        try {
-            dockerAPI.inspectImage(request.getImageName());
-        } catch (NotFoundException e) {
-            try {
-                var authConfig = registryService.getAuthConfig(request.getImageName());
-                dockerAPI.pullImage(request.getImageName(), authConfig);
-            } catch (InterruptedException ie) {
-                Thread.currentThread().interrupt();
-                throw new ResponseStatusException(
-                        HttpStatus.INTERNAL_SERVER_ERROR, "Image pull was interrupted");
-            }
-        }
 
         DockerOperation operation =
                 trackingService.beginOperation(
                         hostId,
                         DockerOperation.OperationType.CONTAINER_CREATE,
                         null,
-                        request.getContainerName());
-
+                        spec.getName());
         try {
-            CreateContainerResponse response =
-                    dockerAPI.createContainer(
-                            request.getImageName(),
-                            request.getContainerName(),
-                            request.getEnvironmentVariables(),
-                            request.getPortBindings(),
-                            request.getVolumeBindings(),
-                            request.getNetworkName(),
-                            null,
-                            request.getUser());
-
-            operation.setResourceId(response.getId());
+            String id = specService.create(dockerAPI, spec);
+            operation.setResourceId(id);
             trackingService.captureContainerState(
-                    operation, response.getId(), StateSnapshot.SnapshotType.AFTER, hostId);
+                    operation, id, StateSnapshot.SnapshotType.AFTER, hostId);
             trackingService.completeOperation(operation, true, null);
-
-            return ResponseEntity.status(HttpStatus.CREATED).body(response);
-        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.CREATED).body(Map.of("id", id));
+        } catch (RuntimeException e) {
             trackingService.completeOperation(operation, false, e.getMessage());
             throw e;
         }
     }
 
-    @PostMapping("/hosts/{hostId}/compose")
-    @RequirePermission(resource = Resource.CONTAINERS, action = "create", hostIdParam = "hostId")
-    @Auditable(resource = Resource.CONTAINERS, action = "compose-deploy", captureRequestBody = true)
-    public ResponseEntity<Map<String, Object>> deployCompose(
-            @PathVariable String hostId, @RequestBody ComposeDeployRequest request) {
-        DockerHost host =
-                hostRepository
-                        .findById(hostId)
-                        .orElseThrow(
-                                () ->
-                                        new ResponseStatusException(
-                                                HttpStatus.NOT_FOUND,
-                                                "Docker host not found: " + hostId));
+    /** The container's current settings, as the edit form shows them. */
+    @GetMapping("/hosts/{hostId}/containers/{containerId}/spec")
+    @RequirePermission(
+            resource = Resource.CONTAINERS,
+            action = "inspect",
+            hostIdParam = "hostId",
+            resourceIdParam = "containerId")
+    public ResponseEntity<ContainerSpec> getContainerSpec(
+            @PathVariable String hostId, @PathVariable String containerId) {
+        DockerAPI api = getDockerAPI(hostId);
+        return ResponseEntity.ok(specService.specFrom(api, api.inspectContainer(containerId)));
+    }
 
-        String projectName =
-                request.getProjectName() != null ? request.getProjectName() : "compose";
+    /**
+     * Applies new settings by recreating the container. Volumes (and so the container's data) are
+     * kept, and if anything fails the original container is restored.
+     */
+    @PutMapping("/hosts/{hostId}/containers/{containerId}")
+    @RequirePermission(
+            resource = Resource.CONTAINERS,
+            action = "update",
+            hostIdParam = "hostId",
+            resourceIdParam = "containerId")
+    @Auditable(resource = Resource.CONTAINERS, action = "update", resourceIdParam = "containerId")
+    public ResponseEntity<Map<String, String>> updateContainer(
+            @PathVariable String hostId,
+            @PathVariable String containerId,
+            @RequestBody ContainerSpec spec,
+            @RequestParam(defaultValue = "false") boolean pull) {
+        specService.validate(spec, isAdmin());
+        return ResponseEntity.ok(
+                Map.of("id", recreateTracked(hostId, containerId, spec, pull, isAdmin())));
+    }
 
+    /** Pulls the newest version of the container's image and recreates it with it. */
+    @PostMapping("/hosts/{hostId}/containers/{containerId}/update-image")
+    @RequirePermission(
+            resource = Resource.CONTAINERS,
+            action = "update",
+            hostIdParam = "hostId",
+            resourceIdParam = "containerId")
+    @Auditable(
+            resource = Resource.CONTAINERS,
+            action = "update_image",
+            resourceIdParam = "containerId")
+    public ResponseEntity<Map<String, String>> updateImage(
+            @PathVariable String hostId, @PathVariable String containerId) {
+        DockerAPI api = getDockerAPI(hostId);
+        // Without the old image's defaults, so the new image's own values (versions, paths)
+        // are used.
+        ContainerSpec spec = specService.specFrom(api, api.inspectContainer(containerId));
+        // Same image name and settings, only a newer pull: nothing here is chosen by the caller.
+        return ResponseEntity.ok(
+                Map.of("id", recreateTracked(hostId, containerId, spec, true, true)));
+    }
+
+    private String recreateTracked(
+            String hostId, String containerId, ContainerSpec spec, boolean pull, boolean trusted) {
+        DockerAPI api = getDockerAPI(hostId);
         DockerOperation operation =
                 trackingService.beginOperation(
-                        hostId, DockerOperation.OperationType.COMPOSE_UP, projectName, projectName);
-
-        trackingService.captureComposeState(
-                operation,
-                projectName,
-                request.getComposeContent(),
-                StateSnapshot.SnapshotType.BEFORE);
-
+                        hostId,
+                        DockerOperation.OperationType.CONTAINER_UPDATE,
+                        containerId,
+                        spec.getName());
+        trackingService.captureContainerState(
+                operation, containerId, StateSnapshot.SnapshotType.BEFORE, hostId);
         try {
-            List<String> output =
-                    dockerService.deployCompose(
-                            host.getDockerHostUrl(),
-                            request.getComposeContent(),
-                            request.getProjectName());
-
-            operation.setLogs(String.join("\n", output));
-            trackingService.captureComposeState(
-                    operation,
-                    projectName,
-                    request.getComposeContent(),
-                    StateSnapshot.SnapshotType.AFTER);
+            String newId = specService.recreate(api, containerId, spec, pull, trusted);
+            operation.setResourceId(newId);
+            trackingService.captureContainerState(
+                    operation, newId, StateSnapshot.SnapshotType.AFTER, hostId);
             trackingService.completeOperation(operation, true, null);
-
-            trackingService.createComposeDeployment(
-                    hostId, projectName, request.getComposeContent(), null, null, null);
-
-            return ResponseEntity.status(HttpStatus.CREATED)
-                    .body(Map.of("success", true, "output", output));
-        } catch (Exception e) {
+            return newId;
+        } catch (RuntimeException e) {
             trackingService.completeOperation(operation, false, e.getMessage());
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(Map.of("success", false, "error", e.getMessage()));
+            throw e;
         }
+    }
+
+    /** Short-lived containers Docker Manager runs for itself (browsing a volume, reading files). */
+    static List<Container> withoutHelpers(List<Container> containers) {
+        return containers.stream()
+                .filter(
+                        c ->
+                                c.getLabels() == null
+                                        || !c.getLabels()
+                                                .containsKey(VolumeBrowserService.HELPER_LABEL))
+                .toList();
+    }
+
+    private static boolean isAdmin() {
+        var ctx = SecurityContextHolder.getContext();
+        return ctx != null && ctx.isAdmin();
     }
 
     @PostMapping("/hosts/{hostId}/containers/{containerId}/start")
@@ -548,6 +614,11 @@ public class DockerController {
             @PathVariable String hostId,
             @PathVariable String containerId,
             @RequestParam String newName) {
+        if (!InputValidator.isValidContainerName(newName)) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Container names may only use letters, digits, '_', '.' and '-'");
+        }
         getDockerAPI(hostId).renameContainer(containerId, newName);
         return ResponseEntity.ok().build();
     }
@@ -719,6 +790,11 @@ public class DockerController {
     @Auditable(resource = Resource.VOLUMES, action = "create", resourceIdParam = "volumeName")
     public ResponseEntity<CreateVolumeResponse> createVolume(
             @PathVariable String hostId, @RequestParam String volumeName) {
+        if (!InputValidator.isValidContainerName(volumeName)) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Volume names may only use letters, digits, '_', '.' and '-'");
+        }
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(getDockerAPI(hostId).createVolume(volumeName));
     }
@@ -778,6 +854,11 @@ public class DockerController {
     @Auditable(resource = Resource.NETWORKS, action = "create", resourceIdParam = "networkName")
     public ResponseEntity<CreateNetworkResponse> createNetwork(
             @PathVariable String hostId, @RequestParam String networkName) {
+        if (!InputValidator.isValidContainerName(networkName)) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Network names may only use letters, digits, '_', '.' and '-'");
+        }
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(getDockerAPI(hostId).createNetwork(networkName));
     }
@@ -859,25 +940,16 @@ public class DockerController {
     public ResponseEntity<List<ContainerStatsResponse>> getAllContainerStats(
             @PathVariable String hostId) {
         DockerAPI api = getDockerAPI(hostId);
-        List<Container> runningContainers = api.listRunningContainers();
+        List<Container> running = withoutHelpers(api.listRunningContainers());
+        return ResponseEntity.ok(statsService.collect(api, running, this::buildFromContainer));
+    }
 
-        List<ContainerStatsResponse> statsList =
-                runningContainers.parallelStream()
-                        .map(
-                                container -> {
-                                    try {
-                                        Statistics stats = api.getContainerStats(container.getId());
-                                        if (stats != null) {
-                                            return buildContainerStatsResponse(container, stats);
-                                        }
-                                    } catch (Exception e) {
-                                    }
-                                    return null;
-                                })
-                        .filter(Objects::nonNull)
-                        .toList();
-
-        return ResponseEntity.ok(statsList);
+    private ContainerStatsResponse buildFromContainer(Container container, Statistics stats) {
+        String name =
+                container.getNames() != null && container.getNames().length > 0
+                        ? container.getNames()[0]
+                        : container.getId().substring(0, 12);
+        return buildContainerStatsResponse(container.getId(), name, stats);
     }
 
     @GetMapping("/hosts/{hostId}/containers/{containerId}/stats")
@@ -897,174 +969,37 @@ public class DockerController {
             return ResponseEntity.noContent().build();
         }
 
-        String containerName = inspection.getName();
-        if (containerName != null && containerName.startsWith("/")) {
-            containerName = containerName.substring(1);
-        }
-
         ContainerStatsResponse response =
-                ContainerStatsResponse.builder()
-                        .containerId(containerId)
-                        .containerName(containerName)
-                        .cpuPercent(calculateCpuPercent(stats))
-                        .cpuUsage(getCpuUsage(stats))
-                        .systemCpuUsage(getSystemCpuUsage(stats))
-                        .memoryUsage(getMemoryUsage(stats))
-                        .memoryLimit(getMemoryLimit(stats))
-                        .memoryPercent(calculateMemoryPercent(stats))
-                        .networkRxBytes(getNetworkRxBytes(stats))
-                        .networkTxBytes(getNetworkTxBytes(stats))
-                        .blockReadBytes(getBlockReadBytes(stats))
-                        .blockWriteBytes(getBlockWriteBytes(stats))
-                        .timestamp(System.currentTimeMillis())
-                        .pids(getPidCount(stats))
-                        .build();
-
+                buildContainerStatsResponse(containerId, inspection.getName(), stats);
         return ResponseEntity.ok(response);
     }
 
     private ContainerStatsResponse buildContainerStatsResponse(
-            Container container, Statistics stats) {
-        String containerName =
-                container.getNames() != null && container.getNames().length > 0
-                        ? container.getNames()[0]
-                        : container.getId().substring(0, 12);
-        if (containerName.startsWith("/")) {
+            String containerId, String containerName, Statistics stats) {
+        if (containerName != null && containerName.startsWith("/")) {
             containerName = containerName.substring(1);
         }
-
         return ContainerStatsResponse.builder()
-                .containerId(container.getId())
+                .containerId(containerId)
                 .containerName(containerName)
-                .cpuPercent(calculateCpuPercent(stats))
-                .cpuUsage(getCpuUsage(stats))
-                .systemCpuUsage(getSystemCpuUsage(stats))
-                .memoryUsage(getMemoryUsage(stats))
-                .memoryLimit(getMemoryLimit(stats))
-                .memoryPercent(calculateMemoryPercent(stats))
-                .networkRxBytes(getNetworkRxBytes(stats))
-                .networkTxBytes(getNetworkTxBytes(stats))
-                .blockReadBytes(getBlockReadBytes(stats))
-                .blockWriteBytes(getBlockWriteBytes(stats))
+                .cpuPercent(StatsCalculator.cpuPercent(stats))
+                .cpuUsage(
+                        stats.getCpuStats() != null && stats.getCpuStats().getCpuUsage() != null
+                                ? stats.getCpuStats().getCpuUsage().getTotalUsage()
+                                : 0L)
+                .systemCpuUsage(
+                        stats.getCpuStats() != null ? stats.getCpuStats().getSystemCpuUsage() : 0L)
+                .onlineCpus(StatsCalculator.onlineCpus(stats))
+                .memoryUsage(StatsCalculator.memoryUsage(stats))
+                .memoryLimit(StatsCalculator.memoryLimit(stats))
+                .memoryPercent(StatsCalculator.memoryPercent(stats))
+                .networkRxBytes(StatsCalculator.networkRx(stats))
+                .networkTxBytes(StatsCalculator.networkTx(stats))
+                .blockReadBytes(StatsCalculator.blockRead(stats))
+                .blockWriteBytes(StatsCalculator.blockWrite(stats))
                 .timestamp(System.currentTimeMillis())
-                .pids(getPidCount(stats))
+                .pids(StatsCalculator.pids(stats))
                 .build();
-    }
-
-    private Double calculateCpuPercent(Statistics stats) {
-        if (stats.getCpuStats() == null || stats.getPreCpuStats() == null) {
-            return 0.0;
-        }
-
-        Long cpuDelta = getCpuUsage(stats) - getPreCpuUsage(stats);
-        Long systemDelta = getSystemCpuUsage(stats) - getPreSystemCpuUsage(stats);
-
-        if (systemDelta > 0 && cpuDelta > 0) {
-            int cpuCount =
-                    stats.getCpuStats().getOnlineCpus() != null
-                            ? stats.getCpuStats().getOnlineCpus().intValue()
-                            : 1;
-            return (cpuDelta.doubleValue() / systemDelta.doubleValue()) * cpuCount * 100.0;
-        }
-        return 0.0;
-    }
-
-    private Long getCpuUsage(Statistics stats) {
-        if (stats.getCpuStats() != null && stats.getCpuStats().getCpuUsage() != null) {
-            return stats.getCpuStats().getCpuUsage().getTotalUsage();
-        }
-        return 0L;
-    }
-
-    private Long getPreCpuUsage(Statistics stats) {
-        if (stats.getPreCpuStats() != null && stats.getPreCpuStats().getCpuUsage() != null) {
-            return stats.getPreCpuStats().getCpuUsage().getTotalUsage();
-        }
-        return 0L;
-    }
-
-    private Long getSystemCpuUsage(Statistics stats) {
-        if (stats.getCpuStats() != null) {
-            return stats.getCpuStats().getSystemCpuUsage();
-        }
-        return 0L;
-    }
-
-    private Long getPreSystemCpuUsage(Statistics stats) {
-        if (stats.getPreCpuStats() != null) {
-            return stats.getPreCpuStats().getSystemCpuUsage();
-        }
-        return 0L;
-    }
-
-    private Long getMemoryUsage(Statistics stats) {
-        if (stats.getMemoryStats() != null) {
-            return stats.getMemoryStats().getUsage();
-        }
-        return 0L;
-    }
-
-    private Long getMemoryLimit(Statistics stats) {
-        if (stats.getMemoryStats() != null) {
-            return stats.getMemoryStats().getLimit();
-        }
-        return 0L;
-    }
-
-    private Double calculateMemoryPercent(Statistics stats) {
-        Long usage = getMemoryUsage(stats);
-        Long limit = getMemoryLimit(stats);
-        if (limit != null && limit > 0) {
-            return (usage.doubleValue() / limit.doubleValue()) * 100.0;
-        }
-        return 0.0;
-    }
-
-    private Long getNetworkRxBytes(Statistics stats) {
-        if (stats.getNetworks() != null) {
-            return stats.getNetworks().values().stream()
-                    .mapToLong(n -> n.getRxBytes() != null ? n.getRxBytes() : 0L)
-                    .sum();
-        }
-        return 0L;
-    }
-
-    private Long getNetworkTxBytes(Statistics stats) {
-        if (stats.getNetworks() != null) {
-            return stats.getNetworks().values().stream()
-                    .mapToLong(n -> n.getTxBytes() != null ? n.getTxBytes() : 0L)
-                    .sum();
-        }
-        return 0L;
-    }
-
-    private Long getBlockReadBytes(Statistics stats) {
-        if (stats.getBlkioStats() != null
-                && stats.getBlkioStats().getIoServiceBytesRecursive() != null) {
-            return stats.getBlkioStats().getIoServiceBytesRecursive().stream()
-                    .filter(entry -> "Read".equalsIgnoreCase(entry.getOp()))
-                    .mapToLong(entry -> entry.getValue() != null ? entry.getValue() : 0L)
-                    .sum();
-        }
-        return 0L;
-    }
-
-    private Long getBlockWriteBytes(Statistics stats) {
-        if (stats.getBlkioStats() != null
-                && stats.getBlkioStats().getIoServiceBytesRecursive() != null) {
-            return stats.getBlkioStats().getIoServiceBytesRecursive().stream()
-                    .filter(entry -> "Write".equalsIgnoreCase(entry.getOp()))
-                    .mapToLong(entry -> entry.getValue() != null ? entry.getValue() : 0L)
-                    .sum();
-        }
-        return 0L;
-    }
-
-    private Integer getPidCount(Statistics stats) {
-        if (stats.getPidsStats() != null && stats.getPidsStats().getCurrent() != null) {
-            return stats.getPidsStats().getCurrent().intValue();
-        }
-        return 0;
     }
 
     @GetMapping("/hosts/{hostId}/drift")

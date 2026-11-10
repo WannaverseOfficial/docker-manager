@@ -120,7 +120,9 @@ public class PipelineResponse {
         response.setPollingEnabled(pipeline.isPollingEnabled());
         response.setPollingIntervalSeconds(pipeline.getPollingIntervalSeconds());
         response.setBranchFilter(pipeline.getBranchFilter());
-        response.setWebhookSecret(pipeline.getWebhookSecret());
+        // The secret is the webhook's credential; only admins (who manage pipelines) see it.
+        var ctx = com.wannaverse.security.SecurityContextHolder.getContext();
+        if (ctx != null && ctx.isAdmin()) response.setWebhookSecret(pipeline.getWebhookSecret());
         response.setGraphLayout(pipeline.getGraphLayout());
         response.setCreatedAt(pipeline.getCreatedAt());
         response.setUpdatedAt(pipeline.getUpdatedAt());

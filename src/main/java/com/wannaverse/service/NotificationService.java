@@ -28,16 +28,24 @@ public class NotificationService {
     private final EmailTemplateService templateService;
     private final UserNotificationPreferenceRepository preferenceRepository;
     private final UserRepository userRepository;
+    private final PermissionService permissionService;
 
     public NotificationService(
             EmailService emailService,
             EmailTemplateService templateService,
             UserNotificationPreferenceRepository preferenceRepository,
-            UserRepository userRepository) {
+            UserRepository userRepository,
+            @org.springframework.context.annotation.Lazy PermissionService permissionService) {
         this.emailService = emailService;
         this.templateService = templateService;
         this.preferenceRepository = preferenceRepository;
         this.userRepository = userRepository;
+        this.permissionService = permissionService;
+    }
+
+    private static String hostName(DockerHost host) {
+        if (host.getName() != null && !host.getName().isBlank()) return host.getName();
+        return host.getDockerHostUrl() != null ? host.getDockerHostUrl() : host.getId();
     }
 
     @Async("emailExecutor")
@@ -94,6 +102,10 @@ public class NotificationService {
         Map<String, Object> context = new HashMap<>();
         if (job.getGitRepository() != null) {
             context.put("repoName", job.getGitRepository().getName());
+            context.put("repoId", job.getGitRepository().getId());
+            if (job.getGitRepository().getDockerHost() != null) {
+                context.put("hostId", job.getGitRepository().getDockerHost().getId());
+            }
             context.put("branch", job.getGitRepository().getBranch());
         }
         context.put(
@@ -114,6 +126,7 @@ public class NotificationService {
         context.put("containerId", containerId);
         context.put("containerName", containerName);
         context.put("hostName", hostName);
+        context.put("hostId", hostId);
         context.put("timestamp", Instant.now());
 
         notifyForEvent(
@@ -138,6 +151,7 @@ public class NotificationService {
         context.put("containerId", containerId);
         context.put("containerName", containerName);
         context.put("hostName", hostName);
+        context.put("hostId", hostId);
         context.put("healthStatus", healthStatus);
         context.put("timestamp", Instant.now());
 
@@ -151,11 +165,12 @@ public class NotificationService {
     public void notifyContainerHealthCheckFailed(
             DockerHost host, String containerId, String containerName) {
         notifyContainerHealthCheckFailed(
-                host.getId(), host.getId(), containerId, containerName, "Unhealthy");
+                host.getId(), hostName(host), containerId, containerName, "Unhealthy");
     }
 
     public void notifyContainerStopped(DockerHost host, String containerId, String containerName) {
-        notifyContainerStoppedUnexpectedly(host.getId(), host.getId(), containerId, containerName);
+        notifyContainerStoppedUnexpectedly(
+                host.getId(), hostName(host), containerId, containerName);
     }
 
     @Async("emailExecutor")
@@ -168,7 +183,8 @@ public class NotificationService {
         Map<String, Object> context = new HashMap<>();
         context.put("containerId", containerId);
         context.put("containerName", containerName);
-        context.put("hostName", host.getId());
+        context.put("hostName", hostName(host));
+        context.put("hostId", host.getId());
         context.put("restartCount", restartCount);
         context.put("timestamp", Instant.now());
 
@@ -189,7 +205,8 @@ public class NotificationService {
         Map<String, Object> context = new HashMap<>();
         context.put("containerId", containerId);
         context.put("containerName", containerName);
-        context.put("hostName", host.getId());
+        context.put("hostName", hostName(host));
+        context.put("hostId", host.getId());
         context.put("timestamp", Instant.now());
 
         notifyForEvent(
@@ -213,7 +230,8 @@ public class NotificationService {
         context.put("ipAddress", ipAddress);
         context.put("timestamp", Instant.now());
 
-        String html = templateService.render(NotificationEventType.USER_LOGIN, context);
+        EmailTemplateService.Email html =
+                templateService.render(NotificationEventType.USER_LOGIN, context);
         String subject = templateService.getSubject(NotificationEventType.USER_LOGIN, context);
 
         emailService.sendEmailAsync(
@@ -238,7 +256,8 @@ public class NotificationService {
         Map<String, Object> context = new HashMap<>();
         context.put("timestamp", Instant.now());
 
-        String html = templateService.render(NotificationEventType.PASSWORD_CHANGED, context);
+        EmailTemplateService.Email html =
+                templateService.render(NotificationEventType.PASSWORD_CHANGED, context);
         String subject =
                 templateService.getSubject(NotificationEventType.PASSWORD_CHANGED, context);
 
@@ -258,7 +277,8 @@ public class NotificationService {
         }
 
         Map<String, Object> context = new HashMap<>();
-        context.put("hostName", host.getId());
+        context.put("hostName", hostName(host));
+        context.put("hostId", host.getId());
         context.put("hostUrl", host.getDockerHostUrl());
         context.put("timestamp", Instant.now());
 
@@ -276,7 +296,8 @@ public class NotificationService {
         }
 
         Map<String, Object> context = new HashMap<>();
-        context.put("hostName", host.getId());
+        context.put("hostName", hostName(host));
+        context.put("hostId", host.getId());
         context.put("hostUrl", host.getDockerHostUrl());
         context.put("timestamp", Instant.now());
 
@@ -304,16 +325,24 @@ public class NotificationService {
         }
 
         for (User user : usersToNotify) {
-            if (user.getEmail() == null || user.getEmail().isEmpty()) {
+            if (!user.isEnabled() || user.getEmail() == null || user.getEmail().isEmpty()) {
                 continue;
             }
 
             if (!isNotificationEnabledForUser(user.getId(), eventType)) {
                 continue;
             }
+            // Only people who can see the host hear about its containers and deployments.
+            Object hostId = context.get("hostId");
+            if (!user.isAdmin() && hostId != null) {
+                java.util.Set<String> hosts = permissionService.accessibleHostIds(user.getId());
+                if (hosts != null && !hosts.contains(hostId.toString())) continue;
+            } else if (!user.isAdmin() && target == NotifyTarget.ALL && hostId == null) {
+                continue;
+            }
 
             try {
-                String html = templateService.render(eventType, context);
+                EmailTemplateService.Email html = templateService.render(eventType, context);
                 String subject = templateService.getSubject(eventType, context);
 
                 emailService.sendEmailAsync(

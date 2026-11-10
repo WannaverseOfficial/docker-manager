@@ -15,9 +15,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
-import java.nio.file.Path;
 import java.util.*;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 
 @Service
@@ -124,6 +122,12 @@ public class PipelineExecutionService {
 
     @Async("deploymentExecutor")
     public void executeAsync(String executionId) {
+        if (executionRepository
+                .findById(executionId)
+                .map(e -> e.getStatus() == PipelineExecution.ExecutionStatus.CANCELLED)
+                .orElse(true)) {
+            return;
+        }
         ExecutionContext ctx =
                 transactionTemplate.execute(
                         status -> {
@@ -156,9 +160,14 @@ public class PipelineExecutionService {
 
                             if (pipeline.getGitRepository() != null) {
                                 context.hasGitRepo = true;
-                                context.gitRepoUrl = pipeline.getGitRepository().getRepositoryUrl();
-                                context.gitBranch = pipeline.getGitRepository().getBranch();
+                                context.gitRepo =
+                                        (GitRepository)
+                                                org.hibernate.Hibernate.unproxy(
+                                                        pipeline.getGitRepository());
+                                context.gitRepoUrl = context.gitRepo.getRepositoryUrl();
+                                context.gitBranch = context.gitRepo.getBranch();
                             }
+                            context.triggerCommit = exec.getTriggerCommit();
 
                             context.triggerBranch = exec.getTriggerBranch();
                             context.triggerType = exec.getTriggerType();
@@ -172,30 +181,39 @@ public class PipelineExecutionService {
             return;
         }
 
-        Path workspacePath = null;
+        StepExecutorService.Workspace workspace = null;
 
         try {
+            if (ctx.dockerHostUrl == null) {
+                throw new IllegalStateException("The pipeline has no Docker host");
+            }
             transactionTemplate.executeWithoutResult(
                     status -> {
                         PipelineExecution exec =
                                 executionRepository.findById(executionId).orElseThrow();
                         exec.setStatus(PipelineExecution.ExecutionStatus.RUNNING);
                         exec.setStartedAt(System.currentTimeMillis());
-                        appendLog(exec, "Starting pipeline execution #" + ctx.buildNumber);
                         executionRepository.save(exec);
                     });
-            broadcastLog(executionId, "Starting pipeline execution #" + ctx.buildNumber);
+            logAndBroadcast(executionId, "Starting pipeline execution #" + ctx.buildNumber);
 
-            workspacePath =
+            workspace =
                     stepExecutorService.prepareWorkspace(
-                            ctx.pipelineId, ctx.pipelineName, executionId);
-            broadcastLog(executionId, "Workspace prepared: " + workspacePath);
+                            ctx.dockerHostUrl, ctx.pipelineId, executionId);
 
             if (ctx.hasGitRepo) {
-                broadcastLog(executionId, "Cloning repository: " + ctx.gitRepoUrl);
-                stepExecutorService.cloneRepository(ctx.gitRepoUrl, ctx.gitBranch, workspacePath);
-
-                String commitSha = gitService.getCurrentCommitSha(workspacePath);
+                String branch =
+                        ctx.triggerBranch != null && !ctx.triggerBranch.isBlank()
+                                ? ctx.triggerBranch
+                                : ctx.gitBranch;
+                logAndBroadcast(executionId, "Cloning " + ctx.gitRepoUrl + " (" + branch + ")");
+                String commitSha =
+                        stepExecutorService.cloneRepository(
+                                ctx.gitRepo,
+                                branch,
+                                ctx.triggerCommit,
+                                workspace,
+                                line -> logAndBroadcast(executionId, line));
                 transactionTemplate.executeWithoutResult(
                         status -> {
                             PipelineExecution exec =
@@ -203,39 +221,39 @@ public class PipelineExecutionService {
                             exec.setTriggerCommit(commitSha);
                             executionRepository.save(exec);
                         });
-                broadcastLog(executionId, "Repository cloned at commit: " + commitSha);
             }
 
             Map<String, String> env = buildEnvironmentVariables(ctx);
 
-            boolean allSuccess = executeDependencyGraph(executionId, ctx, workspacePath, env);
+            boolean allSuccess = executeDependencyGraph(executionId, ctx, workspace, env);
+            boolean wasCancelled = isCancelled(executionId);
 
             final boolean success = allSuccess;
+            logAndBroadcast(
+                    executionId,
+                    wasCancelled
+                            ? "Pipeline cancelled"
+                            : success
+                                    ? "Pipeline completed successfully"
+                                    : "Pipeline completed with failures");
             transactionTemplate.executeWithoutResult(
                     status -> {
                         PipelineExecution exec =
                                 executionRepository.findById(executionId).orElseThrow();
                         exec.setStatus(
-                                success
-                                        ? PipelineExecution.ExecutionStatus.SUCCESS
-                                        : PipelineExecution.ExecutionStatus.FAILED);
+                                wasCancelled
+                                        ? PipelineExecution.ExecutionStatus.CANCELLED
+                                        : success
+                                                ? PipelineExecution.ExecutionStatus.SUCCESS
+                                                : PipelineExecution.ExecutionStatus.FAILED);
                         exec.setFinishedAt(System.currentTimeMillis());
-                        String statusMsg =
-                                success
-                                        ? "Pipeline completed successfully!"
-                                        : "Pipeline completed with failures";
-                        appendLog(exec, statusMsg);
+                        exec.setLogs(logText(executionId));
                         executionRepository.save(exec);
                     });
 
-            broadcastLog(
-                    executionId,
-                    allSuccess
-                            ? "Pipeline completed successfully!"
-                            : "Pipeline completed with failures");
-
         } catch (Exception e) {
             log.error("Pipeline execution failed: {}", executionId, e);
+            logAndBroadcast(executionId, "ERROR: " + e.getMessage());
             transactionTemplate.executeWithoutResult(
                     status -> {
                         PipelineExecution exec =
@@ -243,16 +261,14 @@ public class PipelineExecutionService {
                         exec.setStatus(PipelineExecution.ExecutionStatus.FAILED);
                         exec.setErrorMessage(e.getMessage());
                         exec.setFinishedAt(System.currentTimeMillis());
-                        appendLog(exec, "ERROR: " + e.getMessage());
+                        exec.setLogs(logText(executionId));
                         executionRepository.save(exec);
                     });
-            broadcastLog(executionId, "ERROR: " + e.getMessage());
         } finally {
             completeEmitters(executionId);
-
-            if (workspacePath != null) {
-                stepExecutorService.cleanupWorkspace(workspacePath);
-            }
+            cancelledExecutions.remove(executionId);
+            logBuffers.remove(executionId);
+            if (workspace != null) workspace.close();
         }
     }
 
@@ -268,6 +284,8 @@ public class PipelineExecutionService {
         String triggerBranch;
         PipelineExecution.TriggerType triggerType;
         String triggeredBy;
+        String triggerCommit;
+        GitRepository gitRepo;
     }
 
     private void appendLog(PipelineExecution execution, String message) {
@@ -303,7 +321,10 @@ public class PipelineExecutionService {
             boolean stopOnFailure) {}
 
     private boolean executeDependencyGraph(
-            String executionId, ExecutionContext ctx, Path workspacePath, Map<String, String> env) {
+            String executionId,
+            ExecutionContext ctx,
+            StepExecutorService.Workspace workspacePath,
+            Map<String, String> env) {
 
         List<StageInfo> stageInfoList =
                 transactionTemplate.execute(
@@ -351,7 +372,9 @@ public class PipelineExecutionService {
         Set<String> runningStages = ConcurrentHashMap.newKeySet();
         boolean[] stopExecution = {false};
 
-        while (completedStages.size() < allStageIds.size() && !stopExecution[0]) {
+        while (completedStages.size() < allStageIds.size()
+                && !stopExecution[0]
+                && !isCancelled(executionId)) {
 
             List<String> readyStageIds = new ArrayList<>();
             for (String stageId : allStageIds) {
@@ -414,7 +437,7 @@ public class PipelineExecutionService {
             }
 
             List<Thread> threads = new ArrayList<>();
-            final Path workspace = workspacePath;
+            final StepExecutorService.Workspace workspace = workspacePath;
 
             for (String stageId : readyStageIds) {
                 String stageExecId = stageExecIdByStageId.get(stageId);
@@ -493,7 +516,7 @@ public class PipelineExecutionService {
             String stageExecId,
             String executionId,
             ExecutionContext ctx,
-            Path workspacePath,
+            StepExecutorService.Workspace workspacePath,
             Map<String, String> env) {
 
         record StageData(
@@ -571,6 +594,10 @@ public class PipelineExecutionService {
             allSuccess = results.stream().allMatch(Boolean::booleanValue);
         } else {
             for (StepInfo2 stepInfo : stageData.steps) {
+                if (isCancelled(executionId)) {
+                    allSuccess = false;
+                    break;
+                }
                 boolean success =
                         executeStep(stepInfo.stepExecId, executionId, ctx, workspacePath, env);
                 if (!success) {
@@ -602,7 +629,7 @@ public class PipelineExecutionService {
             String stepExecId,
             String executionId,
             ExecutionContext ctx,
-            Path workspacePath,
+            StepExecutorService.Workspace workspacePath,
             Map<String, String> env) {
 
         record StepInfo(
@@ -647,10 +674,10 @@ public class PipelineExecutionService {
                             stepInfo.workingDirectory,
                             stepInfo.timeoutSeconds,
                             stepInfo.envVars,
-                            ctx.dockerHostUrl,
                             workspacePath,
                             env,
-                            logLine -> logAndBroadcast(executionId, "    " + logLine));
+                            logLine -> logAndBroadcast(executionId, "    " + logLine),
+                            () -> isCancelled(executionId));
 
             final boolean success = result.success();
             transactionTemplate.executeWithoutResult(
@@ -697,23 +724,76 @@ public class PipelineExecutionService {
         }
     }
 
+    /**
+     * Logs are kept in memory and saved every couple of seconds. (Each line used to start a new
+     * task that re-read the execution and rewrote the whole log; on a large build that queued
+     * thousands of writes on SQLite's single connection and stalled the whole app.)
+     */
+    private final Map<String, StringBuilder> logBuffers = new ConcurrentHashMap<>();
+
+    private final Map<String, Long> lastFlush = new ConcurrentHashMap<>();
+    private final Set<String> cancelledExecutions = ConcurrentHashMap.newKeySet();
+
     private void logAndBroadcast(String executionId, String message) {
         broadcastLog(executionId, message);
+        StringBuilder buffer = logBuffers.computeIfAbsent(executionId, k -> new StringBuilder());
+        boolean flush;
+        synchronized (buffer) {
+            if (buffer.length() < 2_000_000) {
+                buffer.append('[')
+                        .append(java.time.Instant.now())
+                        .append("] ")
+                        .append(message)
+                        .append('\n');
+            }
+            long now = System.currentTimeMillis();
+            flush = now - lastFlush.getOrDefault(executionId, 0L) > 2000;
+            if (flush) lastFlush.put(executionId, now);
+        }
+        if (flush) {
+            String text = logText(executionId);
+            try {
+                transactionTemplate.executeWithoutResult(
+                        status ->
+                                executionRepository
+                                        .findById(executionId)
+                                        .ifPresent(
+                                                exec -> {
+                                                    exec.setLogs(text);
+                                                    executionRepository.save(exec);
+                                                }));
+            } catch (Exception e) {
+                log.warn("Could not save pipeline log: {}", e.getMessage());
+            }
+        }
+    }
 
-        CompletableFuture.runAsync(
-                () -> {
-                    try {
-                        transactionTemplate.executeWithoutResult(
-                                status -> {
-                                    PipelineExecution exec =
-                                            executionRepository.findById(executionId).orElse(null);
-                                    if (exec != null) {
-                                        appendLog(exec, message);
-                                        executionRepository.save(exec);
-                                    }
-                                });
-                    } catch (Exception e) {
-                        log.warn("Failed to save log to DB: {}", e.getMessage());
+    private String logText(String executionId) {
+        StringBuilder buffer = logBuffers.get(executionId);
+        if (buffer == null) return null;
+        synchronized (buffer) {
+            return buffer.toString();
+        }
+    }
+
+    private boolean isCancelled(String executionId) {
+        return cancelledExecutions.contains(executionId);
+    }
+
+    /** Runs that were in progress when the server stopped will never finish. */
+    @org.springframework.context.event.EventListener(
+            org.springframework.boot.context.event.ApplicationReadyEvent.class)
+    public void failInterruptedExecutions() {
+        transactionTemplate.executeWithoutResult(
+                status -> {
+                    for (PipelineExecution exec : executionRepository.findAll()) {
+                        if (exec.getStatus() == PipelineExecution.ExecutionStatus.RUNNING
+                                || exec.getStatus() == PipelineExecution.ExecutionStatus.PENDING) {
+                            exec.setStatus(PipelineExecution.ExecutionStatus.FAILED);
+                            exec.setErrorMessage("Interrupted because Docker Manager restarted");
+                            exec.setFinishedAt(System.currentTimeMillis());
+                            executionRepository.save(exec);
+                        }
                     }
                 });
     }
@@ -726,13 +806,17 @@ public class PipelineExecutionService {
                         .orElseThrow(
                                 () -> new RuntimeException("Execution not found: " + executionId));
 
-        if (execution.getStatus() == PipelineExecution.ExecutionStatus.PENDING
-                || execution.getStatus() == PipelineExecution.ExecutionStatus.RUNNING) {
+        if (execution.getStatus() == PipelineExecution.ExecutionStatus.PENDING) {
             execution.setStatus(PipelineExecution.ExecutionStatus.CANCELLED);
             execution.setFinishedAt(System.currentTimeMillis());
             appendLog(execution, "Execution cancelled");
             executionRepository.save(execution);
             broadcastLog(executionId, "Execution cancelled");
+        } else if (execution.getStatus() == PipelineExecution.ExecutionStatus.RUNNING) {
+            // The run stops its current step container and does not start new ones; it then
+            // records itself as cancelled.
+            cancelledExecutions.add(executionId);
+            broadcastLog(executionId, "Cancelling...");
         }
 
         return execution;
@@ -775,6 +859,15 @@ public class PipelineExecutionService {
         emitter.onCompletion(() -> removeEmitter(executionId, emitter));
         emitter.onTimeout(() -> removeEmitter(executionId, emitter));
         emitter.onError(e -> removeEmitter(executionId, emitter));
+        // The run may have finished between the caller's status check and registration.
+        executionRepository
+                .findById(executionId)
+                .filter(
+                        e ->
+                                e.getStatus() != PipelineExecution.ExecutionStatus.RUNNING
+                                        && e.getStatus()
+                                                != PipelineExecution.ExecutionStatus.PENDING)
+                .ifPresent(e -> completeEmitters(executionId));
     }
 
     private void removeEmitter(String executionId, SseEmitter emitter) {

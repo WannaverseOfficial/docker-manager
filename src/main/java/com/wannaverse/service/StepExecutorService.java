@@ -3,486 +3,120 @@ package com.wannaverse.service;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.dockerjava.api.DockerClient;
+import com.github.dockerjava.api.async.ResultCallback;
+import com.github.dockerjava.api.command.BuildImageResultCallback;
 import com.github.dockerjava.api.command.CreateContainerResponse;
-import com.github.dockerjava.api.model.Bind;
-import com.github.dockerjava.api.model.HostConfig;
-import com.github.dockerjava.api.model.Volume;
-import com.wannaverse.persistence.*;
+import com.github.dockerjava.api.model.*;
+import com.wannaverse.persistence.GitRepository;
+import com.wannaverse.persistence.Pipeline;
+import com.wannaverse.persistence.PipelineStep;
 
+import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
+import org.apache.commons.compress.archivers.tar.TarArchiveInputStream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
-import java.io.*;
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
+import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 
+/**
+ * Runs pipeline steps in throwaway containers.
+ *
+ * <p>The workspace (the cloned repository plus anything steps write) lives in a Docker volume on
+ * the target host, mounted at /workspace in every step container. It used to be a bind mount of a
+ * folder inside Docker Manager's own container; the Docker daemon resolves bind paths on the host,
+ * so steps saw an empty folder. The volume is filled from, and read back into, the local copy
+ * through the archive API, which works for local and remote hosts alike.
+ */
 @Service
 public class StepExecutorService {
     private static final Logger log = LoggerFactory.getLogger(StepExecutorService.class);
+    private static final String HELPER_IMAGE = "busybox:stable";
+    private static final String DEFAULT_SHELL_IMAGE = "alpine:3";
+    private static final String DEFAULT_JAVA_IMAGE = "eclipse-temurin:21-jre";
 
     private final DockerService dockerService;
     private final GitService gitService;
-    private final ObjectMapper objectMapper;
+    private final ComposeRunner composeRunner;
+    private final DockerRegistryService registryService;
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Value("${app.pipeline.workspace-dir:#{systemProperties['java.io.tmpdir']}/pipelines}")
     private String workspaceBaseDir;
 
     public StepExecutorService(
-            DockerService dockerService, GitService gitService, ObjectMapper objectMapper) {
+            DockerService dockerService,
+            GitService gitService,
+            ComposeRunner composeRunner,
+            DockerRegistryService registryService) {
         this.dockerService = dockerService;
         this.gitService = gitService;
-        this.objectMapper = objectMapper;
+        this.composeRunner = composeRunner;
+        this.registryService = registryService;
     }
 
-    public StepResult executeStep(
-            PipelineStep step,
-            StepExecution stepExecution,
-            DockerHost dockerHost,
-            Path workspacePath,
-            Map<String, String> env,
-            Consumer<String> logConsumer)
-            throws Exception {
+    public record StepResult(boolean success, int exitCode, String logs, String error) {}
 
-        log.info("Executing step: {} (type: {})", step.getName(), step.getStepType());
-        logConsumer.accept("Starting step: " + step.getName());
+    /** A pipeline run's workspace: a local folder and the matching volume on the Docker host. */
+    public final class Workspace implements AutoCloseable {
+        public final Path local;
+        final String volume;
+        final DockerClient client;
 
-        // Parse environment variables from step config
-        Map<String, String> stepEnv = new HashMap<>(env);
-        if (step.getEnvironmentVariables() != null && !step.getEnvironmentVariables().isEmpty()) {
+        /** True when the volume may have changes the local folder does not have. */
+        boolean volumeAhead;
+
+        Workspace(Path local, String volume, DockerClient client) {
+            this.local = local;
+            this.volume = volume;
+            this.client = client;
+        }
+
+        @Override
+        public void close() {
             try {
-                JsonNode envNode = objectMapper.readTree(step.getEnvironmentVariables());
-                envNode.fields()
-                        .forEachRemaining(
-                                entry -> stepEnv.put(entry.getKey(), entry.getValue().asText()));
+                client.removeVolumeCmd(volume).exec();
             } catch (Exception e) {
-                log.warn("Failed to parse step environment variables", e);
+                log.warn("Could not remove workspace volume {}: {}", volume, e.getMessage());
             }
-        }
-
-        return switch (step.getStepType()) {
-            case SHELL -> executeShellStep(step, dockerHost, workspacePath, stepEnv, logConsumer);
-            case JAR -> executeJarStep(step, dockerHost, workspacePath, stepEnv, logConsumer);
-            case DOCKERFILE ->
-                    executeDockerfileStep(step, dockerHost, workspacePath, stepEnv, logConsumer);
-            case DOCKER_COMPOSE ->
-                    executeDockerComposeStep(step, dockerHost, workspacePath, stepEnv, logConsumer);
-            case CUSTOM_IMAGE ->
-                    executeCustomImageStep(step, dockerHost, workspacePath, stepEnv, logConsumer);
-        };
-    }
-
-    private StepResult executeShellStep(
-            PipelineStep step,
-            DockerHost dockerHost,
-            Path workspacePath,
-            Map<String, String> env,
-            Consumer<String> logConsumer)
-            throws Exception {
-
-        JsonNode config = objectMapper.readTree(step.getConfiguration());
-        String script = config.get("script").asText();
-        String shell = config.has("shell") ? config.get("shell").asText() : "/bin/sh";
-
-        logConsumer.accept("Executing shell script with " + shell);
-
-        DockerClient client = dockerService.createClientCached(dockerHost.getDockerHostUrl());
-
-        String image = config.has("image") ? config.get("image").asText() : "alpine:latest";
-
-        try {
-            client.pullImageCmd(image).start().awaitCompletion(5, TimeUnit.MINUTES);
-        } catch (Exception e) {
-            logConsumer.accept(
-                    "Warning: Could not pull image " + image + ", using local if available");
-        }
-
-        List<String> envList = new ArrayList<>();
-        env.forEach((k, v) -> envList.add(k + "=" + v));
-
-        CreateContainerResponse container =
-                client.createContainerCmd(image)
-                        .withCmd(shell, "-c", script)
-                        .withWorkingDir("/workspace")
-                        .withEnv(envList)
-                        .withHostConfig(
-                                HostConfig.newHostConfig()
-                                        .withBinds(
-                                                new Bind(
-                                                        workspacePath.toString(),
-                                                        new Volume("/workspace"))))
-                        .exec();
-
-        String containerId = container.getId();
-        logConsumer.accept("Created container: " + containerId.substring(0, 12));
-
-        try {
-            client.startContainerCmd(containerId).exec();
-
-            int exitCode =
-                    client.waitContainerCmd(containerId)
-                            .start()
-                            .awaitStatusCode(step.getTimeoutSeconds(), TimeUnit.SECONDS);
-
-            StringBuilder logs = new StringBuilder();
-            client.logContainerCmd(containerId)
-                    .withStdOut(true)
-                    .withStdErr(true)
-                    .withFollowStream(false)
-                    .exec(
-                            new com.github.dockerjava.api.async.ResultCallback.Adapter<
-                                    com.github.dockerjava.api.model.Frame>() {
-                                @Override
-                                public void onNext(com.github.dockerjava.api.model.Frame frame) {
-                                    String line = new String(frame.getPayload()).trim();
-                                    logs.append(line).append("\n");
-                                    logConsumer.accept(line);
-                                }
-                            })
-                    .awaitCompletion(30, TimeUnit.SECONDS);
-
-            return new StepResult(exitCode == 0, exitCode, logs.toString(), null);
-
-        } finally {
-            try {
-                client.removeContainerCmd(containerId).withForce(true).exec();
-            } catch (Exception e) {
-                log.warn("Failed to remove container {}", containerId, e);
-            }
+            deleteDir(local);
         }
     }
 
-    private StepResult executeJarStep(
-            PipelineStep step,
-            DockerHost dockerHost,
-            Path workspacePath,
-            Map<String, String> env,
-            Consumer<String> logConsumer)
-            throws Exception {
-
-        JsonNode config = objectMapper.readTree(step.getConfiguration());
-        String jarPath = config.get("jarPath").asText();
-        String jvmOpts = config.has("jvmOpts") ? config.get("jvmOpts").asText() : "";
-        List<String> args = new ArrayList<>();
-        if (config.has("args")) {
-            config.get("args").forEach(arg -> args.add(arg.asText()));
-        }
-
-        logConsumer.accept("Executing JAR: " + jarPath);
-
-        StringBuilder cmd = new StringBuilder("java ");
-        if (!jvmOpts.isEmpty()) {
-            cmd.append(jvmOpts).append(" ");
-        }
-        cmd.append("-jar ").append(jarPath);
-        for (String arg : args) {
-            cmd.append(" ").append(arg);
-        }
-
-        String image = config.has("image") ? config.get("image").asText() : "openjdk:17-slim";
-
-        DockerClient client = dockerService.createClientCached(dockerHost.getDockerHostUrl());
-
-        try {
-            client.pullImageCmd(image).start().awaitCompletion(5, TimeUnit.MINUTES);
-        } catch (Exception e) {
-            logConsumer.accept("Warning: Could not pull image " + image);
-        }
-
-        List<String> envList = new ArrayList<>();
-        env.forEach((k, v) -> envList.add(k + "=" + v));
-
-        CreateContainerResponse container =
-                client.createContainerCmd(image)
-                        .withCmd("/bin/sh", "-c", cmd.toString())
-                        .withWorkingDir("/workspace")
-                        .withEnv(envList)
-                        .withHostConfig(
-                                HostConfig.newHostConfig()
-                                        .withBinds(
-                                                new Bind(
-                                                        workspacePath.toString(),
-                                                        new Volume("/workspace"))))
-                        .exec();
-
-        String containerId = container.getId();
-
-        try {
-            client.startContainerCmd(containerId).exec();
-
-            int exitCode =
-                    client.waitContainerCmd(containerId)
-                            .start()
-                            .awaitStatusCode(step.getTimeoutSeconds(), TimeUnit.SECONDS);
-
-            StringBuilder logs = new StringBuilder();
-            client.logContainerCmd(containerId)
-                    .withStdOut(true)
-                    .withStdErr(true)
-                    .exec(
-                            new com.github.dockerjava.api.async.ResultCallback.Adapter<
-                                    com.github.dockerjava.api.model.Frame>() {
-                                @Override
-                                public void onNext(com.github.dockerjava.api.model.Frame frame) {
-                                    String line = new String(frame.getPayload()).trim();
-                                    logs.append(line).append("\n");
-                                    logConsumer.accept(line);
-                                }
-                            })
-                    .awaitCompletion(30, TimeUnit.SECONDS);
-
-            return new StepResult(exitCode == 0, exitCode, logs.toString(), null);
-
-        } finally {
-            try {
-                client.removeContainerCmd(containerId).withForce(true).exec();
-            } catch (Exception e) {
-                log.warn("Failed to remove container {}", containerId, e);
-            }
-        }
-    }
-
-    private StepResult executeDockerfileStep(
-            PipelineStep step,
-            DockerHost dockerHost,
-            Path workspacePath,
-            Map<String, String> env,
-            Consumer<String> logConsumer)
-            throws Exception {
-
-        JsonNode config = objectMapper.readTree(step.getConfiguration());
-        String dockerfile =
-                config.has("dockerfile") ? config.get("dockerfile").asText() : "Dockerfile";
-        String imageName = config.get("imageName").asText();
-
-        logConsumer.accept("Building Docker image from " + dockerfile);
-
-        DockerClient client = dockerService.createClientCached(dockerHost.getDockerHostUrl());
-
-        File dockerfileFile = workspacePath.resolve(dockerfile).toFile();
-        if (!dockerfileFile.exists()) {
-            return new StepResult(false, 1, "", "Dockerfile not found: " + dockerfile);
-        }
-
-        StringBuilder logs = new StringBuilder();
-
-        try {
-            Set<String> tags = new HashSet<>();
-            tags.add(imageName);
-
-            String imageId =
-                    client.buildImageCmd()
-                            .withDockerfile(dockerfileFile)
-                            .withBaseDirectory(workspacePath.toFile())
-                            .withTags(tags)
-                            .exec(
-                                    new com.github.dockerjava.api.command
-                                            .BuildImageResultCallback() {
-                                        @Override
-                                        public void onNext(
-                                                com.github.dockerjava.api.model.BuildResponseItem
-                                                        item) {
-                                            super.onNext(item);
-                                            if (item.getStream() != null) {
-                                                String line = item.getStream().trim();
-                                                if (!line.isEmpty()) {
-                                                    logs.append(line).append("\n");
-                                                    logConsumer.accept(line);
-                                                }
-                                            }
-                                            if (item.getErrorDetail() != null) {
-                                                String error = item.getErrorDetail().getMessage();
-                                                logs.append("ERROR: ").append(error).append("\n");
-                                                logConsumer.accept("ERROR: " + error);
-                                            }
-                                        }
-                                    })
-                            .awaitImageId();
-
-            logConsumer.accept("Image built successfully: " + imageId);
-            return new StepResult(true, 0, logs.toString(), null);
-
-        } catch (Exception e) {
-            logConsumer.accept("Build failed: " + e.getMessage());
-            return new StepResult(false, 1, logs.toString(), e.getMessage());
-        }
-    }
-
-    private StepResult executeDockerComposeStep(
-            PipelineStep step,
-            DockerHost dockerHost,
-            Path workspacePath,
-            Map<String, String> env,
-            Consumer<String> logConsumer)
-            throws Exception {
-
-        JsonNode config = objectMapper.readTree(step.getConfiguration());
-        String composeFile =
-                config.has("composeFile")
-                        ? config.get("composeFile").asText()
-                        : "docker-compose.yml";
-        String command = config.has("command") ? config.get("command").asText() : "up -d";
-
-        logConsumer.accept("Running docker-compose " + command);
-
-        File composeFileObj = workspacePath.resolve(composeFile).toFile();
-        if (!composeFileObj.exists()) {
-            return new StepResult(false, 1, "", "docker-compose.yml not found: " + composeFile);
-        }
-
-        String dockerHostStr = dockerHostUrl(dockerHost);
-        ProcessBuilder pb =
-                new ProcessBuilder(
-                        "docker",
-                        "-H",
-                        dockerHostStr,
-                        "compose",
-                        "-f",
-                        composeFileObj.getAbsolutePath());
-        pb.command().addAll(Arrays.asList(command.split("\\s+")));
-        pb.directory(workspacePath.toFile());
-        pb.environment().put("DOCKER_HOST", dockerHostStr);
-        pb.environment().putAll(env);
-        pb.redirectErrorStream(true);
-
-        StringBuilder logs = new StringBuilder();
-        Process process = pb.start();
-
-        try (BufferedReader reader =
-                new BufferedReader(new InputStreamReader(process.getInputStream()))) {
-            String line;
-            while ((line = reader.readLine()) != null) {
-                logs.append(line).append("\n");
-                logConsumer.accept(line);
-            }
-        }
-
-        int exitCode = process.waitFor();
-        return new StepResult(exitCode == 0, exitCode, logs.toString(), null);
-    }
-
-    private StepResult executeCustomImageStep(
-            PipelineStep step,
-            DockerHost dockerHost,
-            Path workspacePath,
-            Map<String, String> env,
-            Consumer<String> logConsumer)
-            throws Exception {
-
-        JsonNode config = objectMapper.readTree(step.getConfiguration());
-        String image = config.get("image").asText();
-        String command = config.get("command").asText();
-
-        logConsumer.accept("Running command in image: " + image);
-
-        DockerClient client = dockerService.createClientCached(dockerHost.getDockerHostUrl());
-
-        try {
-            client.pullImageCmd(image).start().awaitCompletion(10, TimeUnit.MINUTES);
-        } catch (Exception e) {
-            logConsumer.accept("Warning: Could not pull image " + image);
-        }
-
-        List<String> envList = new ArrayList<>();
-        env.forEach((k, v) -> envList.add(k + "=" + v));
-
-        // Parse volumes from config
-        List<Bind> binds = new ArrayList<>();
-        binds.add(new Bind(workspacePath.toString(), new Volume("/workspace")));
-
-        if (config.has("volumes")) {
-            config.get("volumes")
-                    .forEach(
-                            vol -> {
-                                String volStr = vol.asText();
-                                String[] parts = volStr.split(":");
-                                if (parts.length >= 2) {
-                                    binds.add(new Bind(parts[0], new Volume(parts[1])));
-                                }
-                            });
-        }
-
-        CreateContainerResponse container =
-                client.createContainerCmd(image)
-                        .withCmd("/bin/sh", "-c", command)
-                        .withWorkingDir("/workspace")
-                        .withEnv(envList)
-                        .withHostConfig(HostConfig.newHostConfig().withBinds(binds))
-                        .exec();
-
-        String containerId = container.getId();
-
-        try {
-            client.startContainerCmd(containerId).exec();
-
-            int exitCode =
-                    client.waitContainerCmd(containerId)
-                            .start()
-                            .awaitStatusCode(step.getTimeoutSeconds(), TimeUnit.SECONDS);
-
-            StringBuilder logs = new StringBuilder();
-            client.logContainerCmd(containerId)
-                    .withStdOut(true)
-                    .withStdErr(true)
-                    .exec(
-                            new com.github.dockerjava.api.async.ResultCallback.Adapter<
-                                    com.github.dockerjava.api.model.Frame>() {
-                                @Override
-                                public void onNext(com.github.dockerjava.api.model.Frame frame) {
-                                    String line = new String(frame.getPayload()).trim();
-                                    logs.append(line).append("\n");
-                                    logConsumer.accept(line);
-                                }
-                            })
-                    .awaitCompletion(30, TimeUnit.SECONDS);
-
-            return new StepResult(exitCode == 0, exitCode, logs.toString(), null);
-
-        } finally {
-            try {
-                client.removeContainerCmd(containerId).withForce(true).exec();
-            } catch (Exception e) {
-                log.warn("Failed to remove container {}", containerId, e);
-            }
-        }
-    }
-
-    private String dockerHostUrl(DockerHost host) {
-        String url = host.getDockerHostUrl();
-        if (url.startsWith("unix://") && !url.startsWith("unix:///")) {
-            url = "unix:///" + url.substring(7);
-        }
-        return url;
-    }
-
-    public Path prepareWorkspace(Pipeline pipeline, String executionId) throws IOException {
-        Path workspaceDir = Path.of(workspaceBaseDir, pipeline.getId(), executionId);
-        Files.createDirectories(workspaceDir);
-        return workspaceDir;
-    }
-
-    public Path prepareWorkspace(String pipelineId, String pipelineName, String executionId)
+    public Workspace prepareWorkspace(String dockerHostUrl, String pipelineId, String executionId)
             throws IOException {
-        Path workspaceDir = Path.of(workspaceBaseDir, pipelineId, executionId);
-        Files.createDirectories(workspaceDir);
-        log.info("Prepared workspace for pipeline '{}': {}", pipelineName, workspaceDir);
-        return workspaceDir;
+        Path local = Path.of(workspaceBaseDir, pipelineId, executionId);
+        deleteDir(local);
+        Files.createDirectories(local);
+        DockerClient client = dockerService.createClientCached(dockerHostUrl);
+        String volume = "dm-pipeline-" + executionId;
+        client.createVolumeCmd()
+                .withName(volume)
+                .withLabels(Map.of("com.wannaverse.pipeline", pipelineId))
+                .exec();
+        return new Workspace(local, volume, client);
     }
 
-    public Path cloneRepository(Pipeline pipeline, Path workspacePath) throws Exception {
-        if (pipeline.getGitRepository() != null) {
-            return gitService.cloneOrPullRepositoryTo(pipeline.getGitRepository(), workspacePath);
-        }
-        return workspacePath;
-    }
-
-    public Path cloneRepository(String repoUrl, String branch, Path workspacePath)
+    /** Clones the pipeline's repository into the workspace at the given branch or commit. */
+    public String cloneRepository(
+            GitRepository repo, String branch, String commit, Workspace ws, Consumer<String> out)
             throws Exception {
-        return gitService.cloneOrPullRepositoryTo(repoUrl, branch, workspacePath);
+        Path checkout = gitService.checkoutForPipeline(repo, branch, commit, ws.local);
+        String sha = gitService.getCurrentCommitSha(checkout);
+        out.accept("Checked out " + (sha == null ? "?" : sha.substring(0, 7)));
+        pushToVolume(ws);
+        return sha;
     }
 
     public StepResult executeStep(
@@ -492,306 +126,422 @@ public class StepExecutorService {
             String workingDirectory,
             int timeoutSeconds,
             String environmentVariables,
-            String dockerHostUrl,
-            Path workspacePath,
+            Workspace ws,
             Map<String, String> env,
-            Consumer<String> logConsumer)
+            Consumer<String> out,
+            BooleanSupplier cancelled)
             throws Exception {
-
-        log.info("Executing step: {} (type: {})", stepName, stepType);
-        log.info("Step - calling logConsumer");
-        logConsumer.accept("Starting step: " + stepName);
-        log.info("Step - logConsumer returned, parsing env vars");
-
-        Map<String, String> stepEnv = new HashMap<>(env);
-        if (environmentVariables != null && !environmentVariables.isEmpty()) {
+        out.accept("Starting step: " + stepName);
+        Map<String, String> stepEnv = new LinkedHashMap<>(env);
+        if (environmentVariables != null && !environmentVariables.isBlank()) {
             try {
                 JsonNode envNode = objectMapper.readTree(environmentVariables);
                 envNode.fields()
-                        .forEachRemaining(
-                                entry -> stepEnv.put(entry.getKey(), entry.getValue().asText()));
+                        .forEachRemaining(e -> stepEnv.put(e.getKey(), e.getValue().asText()));
             } catch (Exception e) {
-                log.warn("Failed to parse step environment variables", e);
+                out.accept("Warning: could not read the step's environment variables");
             }
         }
+        JsonNode config =
+                configuration == null || configuration.isBlank()
+                        ? objectMapper.createObjectNode()
+                        : objectMapper.readTree(configuration);
+        int timeout = timeoutSeconds > 0 ? timeoutSeconds : 3600;
+        String workDir = containerWorkDir(workingDirectory);
 
-        log.info("Step - dispatching to {} executor", stepType);
-        StepResult result =
-                switch (stepType) {
-                    case SHELL ->
-                            executeShellStepWithConfig(
-                                    configuration,
-                                    timeoutSeconds,
-                                    dockerHostUrl,
-                                    workspacePath,
-                                    stepEnv,
-                                    logConsumer);
-                    case JAR ->
-                            executeJarStepWithConfig(
-                                    configuration,
-                                    timeoutSeconds,
-                                    dockerHostUrl,
-                                    workspacePath,
-                                    stepEnv,
-                                    logConsumer);
-                    case DOCKERFILE ->
-                            executeDockerfileStepWithConfig(
-                                    configuration,
-                                    dockerHostUrl,
-                                    workspacePath,
-                                    stepEnv,
-                                    logConsumer);
-                    case DOCKER_COMPOSE ->
-                            executeDockerComposeStepWithConfig(
-                                    configuration,
-                                    dockerHostUrl,
-                                    workspacePath,
-                                    stepEnv,
-                                    logConsumer);
-                    case CUSTOM_IMAGE ->
-                            executeCustomImageStepWithConfig(
-                                    configuration,
-                                    timeoutSeconds,
-                                    dockerHostUrl,
-                                    workspacePath,
-                                    stepEnv,
-                                    logConsumer);
-                };
-        log.info("Step - executor returned, success={}", result.success());
-        return result;
+        return switch (stepType) {
+            case SHELL -> {
+                String script = text(config, "script", "");
+                String shell = text(config, "shell", "/bin/sh");
+                String image = text(config, "image", DEFAULT_SHELL_IMAGE);
+                yield runContainer(
+                        ws,
+                        image,
+                        List.of(shell, "-c", script),
+                        workDir,
+                        stepEnv,
+                        timeout,
+                        out,
+                        cancelled);
+            }
+            case JAR -> {
+                String jar = text(config, "jarPath", null);
+                if (jar == null) yield new StepResult(false, 1, "", "Set the path of the JAR file");
+                List<String> cmd = new ArrayList<>(List.of("java"));
+                cmd.addAll(splitArgs(text(config, "jvmOpts", "")));
+                cmd.add("-jar");
+                cmd.add(jar);
+                JsonNode args = config.get("args");
+                if (args != null && args.isArray()) args.forEach(a -> cmd.add(a.asText()));
+                else if (args != null) cmd.addAll(splitArgs(args.asText()));
+                String image = text(config, "image", DEFAULT_JAVA_IMAGE);
+                yield runContainer(ws, image, cmd, workDir, stepEnv, timeout, out, cancelled);
+            }
+            case CUSTOM_IMAGE -> {
+                String image = text(config, "image", null);
+                if (image == null) yield new StepResult(false, 1, "", "Set the image to run");
+                String command = text(config, "command", "");
+                List<String> cmd =
+                        command.isBlank() ? List.of() : List.of("/bin/sh", "-c", command);
+                yield runContainer(ws, image, cmd, workDir, stepEnv, timeout, out, cancelled);
+            }
+            case DOCKERFILE -> {
+                pullFromVolume(ws);
+                yield buildImage(ws, config, workingDirectory, out, cancelled);
+            }
+            case DOCKER_COMPOSE -> {
+                pullFromVolume(ws);
+                yield runCompose(ws, config, workingDirectory, out);
+            }
+        };
     }
 
-    private StepResult executeShellStepWithConfig(
-            String configuration,
-            int timeoutSeconds,
-            String dockerHostUrl,
-            Path workspacePath,
+    // --- container steps ---------------------------------------------------------------------
+
+    private StepResult runContainer(
+            Workspace ws,
+            String image,
+            List<String> cmd,
+            String workDir,
             Map<String, String> env,
-            Consumer<String> logConsumer)
+            int timeoutSeconds,
+            Consumer<String> out,
+            BooleanSupplier cancelled)
             throws Exception {
-
-        JsonNode config = objectMapper.readTree(configuration);
-        String script = config.get("script").asText();
-        String shell = config.has("shell") ? config.get("shell").asText() : "/bin/sh";
-
-        logConsumer.accept(
-                "Executing: "
-                        + script.substring(0, Math.min(80, script.length()))
-                        + (script.length() > 80 ? "..." : ""));
-        logConsumer.accept("Connecting to Docker: " + dockerHostUrl);
-
-        DockerClient client = dockerService.createClientCached(dockerHostUrl);
-        logConsumer.accept("Docker connection established");
-
-        String image = config.has("image") ? config.get("image").asText() : "alpine:latest";
-        logConsumer.accept("Using image: " + image);
-
-        logConsumer.accept("Pulling image...");
-        try {
-            client.pullImageCmd(image).start().awaitCompletion(5, TimeUnit.MINUTES);
-            logConsumer.accept("Image ready");
-        } catch (Exception e) {
-            logConsumer.accept("Warning: Could not pull image, using local: " + e.getMessage());
-        }
+        DockerClient client = ws.client;
+        out.accept("Image: " + image);
+        pull(client, image, out);
 
         List<String> envList = new ArrayList<>();
         env.forEach((k, v) -> envList.add(k + "=" + v));
 
-        logConsumer.accept("Creating container...");
-        CreateContainerResponse container =
+        var create =
                 client.createContainerCmd(image)
-                        .withCmd(shell, "-c", script)
-                        .withWorkingDir("/workspace")
+                        .withWorkingDir(workDir)
                         .withEnv(envList)
+                        .withLabels(Map.of("com.wannaverse.pipeline-step", "true"))
                         .withHostConfig(
                                 HostConfig.newHostConfig()
-                                        .withBinds(
-                                                new Bind(
-                                                        workspacePath.toString(),
-                                                        new Volume("/workspace"))))
-                        .exec();
+                                        .withBinds(new Bind(ws.volume, new Volume("/workspace"))));
+        if (!cmd.isEmpty()) create.withCmd(cmd);
+        CreateContainerResponse container = create.exec();
+        String id = container.getId();
+        ws.volumeAhead = true;
 
-        String containerId = container.getId();
-        logConsumer.accept("Container: " + containerId.substring(0, 12));
-
+        StringBuilder logs = new StringBuilder();
         try {
-            logConsumer.accept("Starting container...");
-            client.startContainerCmd(containerId).exec();
-            logConsumer.accept("Running...");
-            int exitCode =
-                    client.waitContainerCmd(containerId)
-                            .start()
-                            .awaitStatusCode(timeoutSeconds, TimeUnit.SECONDS);
+            client.startContainerCmd(id).exec();
+            var follow =
+                    client.logContainerCmd(id)
+                            .withStdOut(true)
+                            .withStdErr(true)
+                            .withFollowStream(true)
+                            .exec(
+                                    new ResultCallback.Adapter<Frame>() {
+                                        private final StringBuilder partial = new StringBuilder();
 
-            logConsumer.accept("Container exited with code: " + exitCode);
-            logConsumer.accept("--- Output ---");
+                                        @Override
+                                        public void onNext(Frame frame) {
+                                            partial.append(
+                                                    new String(
+                                                            frame.getPayload(),
+                                                            StandardCharsets.UTF_8));
+                                            int nl;
+                                            while ((nl = partial.indexOf("\n")) >= 0) {
+                                                String line =
+                                                        partial.substring(0, nl).stripTrailing();
+                                                partial.delete(0, nl + 1);
+                                                emit(line);
+                                            }
+                                        }
 
-            StringBuilder logs = new StringBuilder();
-            client.logContainerCmd(containerId)
-                    .withStdOut(true)
-                    .withStdErr(true)
-                    .withFollowStream(false)
-                    .exec(
-                            new com.github.dockerjava.api.async.ResultCallback.Adapter<
-                                    com.github.dockerjava.api.model.Frame>() {
-                                @Override
-                                public void onNext(com.github.dockerjava.api.model.Frame frame) {
-                                    String line = new String(frame.getPayload()).trim();
-                                    logs.append(line).append("\n");
-                                    logConsumer.accept(line);
-                                }
-                            })
-                    .awaitCompletion(30, TimeUnit.SECONDS);
+                                        @Override
+                                        public void onComplete() {
+                                            if (!partial.isEmpty()) emit(partial.toString());
+                                            super.onComplete();
+                                        }
 
-            logConsumer.accept("--- End Output ---");
+                                        private void emit(String line) {
+                                            if (logs.length() < 1_000_000)
+                                                logs.append(line).append('\n');
+                                            out.accept(line);
+                                        }
+                                    });
 
+            long deadline = System.currentTimeMillis() + timeoutSeconds * 1000L;
+            Integer exit = null;
+            while (exit == null) {
+                if (cancelled.getAsBoolean()) {
+                    out.accept("Stopping: the run was cancelled");
+                    kill(client, id);
+                    return new StepResult(false, 130, logs.toString(), "Cancelled");
+                }
+                if (System.currentTimeMillis() > deadline) {
+                    out.accept(
+                            "Stopping: the step took longer than " + timeoutSeconds + " seconds");
+                    kill(client, id);
+                    return new StepResult(false, 124, logs.toString(), "Timed out");
+                }
+                var state = client.inspectContainerCmd(id).exec().getState();
+                if (!Boolean.TRUE.equals(state.getRunning())) {
+                    Long code = state.getExitCodeLong();
+                    exit = code == null ? -1 : code.intValue();
+                } else {
+                    Thread.sleep(500);
+                }
+            }
+            follow.awaitCompletion(10, TimeUnit.SECONDS);
+            out.accept("Exited with code " + exit);
             return new StepResult(
-                    exitCode == 0,
-                    exitCode,
-                    logs.toString(),
-                    exitCode != 0 ? "Exit code: " + exitCode : null);
+                    exit == 0, exit, logs.toString(), exit == 0 ? null : "Exit code " + exit);
         } finally {
             try {
-                client.removeContainerCmd(containerId).withForce(true).exec();
+                client.removeContainerCmd(id).withForce(true).exec();
             } catch (Exception e) {
-                log.warn("Failed to remove container: {}", containerId);
+                log.warn("Could not remove step container {}", id);
             }
         }
     }
 
-    private StepResult executeJarStepWithConfig(
-            String configuration,
-            int timeoutSeconds,
-            String dockerHostUrl,
-            Path workspacePath,
-            Map<String, String> env,
-            Consumer<String> logConsumer)
-            throws Exception {
-        JsonNode config = objectMapper.readTree(configuration);
-        String jarPath = config.get("jarPath").asText();
-        String jvmOpts = config.has("jvmOpts") ? config.get("jvmOpts").asText() : "";
-        String args = config.has("args") ? config.get("args").toString() : "";
-
-        String script = "java " + jvmOpts + " -jar " + jarPath + " " + args;
-        String newConfig =
-                "{\"script\":\""
-                        + script.replace("\"", "\\\"")
-                        + "\",\"image\":\"openjdk:17-alpine\"}";
-        return executeShellStepWithConfig(
-                newConfig, timeoutSeconds, dockerHostUrl, workspacePath, env, logConsumer);
-    }
-
-    private StepResult executeDockerfileStepWithConfig(
-            String configuration,
-            String dockerHostUrl,
-            Path workspacePath,
-            Map<String, String> env,
-            Consumer<String> logConsumer)
-            throws Exception {
-
-        JsonNode config = objectMapper.readTree(configuration);
-        String dockerfile =
-                config.has("dockerfile") ? config.get("dockerfile").asText() : "Dockerfile";
-        String imageName = config.get("imageName").asText();
-
-        logConsumer.accept("Building Docker image: " + imageName);
-
-        DockerClient client = dockerService.createClientCached(dockerHostUrl);
-
-        Path dockerfilePath = workspacePath.resolve(dockerfile);
-        if (!Files.exists(dockerfilePath)) {
-            return new StepResult(false, 1, "", "Dockerfile not found: " + dockerfile);
+    private StepResult buildImage(
+            Workspace ws,
+            JsonNode config,
+            String workingDirectory,
+            Consumer<String> out,
+            BooleanSupplier cancelled) {
+        String imageName = text(config, "imageName", null);
+        if (imageName == null) return new StepResult(false, 1, "", "Set the image name to build");
+        Path context =
+                GitService.resolveInside(ws.local, text(config, "context", workingDirectory), ".");
+        Path dockerfile =
+                GitService.resolveInside(ws.local, text(config, "dockerfile", null), "Dockerfile");
+        if (!Files.isRegularFile(dockerfile)) {
+            return new StepResult(
+                    false, 1, "", "Dockerfile not found: " + ws.local.relativize(dockerfile));
         }
-
         StringBuilder logs = new StringBuilder();
         try {
+            BuildImageResultCallback callback =
+                    new BuildImageResultCallback() {
+                        @Override
+                        public void onNext(BuildResponseItem item) {
+                            if (item.getStream() != null) {
+                                item.getStream()
+                                        .stripTrailing()
+                                        .lines()
+                                        .forEach(
+                                                l -> {
+                                                    logs.append(l).append('\n');
+                                                    out.accept(l);
+                                                });
+                            }
+                            if (item.getErrorDetail() != null)
+                                out.accept("ERROR: " + item.getErrorDetail().getMessage());
+                            if (cancelled.getAsBoolean()) {
+                                try {
+                                    close();
+                                } catch (IOException ignored) {
+                                }
+                            }
+                            super.onNext(item);
+                        }
+                    };
             String imageId =
-                    client.buildImageCmd(dockerfilePath.toFile())
+                    ws.client
+                            .buildImageCmd()
+                            .withBaseDirectory(context.toFile())
+                            .withDockerfile(dockerfile.toFile())
                             .withTags(Set.of(imageName))
-                            .exec(
-                                    new com.github.dockerjava.api.command
-                                            .BuildImageResultCallback() {
-                                        @Override
-                                        public void onNext(
-                                                com.github.dockerjava.api.model.BuildResponseItem
-                                                        item) {
-                                            if (item.getStream() != null) {
-                                                String line = item.getStream().trim();
-                                                logs.append(line).append("\n");
-                                                logConsumer.accept(line);
-                                            }
-                                            super.onNext(item);
-                                        }
-                                    })
+                            .withPull(true)
+                            .exec(callback)
                             .awaitImageId();
-
-            logConsumer.accept("Built image: " + imageId);
+            out.accept("Built image " + imageName + " (" + imageId + ")");
             return new StepResult(true, 0, logs.toString(), null);
         } catch (Exception e) {
             return new StepResult(false, 1, logs.toString(), e.getMessage());
         }
     }
 
-    private StepResult executeDockerComposeStepWithConfig(
-            String configuration,
-            String dockerHostUrl,
-            Path workspacePath,
-            Map<String, String> env,
-            Consumer<String> logConsumer)
-            throws Exception {
-
-        JsonNode config = objectMapper.readTree(configuration);
-        String composeFile =
-                config.has("composeFile")
-                        ? config.get("composeFile").asText()
-                        : "docker-compose.yml";
-        String command = config.has("command") ? config.get("command").asText() : "up -d";
-
-        String script = "docker-compose -f " + composeFile + " " + command;
-        String newConfig =
-                "{\"script\":\""
-                        + script.replace("\"", "\\\"")
-                        + "\",\"image\":\"docker/compose:latest\"}";
-        return executeShellStepWithConfig(
-                newConfig, 3600, dockerHostUrl, workspacePath, env, logConsumer);
+    private StepResult runCompose(
+            Workspace ws, JsonNode config, String workingDirectory, Consumer<String> out) {
+        String file = text(config, "composeFile", "docker-compose.yml");
+        Path composeFile = GitService.resolveInside(ws.local, file, "docker-compose.yml");
+        if (!Files.isRegularFile(composeFile)) {
+            return new StepResult(false, 1, "", "Compose file not found: " + file);
+        }
+        String project =
+                StackService.projectNameFor(text(config, "projectName", "pipeline-" + ws.volume));
+        List<String> args = splitArgs(text(config, "command", "up -d"));
+        String host = dockerHostOf(ws);
+        var result =
+                composeRunner.run(
+                        host,
+                        composeFile.getParent(),
+                        composeFile.getFileName().toString(),
+                        null,
+                        project,
+                        args,
+                        out);
+        return new StepResult(
+                result.ok(),
+                result.exitCode(),
+                result.tail(500),
+                result.ok() ? null : "docker compose failed");
     }
 
-    private StepResult executeCustomImageStepWithConfig(
-            String configuration,
-            int timeoutSeconds,
-            String dockerHostUrl,
-            Path workspacePath,
-            Map<String, String> env,
-            Consumer<String> logConsumer)
-            throws Exception {
+    // --- volume sync -------------------------------------------------------------------------
 
-        JsonNode config = objectMapper.readTree(configuration);
-        String image = config.get("image").asText();
-        String command = config.has("command") ? config.get("command").asText() : "";
-
-        String newConfig =
-                "{\"script\":\""
-                        + command.replace("\"", "\\\"")
-                        + "\",\"image\":\""
-                        + image
-                        + "\"}";
-        return executeShellStepWithConfig(
-                newConfig, timeoutSeconds, dockerHostUrl, workspacePath, env, logConsumer);
-    }
-
-    public void cleanupWorkspace(Path workspacePath) {
+    /** Copies the local workspace into the volume. */
+    private void pushToVolume(Workspace ws) {
+        String helper = helper(ws);
         try {
-            if (workspacePath != null && Files.exists(workspacePath)) {
-                // Delete recursively
-                Files.walk(workspacePath)
-                        .sorted(Comparator.reverseOrder())
-                        .map(Path::toFile)
-                        .forEach(File::delete);
-            }
-        } catch (Exception e) {
-            log.warn("Failed to cleanup workspace: {}", workspacePath, e);
+            ws.client
+                    .copyArchiveToContainerCmd(helper)
+                    .withHostResource(ws.local.toString())
+                    .withDirChildrenOnly(true)
+                    .withRemotePath("/workspace")
+                    .exec();
+        } finally {
+            removeQuietly(ws.client, helper);
         }
     }
 
-    public record StepResult(boolean success, int exitCode, String logs, String error) {}
+    /** Copies the volume (with changes made by earlier steps) back into the local workspace. */
+    private void pullFromVolume(Workspace ws) throws IOException {
+        if (!ws.volumeAhead) return;
+        String helper = helper(ws);
+        Path base = ws.local.toAbsolutePath().normalize();
+        try (InputStream in = ws.client.copyArchiveFromContainerCmd(helper, "/workspace/.").exec();
+                TarArchiveInputStream tar = new TarArchiveInputStream(in)) {
+            TarArchiveEntry entry;
+            while ((entry = tar.getNextEntry()) != null) {
+                String name = entry.getName();
+                // The archive's top folder is "." (or "workspace"); strip it.
+                int slash = name.indexOf('/');
+                String rel = slash >= 0 ? name.substring(slash + 1) : "";
+                if (rel.isEmpty()) continue;
+                Path target = base.resolve(rel).normalize();
+                if (!target.startsWith(base)) continue; // never write outside the workspace
+                if (entry.isDirectory()) {
+                    Files.createDirectories(target);
+                } else if (entry.isFile()) {
+                    Files.createDirectories(target.getParent());
+                    Files.copy(tar, target, StandardCopyOption.REPLACE_EXISTING);
+                }
+            }
+        } finally {
+            removeQuietly(ws.client, helper);
+        }
+        ws.volumeAhead = false;
+    }
+
+    private String helper(Workspace ws) {
+        pull(ws.client, HELPER_IMAGE, l -> {});
+        return ws.client
+                .createContainerCmd(HELPER_IMAGE)
+                .withCmd("true")
+                .withHostConfig(
+                        HostConfig.newHostConfig()
+                                .withBinds(new Bind(ws.volume, new Volume("/workspace"))))
+                .exec()
+                .getId();
+    }
+
+    private String dockerHostOf(Workspace ws) {
+        // ComposeRunner needs the host URL; the cache key of the client is that URL.
+        return dockerService.urlOf(ws.client);
+    }
+
+    // --- helpers -----------------------------------------------------------------------------
+
+    private void pull(DockerClient client, String image, Consumer<String> out) {
+        try {
+            client.inspectImageCmd(image).exec();
+            return;
+        } catch (Exception ignored) {
+            // not present
+        }
+        out.accept("Pulling " + image);
+        try {
+            var cmd = client.pullImageCmd(ContainerSpecService.withDefaultTag(image));
+            var auth = registryService.getAuthConfig(image);
+            if (auth != null) cmd.withAuthConfig(auth);
+            cmd.start().awaitCompletion(15, TimeUnit.MINUTES);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } catch (Exception e) {
+            out.accept("Could not pull " + image + ": " + e.getMessage());
+        }
+    }
+
+    private static void kill(DockerClient client, String id) {
+        try {
+            client.killContainerCmd(id).exec();
+        } catch (Exception ignored) {
+        }
+    }
+
+    private static void removeQuietly(DockerClient client, String id) {
+        try {
+            client.removeContainerCmd(id).withForce(true).exec();
+        } catch (Exception ignored) {
+        }
+    }
+
+    private static String containerWorkDir(String workingDirectory) {
+        if (workingDirectory == null || workingDirectory.isBlank()) return "/workspace";
+        String w = workingDirectory.trim().replace('\\', '/');
+        if (w.startsWith("/")) return w;
+        if (w.contains("..")) return "/workspace";
+        return "/workspace/" + w;
+    }
+
+    private static String text(JsonNode config, String field, String fallback) {
+        JsonNode n = config.get(field);
+        return n == null || n.isNull() || n.asText().isBlank() ? fallback : n.asText();
+    }
+
+    /** Splits a command line on whitespace, honouring single and double quotes. */
+    static List<String> splitArgs(String line) {
+        List<String> out = new ArrayList<>();
+        if (line == null) return out;
+        StringBuilder cur = new StringBuilder();
+        char quote = 0;
+        boolean any = false;
+        for (char c : line.toCharArray()) {
+            if (quote != 0) {
+                if (c == quote) quote = 0;
+                else cur.append(c);
+            } else if (c == '"' || c == '\'') {
+                quote = c;
+                any = true;
+            } else if (Character.isWhitespace(c)) {
+                if (cur.length() > 0 || any) {
+                    out.add(cur.toString());
+                    cur.setLength(0);
+                    any = false;
+                }
+            } else {
+                cur.append(c);
+            }
+        }
+        if (cur.length() > 0 || any) out.add(cur.toString());
+        return out;
+    }
+
+    private static void deleteDir(Path dir) {
+        try {
+            if (dir == null || !Files.exists(dir)) return;
+            try (var walk = Files.walk(dir)) {
+                walk.sorted(Comparator.reverseOrder()).map(Path::toFile).forEach(File::delete);
+            }
+        } catch (IOException e) {
+            log.warn("Could not delete {}: {}", dir, e.getMessage());
+        }
+    }
+
+    // Kept for callers that only need the pipeline (e.g. previews).
+    public static boolean hasRepository(Pipeline pipeline) {
+        return pipeline.getGitRepository() != null;
+    }
 }

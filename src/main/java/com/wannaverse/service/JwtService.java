@@ -36,11 +36,21 @@ public class JwtService {
         this.refreshExpirationMs = refreshExpirationMs;
     }
 
+    /**
+     * Derives a 256-bit HMAC key from the whole secret. (Previously only the first 32 bytes were
+     * used and shorter secrets were zero-padded.)
+     */
     private byte[] padOrTruncate(String secret) {
-        byte[] bytes = secret.getBytes(StandardCharsets.UTF_8);
-        byte[] result = new byte[32];
-        System.arraycopy(bytes, 0, result, 0, Math.min(bytes.length, 32));
-        return result;
+        try {
+            return MessageDigest.getInstance("SHA-256")
+                    .digest(secret.getBytes(StandardCharsets.UTF_8));
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 not available", e);
+        }
+    }
+
+    public long getAccessExpirationMs() {
+        return accessExpirationMs;
     }
 
     public String generateAccessToken(
@@ -50,6 +60,7 @@ public class JwtService {
 
         return Jwts.builder()
                 .subject(userId)
+                .id(UUID.randomUUID().toString())
                 .claim("username", username)
                 .claim("admin", isAdmin)
                 .claim("mustChangePassword", mustChangePassword)
@@ -65,6 +76,8 @@ public class JwtService {
 
         return Jwts.builder()
                 .subject(userId)
+                // A unique ID, so two tokens issued in the same second never collide.
+                .id(UUID.randomUUID().toString())
                 .claim("family", family)
                 .claim("type", "refresh")
                 .issuedAt(now)

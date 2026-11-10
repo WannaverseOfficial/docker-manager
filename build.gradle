@@ -33,6 +33,13 @@ dependencies {
 
     compileOnly libs.lombok
     annotationProcessor libs.lombok
+
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+test {
+    useJUnitPlatform()
 }
 
 spotless {
@@ -52,5 +59,19 @@ spotless {
         trimTrailingWhitespace()
         leadingTabsToSpaces()
         endWithNewline()
+    }
+}
+
+// Bundle the UI when it has been built locally (`npm run build` in frontend/). The Docker build
+// copies it into src/main/resources/static instead.
+processResources {
+    from('frontend/out') {
+        into 'static'
+    }
+}
+
+bootJar {
+    manifest {
+        attributes('Implementation-Version': project.findProperty('appVersion') ?: 'dev')
     }
 }

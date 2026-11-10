@@ -11,6 +11,7 @@ import com.wannaverse.security.RequirePermission;
 import com.wannaverse.security.SecurityContext;
 import com.wannaverse.security.SecurityContextHolder;
 import com.wannaverse.service.EmailService;
+import com.wannaverse.service.EmailTemplateService;
 import com.wannaverse.service.EncryptionService;
 
 import jakarta.validation.Valid;
@@ -34,14 +35,17 @@ public class SmtpController {
     private final SmtpConfigurationRepository smtpConfigRepository;
     private final EmailService emailService;
     private final EncryptionService encryptionService;
+    private final EmailTemplateService emailTemplateService;
 
     public SmtpController(
             SmtpConfigurationRepository smtpConfigRepository,
             EmailService emailService,
-            EncryptionService encryptionService) {
+            EncryptionService encryptionService,
+            EmailTemplateService emailTemplateService) {
         this.smtpConfigRepository = smtpConfigRepository;
         this.emailService = emailService;
         this.encryptionService = encryptionService;
+        this.emailTemplateService = emailTemplateService;
     }
 
     private void requireAdmin() {
@@ -108,46 +112,13 @@ public class SmtpController {
                     .body(Map.of("success", false, "error", "SMTP is not configured or enabled"));
         }
 
-        String testSubject = "Test Email from Docker Manager";
-        String testHtml =
-                """
-                <!DOCTYPE html>
-                <html>
-                <head>
-                    <meta charset="utf-8">
-                </head>
-                <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 0; padding: 20px; background-color: #f5f5f5;">
-                    <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
-                        <div style="background-color: #1a1c22; padding: 24px; text-align: center;">
-                            <h1 style="margin: 0; color: #a0c4ff; font-size: 24px;">Docker Manager</h1>
-                        </div>
-                        <div style="padding: 32px;">
-                            <h2 style="color: #1a1c22; margin-top: 0;">Test Email</h2>
-                            <p style="color: #666; line-height: 1.6;">
-                                This is a test email to verify your SMTP configuration is working correctly.
-                            </p>
-                            <p style="color: #666; line-height: 1.6;">
-                                If you received this email, your SMTP settings are configured properly.
-                            </p>
-                            <div style="background-color: #d4edda; border: 1px solid #c3e6cb; border-radius: 4px; padding: 16px; margin-top: 24px;">
-                                <p style="margin: 0; color: #155724;">
-                                    <strong>Status:</strong> SMTP configuration verified successfully
-                                </p>
-                            </div>
-                        </div>
-                        <div style="background-color: #f8f9fa; padding: 16px; text-align: center; border-top: 1px solid #e9ecef;">
-                            <p style="margin: 0; color: #6c757d; font-size: 12px;">
-                                This is an automated test message from Docker Manager
-                            </p>
-                        </div>
-                    </div>
-                </body>
-                </html>
-                """;
+        String testSubject = "Docker Manager test email";
+        EmailTemplateService.Email testEmail =
+                emailTemplateService.testEmail(request.getRecipientEmail());
 
         try {
             boolean success =
-                    emailService.sendEmailSync(request.getRecipientEmail(), testSubject, testHtml);
+                    emailService.sendEmailSync(request.getRecipientEmail(), testSubject, testEmail);
 
             if (success) {
                 log.info("Test email sent successfully to {}", request.getRecipientEmail());

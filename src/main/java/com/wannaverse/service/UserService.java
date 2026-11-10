@@ -14,10 +14,13 @@ import com.wannaverse.persistence.RefreshTokenRepository;
 import com.wannaverse.persistence.User;
 import com.wannaverse.persistence.UserGroup;
 import com.wannaverse.persistence.UserGroupRepository;
+import com.wannaverse.persistence.UserNotificationPreferenceRepository;
 import com.wannaverse.persistence.UserPermission;
 import com.wannaverse.persistence.UserPermissionRepository;
 import com.wannaverse.persistence.UserRepository;
 import com.wannaverse.security.ResourceActions;
+import com.wannaverse.security.SecurityContextHolder;
+import com.wannaverse.security.UserStatusCache;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -39,6 +42,8 @@ public class UserService {
     private final RefreshTokenRepository refreshTokenRepository;
     private final PasswordEncoder passwordEncoder;
     private final PermissionService permissionService;
+    private final UserStatusCache userStatusCache;
+    private final UserNotificationPreferenceRepository preferenceRepository;
 
     public UserService(
             UserRepository userRepository,
@@ -47,7 +52,11 @@ public class UserService {
             GroupPermissionRepository groupPermissionRepository,
             RefreshTokenRepository refreshTokenRepository,
             PasswordEncoder passwordEncoder,
-            PermissionService permissionService) {
+            PermissionService permissionService,
+            UserStatusCache userStatusCache,
+            UserNotificationPreferenceRepository preferenceRepository) {
+        this.userStatusCache = userStatusCache;
+        this.preferenceRepository = preferenceRepository;
         this.userRepository = userRepository;
         this.groupRepository = groupRepository;
         this.userPermissionRepository = userPermissionRepository;
@@ -125,6 +134,21 @@ public class UserService {
             user.setEmail(request.getEmail());
         }
 
+        boolean self = id.equals(SecurityContextHolder.getCurrentUserId());
+        boolean removesAdmin =
+                user.isAdmin()
+                        && ((request.getAdmin() != null && !request.getAdmin())
+                                || (request.getEnabled() != null && !request.getEnabled()));
+        if (removesAdmin && userRepository.countByIsAdminTrue() <= 1) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "This is the only administrator. Make someone else an administrator first.");
+        }
+        if (self && request.getEnabled() != null && !request.getEnabled()) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST, "You can't disable your own account");
+        }
+
         if (request.getAdmin() != null) {
             user.setAdmin(request.getAdmin());
         }
@@ -136,7 +160,9 @@ public class UserService {
             }
         }
 
-        return UserResponse.fromEntity(userRepository.save(user));
+        UserResponse saved = UserResponse.fromEntity(userRepository.save(user));
+        userStatusCache.evict(id);
+        return saved;
     }
 
     @Transactional
@@ -149,9 +175,21 @@ public class UserService {
                                         new ResponseStatusException(
                                                 HttpStatus.NOT_FOUND, "User not found"));
 
+        if (id.equals(SecurityContextHolder.getCurrentUserId())) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST, "You can't delete your own account");
+        }
+        if (user.isAdmin() && userRepository.countByIsAdminTrue() <= 1) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT, "You can't delete the only administrator");
+        }
+
         userPermissionRepository.deleteByUserId(id);
+        preferenceRepository.deleteByUserId(id);
         refreshTokenRepository.revokeAllForUser(id);
+        user.getGroups().clear();
         userRepository.delete(user);
+        userStatusCache.evict(id);
     }
 
     @Transactional
@@ -170,6 +208,7 @@ public class UserService {
         userRepository.save(user);
 
         refreshTokenRepository.revokeAllForUser(userId);
+        userStatusCache.evict(userId);
 
         return new PasswordResetResponse(tempPassword);
     }
