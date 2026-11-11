@@ -85,6 +85,21 @@ public class DatabaseController {
         return ResponseEntity.noContent().build();
     }
 
+    public record PortRequest(Integer port, String address) {}
+
+    /** Opens, moves or closes the port on the host (recreates the container; data is kept). */
+    @PutMapping("/servers/{id}/port")
+    @Auditable(
+            resource = Resource.DATABASES,
+            action = "change_database_port",
+            captureRequestBody = true)
+    public DatabaseServer changePort(@PathVariable String id, @RequestBody PortRequest request) {
+        return backups.whileIdle(
+                id,
+                "Changing the port",
+                () -> postgres.changePort(id, request.port(), request.address()));
+    }
+
     @DeleteMapping("/servers/{id}/result")
     public ResponseEntity<Void> clearResult(@PathVariable String id) {
         postgres.clearResult(id);

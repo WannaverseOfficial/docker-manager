@@ -7,11 +7,13 @@ import {
   useContext,
   useEffect,
   useId,
+  useLayoutEffect,
   useRef,
   useState,
   type ButtonHTMLAttributes,
   type ReactNode,
 } from "react";
+import { createPortal } from "react-dom";
 import { Check, ChevronDown, Copy, Download, Loader2, MoreHorizontal, X } from "lucide-react";
 
 // --- buttons ---------------------------------------------------------------------------------
@@ -697,44 +699,80 @@ export function Menu({
   disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  // The list is portaled out and placed with position: fixed, so tables and panels that scroll (and so clip what
+  // overflows them) can't cut it off. Inside a modal <dialog> (the top layer) it has to stay in the dialog to show.
+  const [host, setHost] = useState<Element | null>(null);
+  const [pos, setPos] = useState<{ top: number; right: number } | null>(null);
   const ref = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const place = useCallback(() => {
+    const anchor = ref.current;
+    if (!anchor) return;
+    const r = anchor.getBoundingClientRect();
+    const h = menuRef.current?.offsetHeight ?? 0;
+    const below = r.bottom + 4;
+    const above = r.top - 4 - h;
+    // Opens upwards when there's no room below.
+    const top = below + h > document.documentElement.clientHeight - 8 && above >= 8 ? above : below;
+    setPos({ top, right: Math.max(8, document.documentElement.clientWidth - r.right) });
+  }, []);
+  useLayoutEffect(() => {
+    setHost(open ? (ref.current?.closest("dialog") ?? document.body) : null);
+    if (!open) setPos(null);
+  }, [open]);
+  useLayoutEffect(() => {
+    if (host) place();
+  }, [host, place]);
   useEffect(() => {
     if (!open) return;
     const onDoc = (e: MouseEvent) => {
-      if (!ref.current?.contains(e.target as Node)) setOpen(false);
+      const t = e.target as Node;
+      if (!ref.current?.contains(t) && !menuRef.current?.contains(t)) setOpen(false);
     };
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
     document.addEventListener("mousedown", onDoc);
     document.addEventListener("keydown", onKey);
+    window.addEventListener("scroll", place, true);
+    window.addEventListener("resize", place);
     return () => {
       document.removeEventListener("mousedown", onDoc);
       document.removeEventListener("keydown", onKey);
+      window.removeEventListener("scroll", place, true);
+      window.removeEventListener("resize", place);
     };
-  }, [open]);
+  }, [open, place]);
   const list = items.filter(Boolean) as { label: string; onClick: () => void; danger?: boolean; disabled?: boolean }[];
   return (
     <div ref={ref} className="relative">
       <IconButton label={label} aria-haspopup="menu" aria-expanded={open} disabled={disabled} onClick={() => setOpen(!open)}>
         <MoreHorizontal size={18} />
       </IconButton>
-      {open && (
-        <div role="menu" className="absolute right-0 top-9 z-30 min-w-44 rounded-xl border border-line bg-paper py-1 shadow-xl">
-          {list.map((i) => (
-            <button
-              key={i.label}
-              role="menuitem"
-              disabled={i.disabled}
-              onClick={() => {
-                setOpen(false);
-                i.onClick();
-              }}
-              className={`block w-full text-left px-3.5 py-2 text-[14px] hover:bg-well disabled:opacity-40 ${i.danger ? "text-danger" : ""}`}
-            >
-              {i.label}
-            </button>
-          ))}
-        </div>
-      )}
+      {open &&
+        host &&
+        createPortal(
+          <div
+            ref={menuRef}
+            role="menu"
+            style={{ top: pos?.top ?? 0, right: pos?.right ?? 0, visibility: pos ? "visible" : "hidden" }}
+            className="fixed z-50 min-w-44 rounded-xl border border-line bg-paper py-1 shadow-xl text-ink"
+          >
+            {list.map((i) => (
+              <button
+                key={i.label}
+                role="menuitem"
+                disabled={i.disabled}
+                onClick={() => {
+                  setOpen(false);
+                  i.onClick();
+                }}
+                className={`block w-full text-left px-3.5 py-2 text-[14px] hover:bg-well disabled:opacity-40 ${i.danger ? "text-danger" : ""}`}
+              >
+                {i.label}
+              </button>
+            ))}
+          </div>,
+          host,
+        )}
     </div>
   );
 }

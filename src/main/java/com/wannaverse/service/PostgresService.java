@@ -170,40 +170,17 @@ public class PostgresService {
             madeNetwork = true;
         }
 
-        HostConfig hc =
-                HostConfig.newHostConfig()
-                        .withBinds(new Bind(s.getVolumeName(), new Volume(dataPath)))
-                        .withNetworkMode(s.getNetworkName())
-                        .withRestartPolicy(RestartPolicy.unlessStoppedRestart())
-                        .withShmSize(256L * 1024 * 1024)
-                        .withSecurityOpts(List.of("no-new-privileges:true"));
-        var create =
-                api.client()
-                        .createContainerCmd(s.getImage())
-                        .withName(container)
-                        .withLabels(labels)
-                        .withEnv(
-                                "POSTGRES_PASSWORD=" + password,
-                                "POSTGRES_INITDB_ARGS=--auth-host=scram-sha-256 --auth-local=trust")
-                        .withHealthcheck(
-                                new HealthCheck()
-                                        .withTest(
-                                                List.of(
-                                                        "CMD-SHELL",
-                                                        "pg_isready -U postgres -d postgres"))
-                                        .withInterval(TimeUnit.SECONDS.toNanos(10))
-                                        .withTimeout(TimeUnit.SECONDS.toNanos(5))
-                                        .withRetries(6)
-                                        .withStartPeriod(TimeUnit.SECONDS.toNanos(60)));
-        if (port != null) {
-            Ports ports = new Ports();
-            ports.bind(ExposedPort.tcp(5432), Ports.Binding.bindIpAndPort(address, port));
-            hc.withPortBindings(ports);
-            create.withExposedPorts(ExposedPort.tcp(5432));
-        }
         String id = null;
         try {
-            id = create.withHostConfig(hc).exec().getId();
+            id =
+                    createContainer(
+                            api,
+                            s,
+                            dataPath,
+                            List.of(
+                                    "POSTGRES_PASSWORD=" + password,
+                                    "POSTGRES_INITDB_ARGS=--auth-host=scram-sha-256"
+                                            + " --auth-local=trust"));
             api.startContainer(id);
             waitReady(api, s);
             if (existingData) {
@@ -245,6 +222,136 @@ public class PostgresService {
             }
             throw e;
         }
+    }
+
+    /** Creates (doesn't start) the server's container, with the port the server record asks for. */
+    private static String createContainer(
+            DockerAPI api, DatabaseServer s, String dataPath, List<String> env) {
+        HostConfig hc =
+                HostConfig.newHostConfig()
+                        .withBinds(new Bind(s.getVolumeName(), new Volume(dataPath)))
+                        .withNetworkMode(s.getNetworkName())
+                        .withRestartPolicy(RestartPolicy.unlessStoppedRestart())
+                        .withShmSize(256L * 1024 * 1024)
+                        .withSecurityOpts(List.of("no-new-privileges:true"));
+        var create =
+                api.client()
+                        .createContainerCmd(s.getImage())
+                        .withName(s.getContainerName())
+                        .withLabels(Map.of(LABEL, s.getName()))
+                        .withEnv(env)
+                        .withHealthcheck(
+                                new HealthCheck()
+                                        .withTest(
+                                                List.of(
+                                                        "CMD-SHELL",
+                                                        "pg_isready -U postgres -d postgres"))
+                                        .withInterval(TimeUnit.SECONDS.toNanos(10))
+                                        .withTimeout(TimeUnit.SECONDS.toNanos(5))
+                                        .withRetries(6)
+                                        .withStartPeriod(TimeUnit.SECONDS.toNanos(60)));
+        if (s.getPublishedPort() != null) {
+            Ports ports = new Ports();
+            ports.bind(
+                    ExposedPort.tcp(5432),
+                    Ports.Binding.bindIpAndPort(s.getPublishedAddress(), s.getPublishedPort()));
+            hc.withPortBindings(ports);
+            create.withExposedPorts(ExposedPort.tcp(5432));
+        }
+        return create.withHostConfig(hc).exec().getId();
+    }
+
+    /**
+     * Opens, moves or closes the server's port on the host. Docker can't change the ports of a
+     * container, so the container is recreated on the same data volume and network. If the new one
+     * doesn't start (the port is taken, say), the old container is put back.
+     */
+    public DatabaseServer changePort(String serverId, Integer port, String address) {
+        DatabaseServer s = require(serverId);
+        if (port != null && (port < 1024 || port > 65535))
+            throw bad("Choose a port between 1024 and 65535");
+        String addr = port == null ? null : "0.0.0.0".equals(address) ? "0.0.0.0" : "127.0.0.1";
+        if (Objects.equals(port, s.getPublishedPort())
+                && Objects.equals(addr, s.getPublishedAddress())) return s;
+        DockerAPI api = api(s);
+        InspectContainerResponse old;
+        try {
+            old = api.inspectContainer(s.getContainerName());
+        } catch (NotFoundException e) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "The server's container " + s.getContainerName() + " is missing");
+        }
+        boolean wasRunning = Boolean.TRUE.equals(old.getState().getRunning());
+        // Keep the container's own settings: where the volume is mounted, and its POSTGRES_* env
+        // (only read when the data directory is first created; the password lives in the data).
+        String dataPath = null;
+        Bind[] binds = old.getHostConfig() == null ? null : old.getHostConfig().getBinds();
+        if (binds != null) {
+            for (Bind b : binds) {
+                if (s.getVolumeName().equals(b.getPath())) dataPath = b.getVolume().getPath();
+            }
+        }
+        if (dataPath == null) {
+            String version = s.getImage().replaceFirst("^postgres:", "").replaceFirst("-.*$", "");
+            dataPath = dataPath(api, s.getImage(), version.matches("\\d+") ? version : "18");
+        }
+        List<String> env = new ArrayList<>();
+        String[] oldEnv = old.getConfig() == null ? null : old.getConfig().getEnv();
+        if (oldEnv != null) {
+            for (String e : oldEnv) if (e.startsWith("POSTGRES_")) env.add(e);
+        }
+
+        Integer oldPort = s.getPublishedPort();
+        String oldAddress = s.getPublishedAddress();
+        String aside =
+                s.getContainerName() + "-old-" + Long.toString(System.currentTimeMillis(), 36);
+        if (wasRunning) api.stopContainer(old.getId(), 60);
+        api.renameContainer(old.getId(), aside);
+        String id = null;
+        try {
+            s.setPublishedPort(port);
+            s.setPublishedAddress(addr);
+            ToolRunner.ensureImage(api, s.getImage());
+            id = createContainer(api, s, dataPath, env);
+            if (wasRunning) {
+                api.startContainer(id);
+                waitReady(api, s);
+            }
+        } catch (RuntimeException e) {
+            s.setPublishedPort(oldPort);
+            s.setPublishedAddress(oldAddress);
+            if (id != null) {
+                try {
+                    api.client().removeContainerCmd(id).withForce(true).exec();
+                } catch (Exception ignored) {
+                }
+            }
+            try {
+                api.renameContainer(old.getId(), s.getContainerName());
+                if (wasRunning) api.startContainer(old.getId());
+            } catch (Exception restore) {
+                log.warn(
+                        "Could not put {} back after a failed port change: {}",
+                        s.getContainerName(),
+                        restore.getMessage());
+            }
+            String msg = e.getMessage() == null ? "" : e.getMessage();
+            if (port != null
+                    && (msg.contains("port is already allocated")
+                            || msg.contains("address already in use"))) {
+                throw new ResponseStatusException(
+                        HttpStatus.CONFLICT,
+                        "Port " + port + " is already in use on this host. Choose another one.");
+            }
+            throw e;
+        }
+        try {
+            api.client().removeContainerCmd(old.getId()).withForce(true).exec();
+        } catch (Exception e) {
+            log.warn("Could not remove the old container {}: {}", aside, e.getMessage());
+        }
+        return repository.save(s);
     }
 
     /** The image's own data volume path: /var/lib/postgresql for 18, .../data before that. */

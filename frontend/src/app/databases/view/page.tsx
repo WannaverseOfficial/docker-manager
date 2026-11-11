@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useMemo, useRef, useState, type ReactNode } from "react";
 import { Play } from "lucide-react";
 import { useHost, useSession } from "@/components/app";
+import { ReachPicker, validPort, type Reach } from "@/components/databases";
 import {
   Badge,
   Button,
@@ -122,7 +123,7 @@ function ServerPage() {
               { value: "containers", label: "Containers" },
             ]}
           />
-          {tab === "overview" && <Overview view={view} />}
+          {tab === "overview" && <Overview view={view} onChange={refresh} />}
           {tab === "databases" && running && (
             <Databases
               server={s}
@@ -176,12 +177,13 @@ function ActivityBanner({ server, onDismiss }: { server: DatabaseServer; onDismi
 
 // --- overview ------------------------------------------------------------------------------------
 
-function Overview({ view }: { view: ServerView }) {
+function Overview({ view, onChange }: { view: ServerView; onChange: () => void }) {
   const s = view.server;
   const router = useRouter();
   const toast = useToast();
   const [password, setPassword] = useState<string | null>(null);
   const [removing, setRemoving] = useState(false);
+  const [changingPort, setChangingPort] = useState(false);
   const reveal = async () => {
     try {
       const r = await api.get<{ password: string }>(`/api/databases/servers/${s.id}/password`);
@@ -199,13 +201,16 @@ function Overview({ view }: { view: ServerView }) {
             ["Network", <span key="n" className="font-mono text-[13px]">{s.networkName}</span>],
             [
               "From outside",
-              s.publishedPort ? (
-                <Copyable key="p" text={`${s.publishedAddress === "0.0.0.0" ? "SERVER-ADDRESS" : "127.0.0.1"}:${s.publishedPort}`} />
-              ) : (
-                <span key="p" className="text-slate">
-                  No port opened
-                </span>
-              ),
+              <span key="p" className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                {s.publishedPort ? (
+                  <Copyable text={`${s.publishedAddress === "0.0.0.0" ? "SERVER-ADDRESS" : "127.0.0.1"}:${s.publishedPort}`} />
+                ) : (
+                  <span className="text-slate">No port opened</span>
+                )}
+                <button className="underline underline-offset-2 disabled:opacity-40" disabled={!!s.activity} onClick={() => setChangingPort(true)}>
+                  Change
+                </button>
+              </span>,
             ],
             ["Administrator", <span key="u" className="font-mono text-[13px]">{s.superuser}</span>],
             [
@@ -242,7 +247,67 @@ function Overview({ view }: { view: ServerView }) {
         </div>
       </Panel>
       {removing && <RemoveServer server={s} onClose={() => setRemoving(false)} onRemoved={() => router.push("/databases/")} />}
+      {changingPort && <ChangePort server={s} running={view.state === "running"} onClose={() => setChangingPort(false)} onChanged={onChange} />}
     </div>
+  );
+}
+
+function ChangePort({ server, running, onClose, onChanged }: { server: DatabaseServer; running: boolean; onClose: () => void; onChanged: () => void }) {
+  const toast = useToast();
+  const [reach, setReach] = useState<Reach>(!server.publishedPort ? "containers" : server.publishedAddress === "0.0.0.0" ? "network" : "local");
+  const [port, setPort] = useState(String(server.publishedPort ?? 5432));
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const newPort = reach === "containers" ? null : Number(port);
+  const newAddress = reach === "network" ? "0.0.0.0" : reach === "local" ? "127.0.0.1" : null;
+  const unchanged = newPort === (server.publishedPort ?? null) && newAddress === (server.publishedAddress ?? null);
+  const valid = reach === "containers" || validPort(port);
+
+  return (
+    <Modal
+      open
+      onClose={busy ? () => {} : onClose}
+      title="Change the port"
+      footer={
+        <>
+          <Button tone="quiet" disabled={busy} onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            busy={busy}
+            disabled={!valid || unchanged}
+            onClick={async () => {
+              setBusy(true);
+              setError(null);
+              try {
+                await api.put(`/api/databases/servers/${server.id}/port`, { port: newPort, address: newAddress });
+                toast(newPort ? `PostgreSQL now listens on port ${newPort}` : "The port is closed");
+                onChanged();
+                onClose();
+              } catch (e) {
+                setError((e as Error).message);
+                setBusy(false);
+              }
+            }}
+          >
+            {busy ? "Restarting PostgreSQL" : "Save and restart"}
+          </Button>
+        </>
+      }
+    >
+      <div className="flex flex-col gap-4 text-[14px]">
+        <ReachPicker reach={reach} setReach={setReach} port={port} setPort={setPort} />
+        <Notice tone="warn">
+          {running
+            ? "The container is recreated with the new port, so PostgreSQL restarts and open connections drop for a few seconds. Data, users, passwords and connected containers stay as they are."
+            : "The container is recreated with the new port. Data, users, passwords and connected containers stay as they are."}
+        </Notice>
+        <p className="text-[13px] text-slate">
+          Containers on the server&apos;s network keep using <span className="font-mono text-ink">{server.containerName}:5432</span>; only tools connecting from outside need the new port.
+        </p>
+        {error && <Notice tone="error">{error}</Notice>}
+      </div>
+    </Modal>
   );
 }
 

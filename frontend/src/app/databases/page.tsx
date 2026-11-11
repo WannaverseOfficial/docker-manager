@@ -5,7 +5,8 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { Database } from "lucide-react";
 import { useHost, useSession } from "@/components/app";
-import { Badge, Button, Empty, Field, Modal, Notice, PageHeader, Segmented, Select, Spinner, StateBadge, inputClass } from "@/components/ui";
+import { ReachPicker, validPort, type Reach } from "@/components/databases";
+import { Badge, Button, Empty, Field, Modal, Notice, PageHeader, Select, Spinner, StateBadge, inputClass } from "@/components/ui";
 import { api } from "@/lib/api";
 import { usePoll } from "@/lib/hooks";
 import { backupSchedule, type ServerView } from "@/lib/databases";
@@ -82,11 +83,11 @@ function CreateServer({ hostId, onClose, onCreated }: { hostId: string; onClose:
   const { data: versions } = usePoll<string[]>("/api/databases/versions");
   const [name, setName] = useState("main");
   const [version, setVersion] = useState("");
-  const [reach, setReach] = useState<"containers" | "local" | "network">("containers");
+  const [reach, setReach] = useState<Reach>("containers");
   const [port, setPort] = useState("5432");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const valid = /^[a-z][a-z0-9-]{1,30}[a-z0-9]$/.test(name);
+  const valid = /^[a-z][a-z0-9-]{1,30}[a-z0-9]$/.test(name) && (reach === "containers" || validPort(port));
 
   const create = async () => {
     setBusy(true);
@@ -136,29 +137,7 @@ function CreateServer({ hostId, onClose, onCreated }: { hostId: string; onClose:
             ))}
           </Select>
         </Field>
-        <div>
-          <div className="text-[13px] font-medium mb-1.5">Who can connect</div>
-          <Segmented
-            label="Who can connect"
-            value={reach}
-            onChange={setReach}
-            options={[
-              { value: "containers", label: "Containers only" },
-              { value: "local", label: "This machine" },
-              { value: "network", label: "The network" },
-            ]}
-          />
-          <p className="text-[13px] text-slate mt-1.5">
-            {reach === "containers" && "Recommended. No port is opened; containers you connect to the server reach it on its own network."}
-            {reach === "local" && "Also opens a port on 127.0.0.1, for tools on the server itself (or an SSH tunnel)."}
-            {reach === "network" && "Opens a port on every network interface. Make sure a firewall limits who can reach it."}
-          </p>
-        </div>
-        {reach !== "containers" && (
-          <Field label="Port">
-            <input className={inputClass} inputMode="numeric" value={port} onChange={(e) => setPort(e.target.value.replace(/\D/g, ""))} />
-          </Field>
-        )}
+        <ReachPicker reach={reach} setReach={setReach} port={port} setPort={setPort} />
         <div className="rounded-xl bg-well px-4 py-3 text-[13px] text-slate">
           <div className="text-ink font-medium mb-1">Secure by default</div>
           A random 32-character administrator password, SCRAM-SHA-256 for every login, each database closed to everyone but the users you allow, and daily backups that keep the last 7.

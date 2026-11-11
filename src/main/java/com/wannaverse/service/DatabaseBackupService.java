@@ -31,6 +31,7 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.function.Supplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.zip.GZIPInputStream;
@@ -1045,6 +1046,20 @@ public class DatabaseBackupService {
     }
 
     // --- helpers -----------------------------------------------------------------------------
+
+    /**
+     * Runs a change that restarts the server (such as a new port) on the caller's thread, while no
+     * backup, restore or import uses it, and keeps those from starting until it's done.
+     */
+    public <T> T whileIdle(String serverId, String activity, Supplier<T> work) {
+        DatabaseServer s = postgres.require(serverId);
+        claim(s, activity, true);
+        try {
+            return work.get();
+        } finally {
+            release(s, null, false);
+        }
+    }
 
     private void claim(DatabaseServer s, String activity, boolean exclusive) {
         if (!busy.add(s.getId())) {
