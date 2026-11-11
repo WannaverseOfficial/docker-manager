@@ -8,7 +8,7 @@ ingress, PostgreSQL databases, a private image registry and security scanning, i
 Built for developers, homelab owners and small teams who want a complete tool without subscriptions, licence
 fees or feature gates.
 
-![Overview of a Docker host](docs/images/overview.png)
+![Overview of a Docker host](https://raw.githubusercontent.com/WannaverseOfficial/docker-manager/main/docs/images/overview.png)
 
 ## Contents
 
@@ -63,15 +63,15 @@ fees or feature gates.
 
 | | |
 | --- | --- |
-| ![Containers](docs/images/containers.png) | ![Compose stacks](docs/images/stacks.png) |
+| ![Containers](https://raw.githubusercontent.com/WannaverseOfficial/docker-manager/main/docs/images/containers.png) | ![Compose stacks](https://raw.githubusercontent.com/WannaverseOfficial/docker-manager/main/docs/images/stacks.png) |
 | Containers on a host | Compose stacks, including ones started elsewhere |
-| ![Ingress](docs/images/ingress.png) | ![Databases on a PostgreSQL server](docs/images/database-tables.png) |
+| ![Ingress](https://raw.githubusercontent.com/WannaverseOfficial/docker-manager/main/docs/images/ingress.png) | ![Databases on a PostgreSQL server](https://raw.githubusercontent.com/WannaverseOfficial/docker-manager/main/docs/images/database-tables.png) |
 | Ingress routes with HTTPS and sign-in | Databases, owners and who can access them |
-| ![SQL console](docs/images/database-query.png) | ![Database backups](docs/images/database-backups.png) |
+| ![SQL console](https://raw.githubusercontent.com/WannaverseOfficial/docker-manager/main/docs/images/database-query.png) | ![Database backups](https://raw.githubusercontent.com/WannaverseOfficial/docker-manager/main/docs/images/database-backups.png) |
 | The SQL console, read-only by default | Scheduled backups with copies to S3 |
-| ![Private registry](docs/images/registry.png) | ![Image vulnerability scans](docs/images/security-images.png) |
+| ![Private registry](https://raw.githubusercontent.com/WannaverseOfficial/docker-manager/main/docs/images/registry.png) | ![Image vulnerability scans](https://raw.githubusercontent.com/WannaverseOfficial/docker-manager/main/docs/images/security-images.png) |
 | Your own registry, its users and images | Vulnerability scans of the images in use |
-| ![Vulnerability report](docs/images/security-report.png) | ![Docker Bench findings with fixes](docs/images/security-fixes.png) |
+| ![Vulnerability report](https://raw.githubusercontent.com/WannaverseOfficial/docker-manager/main/docs/images/security-report.png) | ![Docker Bench findings with fixes](https://raw.githubusercontent.com/WannaverseOfficial/docker-manager/main/docs/images/security-fixes.png) |
 | A report with fixed versions and next steps | Host check findings with one-click fixes |
 
 ## Quick start
@@ -290,7 +290,7 @@ and `SOURCE.md` there), because its published image can no longer talk to curren
 
 ## License
 
-MIT. See [LICENSE](./LICENSE) for details.
+MIT. See [LICENSE](https://github.com/WannaverseOfficial/docker-manager/blob/main/LICENSE) for details.
 
 ## Contributing
 

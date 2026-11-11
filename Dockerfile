@@ -17,7 +17,9 @@ COPY gradlew build.gradle settings.gradle ./
 RUN sed -i 's/\r$//' gradlew && chmod +x gradlew && ./gradlew dependencies --no-daemon -q
 COPY src/ src/
 COPY --from=ui /ui/out/ src/main/resources/static/
-RUN ./gradlew bootJar --no-daemon -x test
+# The release workflow passes the version (shown in the app and by /api/system/status).
+ARG APP_VERSION=dev
+RUN ./gradlew bootJar --no-daemon -x test -PappVersion=$APP_VERSION
 
 # --- Docker CLI and Compose plugin (static binaries, for the target platform) --------------
 FROM docker:29-cli AS dockercli
