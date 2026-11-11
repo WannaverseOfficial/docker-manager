@@ -79,6 +79,45 @@ public class IngressRoute {
      */
     private Boolean unlimitedUploads;
 
+    /**
+     * What the route sends visitors to. Null (routes made before this existed) means a container.
+     * For the other kinds the container columns hold "" (they are NOT NULL in older databases).
+     */
+    @Enumerated(EnumType.STRING)
+    private TargetType targetType;
+
+    /** ADDRESS routes: an IP address or DNS name, proxied to on {@link #targetPort}. */
+    private String targetHost;
+
+    /** REDIRECT routes: where visitors are sent, for example https://example.org. */
+    @Column(columnDefinition = "TEXT")
+    private String redirectUrl;
+
+    /** REDIRECT routes: 301 (browsers remember it) instead of 302. */
+    private Boolean redirectPermanent;
+
+    /** REDIRECT routes: append the visitor's path and query to {@link #redirectUrl}. */
+    private Boolean redirectKeepPath;
+
+    public TargetType kind() {
+        return targetType == null ? TargetType.CONTAINER : targetType;
+    }
+
+    /** Where the route points, for lists and the activity log. */
+    public String describeTarget() {
+        return switch (kind()) {
+            case CONTAINER -> targetContainerName + ":" + targetPort;
+            case ADDRESS -> targetHost + ":" + targetPort;
+            case REDIRECT -> redirectUrl;
+        };
+    }
+
+    public enum TargetType {
+        CONTAINER,
+        ADDRESS,
+        REDIRECT
+    }
+
     public enum Protocol {
         HTTP,
         HTTPS

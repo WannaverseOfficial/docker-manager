@@ -285,8 +285,9 @@ public class NginxApplier {
         }
         for (IngressRoute route :
                 routeRepository.findByIngressConfigIdAndEnabled(config.getId(), true)) {
+            if (route.kind() != IngressRoute.TargetType.CONTAINER) continue;
             String target = route.getTargetContainerName();
-            if (target == null || connected.contains(target)) continue;
+            if (target == null || target.isEmpty() || connected.contains(target)) continue;
             String id = findContainer(api, target);
             if (id == null) continue; // not running right now; nginx answers 502 until it is
             try {

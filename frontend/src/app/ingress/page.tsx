@@ -2,10 +2,11 @@
 
 import { useMemo, useState } from "react";
 import { Plus, X } from "lucide-react";
-import { useHost } from "@/components/app";
+import { useHost, useSession } from "@/components/app";
 import {
   Badge,
   Button,
+  Combobox,
   Empty,
   Field,
   IconButton,
@@ -15,6 +16,7 @@ import {
   Notice,
   PageHeader,
   Panel,
+  Segmented,
   Select,
   Spinner,
   Tabs,
@@ -183,7 +185,7 @@ function Enabled({ hostId, config, onChange }: { hostId: string; config: Ingress
       {tab === "routes" && (
         <>
           <div className="flex justify-between items-center gap-3 mb-4">
-            <p className="text-[14px] text-slate">Each route sends one hostname (and optional path) to a container.</p>
+            <p className="text-[14px] text-slate">Each route sends one hostname (and optional path) to a container, an address, or another website.</p>
             <div className="flex items-center gap-2">
               <Button tone="quiet" onClick={() => setSettings(true)}>
                 Settings
@@ -265,8 +267,16 @@ function Routes({ routes, certs, onEdit, onChange }: { routes: IngressRoute[] | 
                   {r.forceHttpsRedirect && <span>HTTPS only</span>}
                 </div>
               </div>
-              <div className="text-[13px] truncate">
-                → {r.targetContainerName}:{r.targetPort}
+              <div className="text-[13px] truncate" title={routeTarget(r)}>
+                {r.targetType === "REDIRECT" ? (
+                  <>
+                    <span className="text-slate">redirects to </span>
+                    {r.redirectKeepPath ? (r.redirectUrl ?? "").replace(/\/+$/, "") : r.redirectUrl}
+                    {r.redirectKeepPath && <span className="text-slate">/…</span>}
+                  </>
+                ) : (
+                  <>→ {routeTarget(r)}</>
+                )}
               </div>
               <div className="text-[13px]">
                 {r.tlsMode === "NONE" ? (
@@ -318,14 +328,30 @@ function Routes({ routes, certs, onEdit, onChange }: { routes: IngressRoute[] | 
 
 type SignInUser = { key: string; username: string; password: string; existing: boolean };
 
+type Kind = IngressRoute["targetType"];
+
 const OTHER = "other";
 
+/** Where a route sends visitors, as shown in the list. */
+function routeTarget(r: IngressRoute) {
+  if (r.targetType === "REDIRECT") return r.redirectUrl ?? "";
+  if (r.targetType === "ADDRESS") return `${r.targetHost}:${r.targetPort}`;
+  return `${r.targetContainerName}:${r.targetPort}`;
+}
+
 function RouteDialog({ hostId, route, onClose, onSaved }: { hostId: string; route: IngressRoute | null; onClose: () => void; onSaved: () => void }) {
+  const { session } = useSession();
   const { data: containers } = usePoll<Container[]>(`/api/docker/hosts/${hostId}/containers?all=true`);
+  const [kind, setKind] = useState<Kind>(route?.targetType ?? "CONTAINER");
   const [hostname, setHostname] = useState(route?.hostname ?? "");
   const [path, setPath] = useState(route?.pathPrefix ?? "/");
-  const [container, setContainer] = useState(route?.targetContainerName ?? "");
-  const [port, setPort] = useState(route ? String(route.targetPort) : "");
+  const [container, setContainer] = useState(route?.targetType === "CONTAINER" || !route?.targetType ? route?.targetContainerName ?? "" : "");
+  const [address, setAddress] = useState(route?.targetHost ?? "");
+  const [addressPort, setAddressPort] = useState(route?.targetType === "ADDRESS" ? String(route.targetPort) : "");
+  const [redirectUrl, setRedirectUrl] = useState(route?.redirectUrl ?? "");
+  const [keepPath, setKeepPath] = useState(route?.redirectKeepPath ?? false);
+  const [permanent, setPermanent] = useState(route?.redirectPermanent ?? false);
+  const [port, setPort] = useState(route && route.targetType === "CONTAINER" ? String(route.targetPort) : "");
   const [customPort, setCustomPort] = useState(false);
   const [tls, setTls] = useState<IngressRoute["tlsMode"]>(route?.tlsMode ?? "LETS_ENCRYPT");
   const [redirect, setRedirect] = useState(route?.forceHttpsRedirect ?? true);
@@ -344,7 +370,8 @@ function RouteDialog({ hostId, route, onClose, onSaved }: { hostId: string; rout
     () => (containers ?? []).filter((c) => !containerName(c).startsWith("managed-ingress-")).sort((a, b) => containerName(a).localeCompare(containerName(b))),
     [containers],
   );
-  const selected = candidates.find((c) => containerName(c) === container);
+  const containerOptions = useMemo(() => candidates.map((c) => ({ value: containerName(c), label: containerName(c), hint: c.State !== "running" ? "stopped" : undefined })), [candidates]);
+  const selected = kind === "CONTAINER" ? candidates.find((c) => containerName(c) === container) : undefined;
   // The ports the image declares (EXPOSE), which stopped containers don't list, plus any it has running.
   const { data: inspect } = usePoll<ContainerInspect>(selected ? `/api/docker/hosts/${hostId}/containers/${selected.Id}` : null);
   const ports = useMemo(() => {
@@ -378,20 +405,40 @@ function RouteDialog({ hostId, route, onClose, onSaved }: { hostId: string; rout
   // Pick the first known port once they are loaded, so a fresh route needs no typing at all.
   const effectivePort = port || (!typing && ports.length ? String(ports[0]) : "");
 
+  const addressPortNumber = Number(addressPort);
+  const targetReady =
+    kind === "CONTAINER"
+      ? !!container && !!effectivePort
+      : kind === "ADDRESS"
+        ? !!address.trim() && addressPortNumber >= 1 && addressPortNumber <= 65535
+        : !!redirectUrl.trim();
+  // Address routes can reach any machine the server can, so only administrators get them.
+  const kinds: { value: Kind; label: string; hint?: string }[] = [
+    { value: "CONTAINER", label: "A container" },
+    ...(session?.admin || route?.targetType === "ADDRESS" ? [{ value: "ADDRESS" as Kind, label: "An address", hint: "A host and port you type in" }] : []),
+    { value: "REDIRECT", label: "Another website", hint: "Redirect visitors to a web address" },
+  ];
+
   const save = async () => {
     setBusy(true);
     setError(null);
+    const signIn = auth && kind !== "REDIRECT";
     const body = {
-      containerName: container,
+      targetType: kind,
+      containerName: kind === "CONTAINER" ? container : null,
+      targetHost: kind === "ADDRESS" ? address.trim() : null,
+      redirectUrl: kind === "REDIRECT" ? redirectUrl.trim() : null,
+      redirectPermanent: kind === "REDIRECT" && permanent,
+      redirectKeepPath: kind === "REDIRECT" && keepPath,
       hostname: hostname.trim().toLowerCase(),
       pathPrefix: path.trim() || "/",
-      targetPort: Number(effectivePort),
-      protocol: backendHttps ? "HTTPS" : "HTTP",
+      targetPort: kind === "CONTAINER" ? Number(effectivePort) : kind === "ADDRESS" ? Number(addressPort) : 0,
+      protocol: backendHttps && kind !== "REDIRECT" ? "HTTPS" : "HTTP",
       tlsMode: tls,
       forceHttpsRedirect: tls !== "NONE" && redirect,
-      authEnabled: auth,
-      authType: auth ? "BASIC" : null,
-      authUsers: auth ? users.map((u) => ({ username: u.username.trim(), password: u.password })) : null,
+      authEnabled: signIn,
+      authType: signIn ? "BASIC" : null,
+      authUsers: signIn ? users.map((u) => ({ username: u.username.trim(), password: u.password })) : null,
     };
     try {
       if (route) await api.put(`/api/ingress/routes/${route.id}`, { route: body });
@@ -414,13 +461,17 @@ function RouteDialog({ hostId, route, onClose, onSaved }: { hostId: string; rout
           <Button tone="quiet" onClick={onClose}>
             Cancel
           </Button>
-          <Button onClick={save} busy={busy} disabled={!hostname || !container || !effectivePort || (auth && !usersValid)}>
+          <Button onClick={save} busy={busy} disabled={!hostname || !targetReady || (auth && kind !== "REDIRECT" && !usersValid)}>
             {route ? "Save" : "Add route"}
           </Button>
         </>
       }
     >
       <div className="flex flex-col gap-4">
+        <div>
+          <div className="text-[13px] font-medium mb-1.5">Send visitors to</div>
+          <Segmented<Kind> label="Send visitors to" value={kind} onChange={setKind} options={kinds} />
+        </div>
         <div className="grid gap-4 sm:grid-cols-[1fr_10rem]">
           <Field label="Hostname" hint="Its DNS record must point at this server.">
             <input className={inputClass} value={hostname} onChange={(e) => setHostname(e.target.value)} placeholder="app.example.com" autoCapitalize="off" spellCheck={false} />
@@ -429,72 +480,101 @@ function RouteDialog({ hostId, route, onClose, onSaved }: { hostId: string; rout
             <input className={inputClass} value={path} onChange={(e) => setPath(e.target.value)} placeholder="/" spellCheck={false} />
           </Field>
         </div>
-        <div className="grid gap-4 sm:grid-cols-[1fr_12rem]">
-          <Field label="Container" hint="Routes follow the container's name, so redeploys keep working.">
-            <Select value={container} onChange={pickContainer}>
-              <option value="">Choose a container</option>
-              {candidates.map((c) => (
-                <option key={c.Id} value={containerName(c)}>
-                  {containerName(c)}
-                  {c.State !== "running" ? " (stopped)" : ""}
-                </option>
-              ))}
-            </Select>
-          </Field>
-          <Field
-            label="Port"
-            hint={
-              !selected
-                ? "Choose a container first"
-                : loadingPorts
-                  ? "Looking up its ports"
-                  : ports.length === 0
-                    ? "It doesn't declare a port. Enter the one the app listens on."
-                    : typing
-                      ? "The port the app listens on inside the container"
-                      : `From the image${ports.length > 1 ? `, ${ports.length} ports` : ""}`
-            }
-          >
-            {!selected || loadingPorts || (ports.length > 0 && !typing) ? (
-              <Select
-                value={!selected || loadingPorts ? "" : portValue || String(ports[0] ?? "")}
-                disabled={!selected || loadingPorts}
-                onChange={(v) => {
-                  if (v === OTHER) {
-                    setCustomPort(true);
-                    setPort("");
-                  } else setPort(v);
-                }}
-              >
-                {(!selected || loadingPorts) && <option value="">{loadingPorts ? "Loading" : "Port"}</option>}
-                {ports.map((p) => (
-                  <option key={p} value={String(p)}>
-                    {p}
-                    {PORT_NAMES[p] ? ` (${PORT_NAMES[p]})` : ""}
-                  </option>
-                ))}
-                {selected && !loadingPorts && <option value={OTHER}>Another port</option>}
-              </Select>
-            ) : (
-              <div className="flex gap-2">
-                <input className={inputClass} inputMode="numeric" value={port} onChange={(e) => setPort(e.target.value.replace(/\D/g, "").slice(0, 5))} placeholder="8080" autoFocus={customPort} />
-                {ports.length > 0 && (
-                  <Button
-                    tone="ghost"
-                    size="sm"
-                    className="h-10"
-                    onClick={() => {
-                      setCustomPort(false);
-                      setPort(String(ports[0]));
-                    }}
-                  >
-                    List
-                  </Button>
-                )}
-              </div>
-            )}
-          </Field>
-        </div>
+        {kind === "CONTAINER" && (
+          <div className="grid gap-4 sm:grid-cols-[1fr_12rem] items-start">
+            <Field label="Container" hint={`Type to search${candidates.length ? ` ${candidates.length} containers` : ""}. Routes follow the container's name, so redeploys keep working.`}>
+              <Combobox
+                value={container}
+                onChange={pickContainer}
+                options={containerOptions}
+                placeholder={containers ? "Choose or search for a container" : "Loading containers"}
+                empty="No container has that name"
+              />
+            </Field>
+            <Field
+              label="Port"
+              hint={
+                !selected
+                  ? "Choose a container first"
+                  : loadingPorts
+                    ? "Looking up its ports"
+                    : ports.length === 0
+                      ? "It doesn't declare a port. Enter the one the app listens on."
+                      : typing
+                        ? "The port the app listens on inside the container"
+                        : `From the image${ports.length > 1 ? `, ${ports.length} ports` : ""}`
+              }
+            >
+              {!selected || loadingPorts || (ports.length > 0 && !typing) ? (
+                <Select
+                  value={!selected || loadingPorts ? "" : portValue || String(ports[0] ?? "")}
+                  disabled={!selected || loadingPorts}
+                  onChange={(v) => {
+                    if (v === OTHER) {
+                      setCustomPort(true);
+                      setPort("");
+                    } else setPort(v);
+                  }}
+                >
+                  {(!selected || loadingPorts) && <option value="">{loadingPorts ? "Loading" : "Port"}</option>}
+                  {ports.map((p) => (
+                    <option key={p} value={String(p)}>
+                      {p}
+                      {PORT_NAMES[p] ? ` (${PORT_NAMES[p]})` : ""}
+                    </option>
+                  ))}
+                  {selected && !loadingPorts && <option value={OTHER}>Another port</option>}
+                </Select>
+              ) : (
+                <div className="flex gap-2">
+                  <input className={inputClass} inputMode="numeric" value={port} onChange={(e) => setPort(e.target.value.replace(/\D/g, "").slice(0, 5))} placeholder="8080" autoFocus={customPort} />
+                  {ports.length > 0 && (
+                    <Button
+                      tone="ghost"
+                      size="sm"
+                      className="h-10"
+                      onClick={() => {
+                        setCustomPort(false);
+                        setPort(String(ports[0]));
+                      }}
+                    >
+                      List
+                    </Button>
+                  )}
+                </div>
+              )}
+            </Field>
+          </div>
+        )}
+        {kind === "ADDRESS" && (
+          <div className="grid gap-4 sm:grid-cols-[1fr_12rem]">
+            <Field label="Address" hint="An IP address or hostname the proxy can reach, such as another machine on your network.">
+              <input className={inputClass} value={address} onChange={(e) => setAddress(e.target.value)} placeholder="192.168.1.20" autoCapitalize="off" spellCheck={false} />
+            </Field>
+            <Field label="Port">
+              <input className={inputClass} inputMode="numeric" value={addressPort} onChange={(e) => setAddressPort(e.target.value.replace(/\D/g, "").slice(0, 5))} placeholder="8080" />
+            </Field>
+          </div>
+        )}
+        {kind === "REDIRECT" && (
+          <>
+            <Field label="Redirect to" hint="Visitors to this hostname are sent to this address.">
+              <input className={inputClass} value={redirectUrl} onChange={(e) => setRedirectUrl(e.target.value)} placeholder="https://example.org" autoCapitalize="off" spellCheck={false} />
+            </Field>
+            <Toggle
+              checked={keepPath}
+              onChange={setKeepPath}
+              label="Keep the rest of the address"
+              hint={`${hostname.trim() || "this hostname"}/page?x=1 goes to ${(redirectUrl.trim() || "the new address").replace(/\/+$/, "")}/page?x=1. Off: every page goes to the address itself.`}
+            />
+            <Toggle
+              checked={permanent}
+              onChange={setPermanent}
+              label="Permanent redirect (301)"
+              hint="Browsers and search engines remember it, so a later change reaches visitors slowly. Off sends a temporary redirect (302)."
+            />
+          </>
+        )}
         <Field label="HTTPS">
           <Select value={tls} onChange={(v) => setTls(v as IngressRoute["tlsMode"])}>
             <option value="LETS_ENCRYPT">Free certificate from Let&apos;s Encrypt</option>
@@ -503,13 +583,15 @@ function RouteDialog({ hostId, route, onClose, onSaved }: { hostId: string; rout
           </Select>
         </Field>
         {tls !== "NONE" && <Toggle checked={redirect} onChange={setRedirect} label="Send visitors to HTTPS" hint="Starts once the certificate is ready; until then the site answers over HTTP." />}
-        <Toggle
-          checked={auth}
-          onChange={setAuth}
-          label="Require sign-in"
-          hint="Visitors see a sign-in page and stay signed in for 7 days. Scripts and API clients can send the same username and password as an Authorization: Basic header instead."
-        />
-        {auth && (
+        {kind !== "REDIRECT" && (
+          <Toggle
+            checked={auth}
+            onChange={setAuth}
+            label="Require sign-in"
+            hint="Visitors see a sign-in page and stay signed in for 7 days. Scripts and API clients can send the same username and password as an Authorization: Basic header instead."
+          />
+        )}
+        {auth && kind !== "REDIRECT" && (
           <div className="rounded-xl border border-line p-3 sm:p-4 flex flex-col gap-3">
             <div className="text-[13px] text-slate">People who can sign in</div>
             {users.map((u) => (
@@ -547,7 +629,9 @@ function RouteDialog({ hostId, route, onClose, onSaved }: { hostId: string; rout
             {route?.authEnabled && <p className="text-[12.5px] text-slate">Changing someone&apos;s password signs everyone out of this site.</p>}
           </div>
         )}
-        <Toggle checked={backendHttps} onChange={setBackendHttps} label="The container itself speaks HTTPS" hint="Rare. Leave off for most apps." />
+        {kind !== "REDIRECT" && (
+          <Toggle checked={backendHttps} onChange={setBackendHttps} label={kind === "ADDRESS" ? "The address speaks HTTPS" : "The container itself speaks HTTPS"} hint="Rare. Leave off for most apps." />
+        )}
         {error && <Notice tone="error">{error}</Notice>}
       </div>
     </Modal>

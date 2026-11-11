@@ -310,17 +310,41 @@ public class NginxConfigGenerator {
         return "dm_login_" + id.replaceAll("[^A-Za-z0-9_]", "_");
     }
 
+    /**
+     * The {@code return} for a redirect route. The address is validated (no quotes, spaces or $),
+     * and quoted so characters such as # and ; stay part of it.
+     */
+    static String redirectReturn(IngressRoute route) {
+        String url = route.getRedirectUrl();
+        boolean keepPath = Boolean.TRUE.equals(route.getRedirectKeepPath());
+        if (keepPath) url = url.replaceFirst("/+$", "") + "$request_uri";
+        int code = Boolean.TRUE.equals(route.getRedirectPermanent()) ? 301 : 302;
+        return "return " + code + " \"" + url + "\";";
+    }
+
     private String location(IngressRoute route) {
         String path = path(route);
+        String where = path.equals("/") ? "/" : "^~ " + path;
+        StringBuilder sb = new StringBuilder();
+        if (route.kind() == IngressRoute.TargetType.REDIRECT) {
+            sb.append("        # redirect to ").append(route.getRedirectUrl()).append('\n');
+            sb.append("        location ").append(where).append(" {\n");
+            sb.append("            ").append(redirectReturn(route)).append('\n');
+            sb.append("        }\n");
+            return sb.toString();
+        }
         String scheme = route.getProtocol() == IngressRoute.Protocol.HTTPS ? "https" : "http";
         String var = sanitizeVar(route.getId() == null ? "new" : route.getId());
-        StringBuilder sb = new StringBuilder();
+        String upstreamHost =
+                route.kind() == IngressRoute.TargetType.ADDRESS
+                        ? route.getTargetHost()
+                        : route.getTargetContainerName();
         sb.append("        # ")
-                .append(route.getTargetContainerName())
+                .append(upstreamHost)
                 .append(':')
                 .append(route.getTargetPort())
                 .append('\n');
-        sb.append("        location ").append(path.equals("/") ? "/" : "^~ " + path).append(" {\n");
+        sb.append("        location ").append(where).append(" {\n");
         if (protectedRoute(route)) {
             // A signed-in visitor (session cookie) or an Authorization: Basic header gets in;
             // anyone else is sent to the sign-in page (browsers) or gets a 401 (scripts).
@@ -346,7 +370,7 @@ public class NginxConfigGenerator {
                 .append(' ')
                 .append(scheme)
                 .append("://")
-                .append(route.getTargetContainerName())
+                .append(upstreamHost)
                 .append(':')
                 .append(route.getTargetPort())
                 .append(";\n");

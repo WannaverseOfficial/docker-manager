@@ -231,7 +231,12 @@ public class RegistryHostingService {
                                         null,
                                         true,
                                         null,
-                                        true),
+                                        true,
+                                        null,
+                                        null,
+                                        null,
+                                        null,
+                                        null),
                                 userId,
                                 username);
                 r.setIngressRouteId(route.getId());

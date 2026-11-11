@@ -232,6 +232,141 @@ export function Select({
   );
 }
 
+export type ComboOption = { value: string; label: string; hint?: string };
+
+/**
+ * A text box that filters a long list as you type, for choosing one item among many. The list opens
+ * below the box (in the page flow, so dialogs don't clip it). Arrow keys move, Enter picks, Escape
+ * closes.
+ */
+export function Combobox({
+  value,
+  onChange,
+  options,
+  placeholder = "Search",
+  empty = "Nothing matches",
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  options: ComboOption[];
+  placeholder?: string;
+  empty?: string;
+}) {
+  const id = useId();
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [active, setActive] = useState(0);
+  const listRef = useRef<HTMLUListElement>(null);
+  const selected = options.find((o) => o.value === value);
+  const q = query.trim().toLowerCase();
+  const matches = !q
+    ? options
+    : options
+        .filter((o) => o.label.toLowerCase().includes(q))
+        // Names that start with the text first.
+        .sort((a, b) => Number(!a.label.toLowerCase().startsWith(q)) - Number(!b.label.toLowerCase().startsWith(q)));
+  const shown = matches.slice(0, 200);
+
+  useEffect(() => {
+    if (!open) return;
+    listRef.current?.querySelector<HTMLElement>(`[data-index="${active}"]`)?.scrollIntoView({ block: "nearest" });
+  }, [active, open]);
+
+  const openList = () => {
+    if (open) return;
+    setQuery("");
+    const i = options.findIndex((o) => o.value === value);
+    setActive(i < 0 ? 0 : i);
+    setOpen(true);
+  };
+  const pick = (o: ComboOption) => {
+    onChange(o.value);
+    setOpen(false);
+    setQuery("");
+  };
+
+  return (
+    <div className="relative">
+      <input
+        role="combobox"
+        aria-expanded={open}
+        aria-controls={`${id}-list`}
+        aria-autocomplete="list"
+        aria-activedescendant={open && shown[active] ? `${id}-${active}` : undefined}
+        className={`${inputClass} pr-9`}
+        value={open ? query : selected?.label ?? ""}
+        placeholder={open && selected ? selected.label : placeholder}
+        onFocus={openList}
+        onClick={openList}
+        onBlur={() => setOpen(false)}
+        onChange={(e) => {
+          setQuery(e.target.value);
+          setActive(0);
+          setOpen(true);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+            e.preventDefault();
+            if (!open) return openList();
+            const n = shown.length;
+            if (n) setActive((a) => (e.key === "ArrowDown" ? (a + 1) % n : (a - 1 + n) % n));
+          } else if (e.key === "Enter") {
+            if (open && shown[active]) {
+              e.preventDefault();
+              pick(shown[active]);
+            }
+          } else if (e.key === "Escape" && open) {
+            // Close the list, not the dialog around it.
+            e.preventDefault();
+            e.stopPropagation();
+            setOpen(false);
+            setQuery("");
+          }
+        }}
+        autoComplete="off"
+        autoCapitalize="off"
+        spellCheck={false}
+      />
+      <ChevronDown size={16} className="absolute right-3 top-5 -translate-y-1/2 text-slate pointer-events-none" aria-hidden />
+      {open && (
+        <ul
+          ref={listRef}
+          id={`${id}-list`}
+          role="listbox"
+          className="mt-1 max-h-64 overflow-y-auto rounded-xl border border-line bg-paper py-1 shadow-xl"
+          // Keep focus in the text box while picking with the mouse.
+          onMouseDown={(e) => e.preventDefault()}
+        >
+          {shown.map((o, i) => (
+            <li
+              key={o.value}
+              id={`${id}-${i}`}
+              data-index={i}
+              role="option"
+              aria-selected={o.value === value}
+              onMouseMove={() => active !== i && setActive(i)}
+              onClick={(e) => {
+                // Inside a <label>, a click would otherwise be passed on to the text box.
+                e.preventDefault();
+                pick(o);
+              }}
+              className={`flex items-baseline justify-between gap-3 px-3.5 py-2 text-[14px] cursor-pointer ${i === active ? "bg-well" : ""}`}
+            >
+              <span className="truncate">
+                {o.label}
+                {o.value === value && <Check size={14} className="inline ml-1.5 -mt-0.5 text-slate" aria-hidden />}
+              </span>
+              {o.hint && <span className="shrink-0 text-[12.5px] text-slate">{o.hint}</span>}
+            </li>
+          ))}
+          {shown.length === 0 && <li className="px-3.5 py-2 text-[14px] text-slate">{empty}</li>}
+          {matches.length > shown.length && <li className="px-3.5 py-2 text-[12.5px] text-slate">{matches.length - shown.length} more. Type to narrow the list.</li>}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 export function Toggle({
   checked,
   onChange,

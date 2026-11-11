@@ -32,6 +32,11 @@ spring:
       hibernate:
         connection:
           handling_mode: DELAYED_ACQUISITION_AND_RELEASE_AFTER_TRANSACTION
+        # Read existing columns one table at a time. Grouped, the SQLite driver builds a single
+        # UNION ALL with a term per column of every table, and SQLite refuses more than 500 terms
+        # ("too many terms in compound SELECT"), so startup failed once the schema passed 500.
+        hbm2ddl:
+          jdbc_metadata_extraction_strategy: individually
 
 server:
   port: 8080

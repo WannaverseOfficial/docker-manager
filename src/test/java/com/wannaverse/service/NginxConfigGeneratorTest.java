@@ -114,6 +114,122 @@ class NginxConfigGeneratorTest {
         assertFalse(conf.contains("$2a$10$hash"));
     }
 
+    private static IngressService.ExposeAppRequest redirectRequest(
+            String url, boolean permanent, boolean keepPath) {
+        return new IngressService.ExposeAppRequest(
+                null,
+                null,
+                "go.example.com",
+                "/",
+                0,
+                null,
+                "NONE",
+                null,
+                false,
+                null,
+                null,
+                false,
+                null,
+                null,
+                "REDIRECT",
+                null,
+                url,
+                permanent,
+                keepPath);
+    }
+
+    @Test
+    void redirectRoutesReturnInsteadOfProxying() {
+        IngressRoute temp =
+                IngressService.toRedirect(
+                        redirectRequest("google.com", false, false), "go.example.com", "/");
+        temp.setId("r-temp");
+        temp.setEnabled(true);
+        assertEquals("https://google.com", temp.getRedirectUrl());
+        IngressRoute kept =
+                IngressService.toRedirect(
+                        redirectRequest("https://example.org/base/", true, true),
+                        "old.example.com",
+                        "/");
+        kept.setHostname("old.example.com");
+        kept.setId("r-kept");
+        kept.setEnabled(true);
+        String conf =
+                generator.generateFullConfig(new IngressConfig(), List.of(temp, kept), Map.of());
+        writeSample("nginx-redirect.conf", conf);
+        assertTrue(conf.contains("return 302 \"https://google.com\";"));
+        assertTrue(conf.contains("return 301 \"https://example.org/base$request_uri\";"));
+        assertFalse(conf.contains("proxy_pass"), "a redirect has no upstream");
+        assertEquals(count(conf, "{"), count(conf, "}"));
+    }
+
+    @Test
+    void redirectAddressesThatCouldBreakTheConfigAreRefused() {
+        for (String bad :
+                List.of(
+                        "https://evil.example/$host",
+                        "https://a.example/x\"; return 200 \"",
+                        "https://a.example/ x",
+                        "https://a.example/{x}",
+                        "ftp://a.example",
+                        "https://user:pass@a.example",
+                        "")) {
+            assertThrows(
+                    Exception.class,
+                    () ->
+                            IngressService.toRedirect(
+                                    redirectRequest(bad, false, false), "go.example.com", "/"),
+                    bad);
+        }
+        // Back to the same route: an endless loop.
+        assertThrows(
+                Exception.class,
+                () ->
+                        IngressService.toRedirect(
+                                redirectRequest("https://go.example.com/", false, true),
+                                "go.example.com",
+                                "/"));
+        // Another path on the same hostname is fine.
+        IngressService.toRedirect(
+                redirectRequest("https://go.example.com/new", false, true),
+                "go.example.com",
+                "/old");
+        // Keeping the path needs an address without a query.
+        assertThrows(
+                Exception.class,
+                () ->
+                        IngressService.toRedirect(
+                                redirectRequest("https://a.example/?x=1", false, true),
+                                "go.example.com",
+                                "/"));
+    }
+
+    @Test
+    void addressRoutesProxyToTheTypedHost() {
+        IngressRoute r = route("nas.example.com", "/", IngressRoute.TlsMode.NONE);
+        r.setTargetType(IngressRoute.TargetType.ADDRESS);
+        r.setTargetContainerName("");
+        r.setTargetHost("192.168.1.20");
+        r.setTargetPort(5000);
+        String conf = generator.generateFullConfig(new IngressConfig(), List.of(r), Map.of());
+        writeSample("nginx-address.conf", conf);
+        assertTrue(conf.contains("set $upstream_r_nas_example_com_ http://192.168.1.20:5000;"));
+        assertEquals("192.168.1.20", IngressService.targetHost(" http://192.168.1.20/ "));
+        assertEquals("nas.lan", IngressService.targetHost("NAS.lan"));
+        for (String bad : List.of("localhost", "127.0.0.1", "0.0.0.0", "999.1.1.1", "a b", "")) {
+            assertThrows(Exception.class, () -> IngressService.targetHost(bad), bad);
+        }
+    }
+
+    private static void writeSample(String name, String conf) {
+        // Kept for checking with a real nginx (nginx -t) outside the unit tests.
+        try {
+            java.nio.file.Files.createDirectories(java.nio.file.Path.of("build/tmp"));
+            java.nio.file.Files.writeString(java.nio.file.Path.of("build/tmp/" + name), conf);
+        } catch (java.io.IOException ignored) {
+        }
+    }
+
     @Test
     void usersKeepTheirPasswordWhenNoneIsSent() {
         String first =

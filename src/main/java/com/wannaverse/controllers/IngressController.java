@@ -390,7 +390,12 @@ public class IngressController {
             String createdByUsername,
             boolean forceHttpsRedirect,
             String authUsername,
-            List<String> authUsernames) {
+            List<String> authUsernames,
+            String targetType,
+            String targetHost,
+            String redirectUrl,
+            boolean redirectPermanent,
+            boolean redirectKeepPath) {
         public static IngressRouteResponse fromEntity(IngressRoute r) {
             List<String> users = IngressService.authUsernames(r.getAuthConfig());
             String authUser = users.isEmpty() ? null : users.get(0);
@@ -410,7 +415,12 @@ public class IngressController {
                     r.getCreatedByUsername(),
                     r.isForceHttpsRedirect(),
                     authUser,
-                    users);
+                    users,
+                    r.kind().name(),
+                    r.getTargetHost(),
+                    r.getRedirectUrl(),
+                    Boolean.TRUE.equals(r.getRedirectPermanent()),
+                    Boolean.TRUE.equals(r.getRedirectKeepPath()));
         }
     }
 

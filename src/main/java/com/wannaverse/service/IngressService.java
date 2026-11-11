@@ -321,7 +321,7 @@ public class IngressService {
                                         new RouteImpact(
                                                 r.getId(),
                                                 r.getHostname(),
-                                                r.getTargetContainerName(),
+                                                r.describeTarget(),
                                                 r.getHostname()
                                                         + NginxConfigGenerator.path(r)
                                                         + " will stop answering"))
@@ -467,10 +467,10 @@ public class IngressService {
                 "Route "
                         + route.getHostname()
                         + route.getPathPrefix()
-                        + " -> "
-                        + route.getTargetContainerName()
-                        + ":"
-                        + route.getTargetPort(),
+                        + (route.kind() == IngressRoute.TargetType.REDIRECT
+                                ? " redirects to "
+                                : " -> ")
+                        + route.describeTarget(),
                 userId,
                 username);
 
@@ -498,6 +498,7 @@ public class IngressService {
         IngressRoute before = copy(route);
 
         if (request != null) {
+            requireAdminForAddress(route.kind());
             IngressRoute updated = toRoute(request, config, route.getAuthConfig());
             requireHostnameOwner(config, updated.getHostname(), route.getId());
             boolean moved =
@@ -511,6 +512,11 @@ public class IngressService {
             }
             route.setHostname(updated.getHostname());
             route.setPathPrefix(updated.getPathPrefix());
+            route.setTargetType(updated.getTargetType());
+            route.setTargetHost(updated.getTargetHost());
+            route.setRedirectUrl(updated.getRedirectUrl());
+            route.setRedirectPermanent(updated.getRedirectPermanent());
+            route.setRedirectKeepPath(updated.getRedirectKeepPath());
             route.setTargetContainerName(updated.getTargetContainerName());
             resolveTarget(config, route);
             route.setTargetPort(updated.getTargetPort());
@@ -577,14 +583,15 @@ public class IngressService {
         routeRepository.delete(route);
 
         if (config.getStatus() == IngressStatus.ENABLED) {
-            if (disconnectFromNetwork) {
+            if (disconnectFromNetwork && route.kind() == IngressRoute.TargetType.CONTAINER) {
                 boolean stillUsed =
                         routeRepository.findByIngressConfigId(config.getId()).stream()
                                 .anyMatch(
                                         r ->
-                                                Objects.equals(
-                                                        r.getTargetContainerName(),
-                                                        route.getTargetContainerName()));
+                                                r.kind() == IngressRoute.TargetType.CONTAINER
+                                                        && Objects.equals(
+                                                                r.getTargetContainerName(),
+                                                                route.getTargetContainerName()));
                 if (!stillUsed) {
                     try {
                         DockerAPI api = applier.api(config);
@@ -639,6 +646,11 @@ public class IngressService {
     }
 
     private void resolveTarget(IngressConfig config, IngressRoute route) {
+        if (route.kind() != IngressRoute.TargetType.CONTAINER) {
+            route.setTargetContainerId("");
+            route.setTargetContainerName("");
+            return;
+        }
         String id = NginxApplier.findContainer(applier.api(config), route.getTargetContainerName());
         if (id == null) {
             throw bad("No container named '" + route.getTargetContainerName() + "' on this host");
@@ -721,11 +733,31 @@ public class IngressService {
         if (!PATH.matcher(path).matches() || path.contains("..") || path.contains("//")) {
             throw bad("The path may only use letters, digits and - . _ ~ /");
         }
-        String container =
-                request.containerName() == null
-                        ? ""
-                        : request.containerName().trim().replaceFirst("^/", "");
-        if (!InputValidator.isValidContainerName(container)) throw bad("Choose a container");
+        IngressRoute.TargetType kind;
+        try {
+            kind =
+                    request.targetType() == null || request.targetType().isBlank()
+                            ? IngressRoute.TargetType.CONTAINER
+                            : IngressRoute.TargetType.valueOf(request.targetType());
+        } catch (IllegalArgumentException e) {
+            throw bad("Unknown route type");
+        }
+        if (kind == IngressRoute.TargetType.REDIRECT) {
+            return toRedirect(request, hostname, path);
+        }
+
+        String container = "";
+        String targetHost = null;
+        if (kind == IngressRoute.TargetType.CONTAINER) {
+            container =
+                    request.containerName() == null
+                            ? ""
+                            : request.containerName().trim().replaceFirst("^/", "");
+            if (!InputValidator.isValidContainerName(container)) throw bad("Choose a container");
+        } else {
+            requireAdminForAddress(kind);
+            targetHost = targetHost(request.targetHost());
+        }
         if (request.targetPort() < 1 || request.targetPort() > 65535)
             throw bad("The port must be between 1 and 65535");
 
@@ -745,7 +777,10 @@ public class IngressService {
         IngressRoute route = new IngressRoute();
         route.setHostname(hostname);
         route.setPathPrefix(path);
-        route.setTargetContainerId(request.containerId());
+        route.setTargetType(kind);
+        route.setTargetHost(targetHost);
+        route.setTargetContainerId(
+                kind == IngressRoute.TargetType.CONTAINER ? request.containerId() : "");
         route.setTargetContainerName(container);
         route.setTargetPort(request.targetPort());
         route.setProtocol(protocol);
@@ -762,6 +797,117 @@ public class IngressService {
                             : htpasswd(request.authConfig()));
         }
         return route;
+    }
+
+    /**
+     * An address outside Docker Manager's containers: an IPv4 address or a DNS name, resolved by
+     * the proxy at request time. Loopback is refused, as it would be the proxy container itself.
+     */
+    static String targetHost(String value) {
+        String host = value == null ? "" : value.trim().toLowerCase(Locale.ROOT);
+        host = host.replaceFirst("^[a-z][a-z0-9+.-]*://", "").replaceFirst("/.*$", "");
+        if (host.isEmpty()) throw bad("Enter the address to send traffic to");
+        if (!InputValidator.isValidHostname(host)) {
+            throw bad("Enter an IPv4 address or a hostname, for example 192.168.1.20 or nas.lan");
+        }
+        if (host.equals("localhost")
+                || host.endsWith(".localhost")
+                || host.startsWith("127.")
+                || host.equals("0.0.0.0")) {
+            throw bad(
+                    "Inside the proxy, "
+                            + host
+                            + " is the proxy itself. To reach this server, use its network address"
+                            + " (or host.docker.internal with Docker Desktop).");
+        }
+        if (host.matches("^[0-9.]+$") && !IPV4.matcher(host).matches()) {
+            throw bad("That isn't a valid IPv4 address");
+        }
+        return host;
+    }
+
+    private static final Pattern IPV4 =
+            Pattern.compile(
+                    "^((25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)\\.){3}(25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)$");
+
+    /**
+     * Characters allowed in a redirect address. No spaces, quotes, braces or $ (nginx variables).
+     */
+    private static final Pattern REDIRECT_URL =
+            Pattern.compile("^https?://[A-Za-z0-9._~:/?#\\[\\]@!&'()*+,;=%-]+$");
+
+    static IngressRoute toRedirect(ExposeAppRequest request, String hostname, String path) {
+        String url = request.redirectUrl() == null ? "" : request.redirectUrl().trim();
+        if (url.isEmpty()) throw bad("Enter the address to send visitors to");
+        if (!url.matches("(?i)^[a-z][a-z0-9+.-]*://.*")) url = "https://" + url;
+        if (url.length() > 2000) throw bad("The address is too long");
+        if (!REDIRECT_URL.matcher(url).matches()) {
+            throw bad("Enter a web address such as https://example.org/page (no spaces or $)");
+        }
+        java.net.URI uri;
+        try {
+            uri = new java.net.URI(url);
+        } catch (java.net.URISyntaxException e) {
+            throw bad("That isn't a valid web address");
+        }
+        String scheme = uri.getScheme().toLowerCase(Locale.ROOT);
+        String targetHost = uri.getHost() == null ? "" : uri.getHost().toLowerCase(Locale.ROOT);
+        if (!InputValidator.isValidHostname(targetHost) || uri.getUserInfo() != null) {
+            throw bad("That isn't a valid web address");
+        }
+        url = scheme + url.substring(url.indexOf("://"));
+        boolean keepPath = Boolean.TRUE.equals(request.redirectKeepPath());
+        if (keepPath && (uri.getRawQuery() != null || uri.getRawFragment() != null)) {
+            throw bad("To keep the visitor's path, use an address without ? or #");
+        }
+        if (targetHost.equals(hostname)) {
+            String targetPath =
+                    uri.getRawPath() == null || uri.getRawPath().isEmpty() ? "/" : uri.getRawPath();
+            String effective = keepPath ? targetPath.replaceFirst("/$", "") + path : targetPath;
+            if (effective.startsWith(path)) {
+                throw bad("That address leads back to this route, so visitors would loop forever");
+            }
+        }
+
+        IngressRoute.TlsMode tls;
+        try {
+            tls =
+                    IngressRoute.TlsMode.valueOf(
+                            request.tlsMode() == null ? "NONE" : request.tlsMode());
+        } catch (IllegalArgumentException e) {
+            throw bad("Unknown TLS mode");
+        }
+        IngressRoute route = new IngressRoute();
+        route.setHostname(hostname);
+        route.setPathPrefix(path);
+        route.setTargetType(IngressRoute.TargetType.REDIRECT);
+        route.setTargetContainerId("");
+        route.setTargetContainerName("");
+        route.setTargetPort(0);
+        route.setProtocol(IngressRoute.Protocol.HTTP);
+        route.setTlsMode(tls);
+        route.setForceHttpsRedirect(
+                request.forceHttpsRedirect() && tls != IngressRoute.TlsMode.NONE);
+        route.setRedirectUrl(url);
+        route.setRedirectPermanent(Boolean.TRUE.equals(request.redirectPermanent()));
+        route.setRedirectKeepPath(keepPath);
+        route.setAuthEnabled(false);
+        return route;
+    }
+
+    /**
+     * Address routes reach anything the proxy can: other machines on the network, this server's own
+     * ports, Docker Manager itself. Only administrators may create or change them.
+     */
+    private static void requireAdminForAddress(IngressRoute.TargetType kind) {
+        if (kind != IngressRoute.TargetType.ADDRESS) return;
+        var ctx = com.wannaverse.security.SecurityContextHolder.getContext();
+        if (ctx != null && !ctx.isAdmin()) {
+            throw new ResponseStatusException(
+                    HttpStatus.FORBIDDEN,
+                    "Only administrators can send a route to an address outside Docker Manager's"
+                            + " containers");
+        }
     }
 
     private static final int MAX_AUTH_USERS = 50;
@@ -879,6 +1025,12 @@ public class IngressService {
         c.setUpdatedAt(r.getUpdatedAt());
         c.setCreatedByUserId(r.getCreatedByUserId());
         c.setCreatedByUsername(r.getCreatedByUsername());
+        c.setUnlimitedUploads(r.getUnlimitedUploads());
+        c.setTargetType(r.getTargetType());
+        c.setTargetHost(r.getTargetHost());
+        c.setRedirectUrl(r.getRedirectUrl());
+        c.setRedirectPermanent(r.getRedirectPermanent());
+        c.setRedirectKeepPath(r.getRedirectKeepPath());
         return c;
     }
 
@@ -953,7 +1105,17 @@ public class IngressService {
             /** Who may sign in. A blank password keeps that user's current one. */
             List<AuthUser> authUsers,
             /** No size limit or buffering for uploads (a hosted registry). Null keeps it as is. */
-            Boolean unlimitedUploads) {}
+            Boolean unlimitedUploads,
+            /** CONTAINER (the default), ADDRESS or REDIRECT. */
+            String targetType,
+            /** ADDRESS: an IPv4 address or DNS name. */
+            String targetHost,
+            /** REDIRECT: where visitors are sent. */
+            String redirectUrl,
+            /** REDIRECT: 301 instead of 302. */
+            Boolean redirectPermanent,
+            /** REDIRECT: append the visitor's path and query. */
+            Boolean redirectKeepPath) {}
 
     public record AuthUser(String username, String password) {}
 

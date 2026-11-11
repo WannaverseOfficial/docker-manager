@@ -349,6 +349,12 @@ export interface IngressRoute {
   forceHttpsRedirect: boolean;
   authUsername: string | null;
   authUsernames?: string[];
+  /** CONTAINER, ADDRESS (a host and port typed in) or REDIRECT. */
+  targetType: "CONTAINER" | "ADDRESS" | "REDIRECT";
+  targetHost: string | null;
+  redirectUrl: string | null;
+  redirectPermanent: boolean;
+  redirectKeepPath: boolean;
 }
 
 export interface Certificate {
