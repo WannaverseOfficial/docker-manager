@@ -34,9 +34,11 @@ LABEL org.opencontainers.image.description="A self-hosted web interface for mana
 LABEL org.opencontainers.image.source="https://github.com/WannaverseOfficial/docker-manager"
 
 # Upgrade first: the base image can lag behind Ubuntu's security updates.
-RUN apt-get update \
-    && apt-get upgrade -y --no-install-recommends \
-    && apt-get install -y --no-install-recommends curl tini gosu openssh-client ca-certificates \
+# apt downloads as root here (build time only): on GitHub's runners its usual "_apt" user
+# could not resolve any hostname, while root in the same build could.
+RUN apt-get -o APT::Sandbox::User=root update \
+    && apt-get -o APT::Sandbox::User=root upgrade -y --no-install-recommends \
+    && apt-get -o APT::Sandbox::User=root install -y --no-install-recommends curl tini gosu openssh-client ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # Compose stacks and git deployments run `docker compose`.
