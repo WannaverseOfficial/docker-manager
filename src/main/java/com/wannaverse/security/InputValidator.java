@@ -93,9 +93,10 @@ public final class InputValidator {
         if (url == null || url.isBlank()) {
             return false;
         }
-        // ssh:// isn't supported by the Docker client library used here (only unix and tcp), so
-        // it is refused up front instead of failing on every request.
-        return DOCKER_HOST_UNIX.matcher(url).matches() || DOCKER_HOST_TCP.matcher(url).matches();
+        // ssh:// hosts are reached through an SSH tunnel (see HostConnections).
+        return DOCKER_HOST_UNIX.matcher(url).matches()
+                || DOCKER_HOST_TCP.matcher(url).matches()
+                || com.wannaverse.service.HostConnections.SSH_URL.matcher(url).matches();
     }
 
     public static boolean isValidContainerName(String name) {

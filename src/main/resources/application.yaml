@@ -78,3 +78,10 @@ docker:
       restart-loop-threshold: ${DOCKER_HEALTH_RESTART_THRESHOLD:3}
       restart-loop-window: ${DOCKER_HEALTH_RESTART_WINDOW:300000}
       notification-cooldown: ${DOCKER_HEALTH_NOTIFICATION_COOLDOWN:3600000}
+# The API description (/v3/api-docs, /swagger-ui) is public when on, so it is off unless asked
+# for: API_DOCS_ENABLED=true.
+springdoc:
+  api-docs:
+    enabled: ${API_DOCS_ENABLED:false}
+  swagger-ui:
+    enabled: ${API_DOCS_ENABLED:false}

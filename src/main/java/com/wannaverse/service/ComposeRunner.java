@@ -30,10 +30,13 @@ public class ComposeRunner {
     private static final int MAX_LINE_LENGTH = 4_000;
 
     private final DockerRegistryService registryService;
+    private final HostConnections connections;
 
     public ComposeRunner(
-            @org.springframework.context.annotation.Lazy DockerRegistryService registryService) {
+            @org.springframework.context.annotation.Lazy DockerRegistryService registryService,
+            @org.springframework.context.annotation.Lazy HostConnections connections) {
         this.registryService = registryService;
+        this.connections = connections;
     }
 
     public record Result(int exitCode, List<String> output) {
@@ -106,7 +109,22 @@ public class ComposeRunner {
 
         ProcessBuilder pb = new ProcessBuilder(command);
         if (workDir != null) pb.directory(workDir.toFile());
-        pb.environment().put("DOCKER_HOST", normalizeHost(dockerHostUrl));
+        try {
+            pb.environment()
+                    .put("DOCKER_HOST", normalizeHost(connections.effectiveUrl(dockerHostUrl)));
+            java.nio.file.Path tls = connections.tlsDir(dockerHostUrl);
+            if (tls != null) {
+                pb.environment().put("DOCKER_TLS_VERIFY", "1");
+                pb.environment().put("DOCKER_CERT_PATH", tls.toString());
+            } else {
+                pb.environment().remove("DOCKER_TLS_VERIFY");
+                pb.environment().remove("DOCKER_CERT_PATH");
+            }
+        } catch (RuntimeException e) {
+            String msg = "Could not connect to the Docker host: " + e.getMessage();
+            if (onLine != null) onLine.accept(msg);
+            return new Result(-1, List.of(msg));
+        }
         // Never let a compose file read the manager's own secrets through variable substitution.
         pb.environment().remove("JWT_ACCESS_SECRET");
         pb.environment().remove("JWT_REFRESH_SECRET");

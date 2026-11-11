@@ -121,6 +121,21 @@ public class NginxConfigGenerator {
             limit_req_zone $binary_remote_addr zone=dm_login:1m rate=10r/m;
             limit_req_status 429;
 
+            # Requests that send a username and password themselves (scripts) are limited per
+            # address, which slows down guessing. Signed-in browsers send no header: no limit.
+            map $http_authorization $dm_basic_client {
+                ""      "";
+                default $binary_remote_addr;
+            }
+            limit_req_zone $dm_basic_client zone=dm_basic:1m rate=5r/s;
+
+            # The route's own username and password are not passed on to the app; any other
+            # Authorization header (an app's own bearer token) still is.
+            map $http_authorization $dm_upstream_authorization {
+                "~*^basic " "";
+                default     $http_authorization;
+            }
+
             # Only reachable inside the proxy: the sign-in page asks nginx to check a password.
             server {
                 listen 127.0.0.1:%d;
@@ -322,6 +337,8 @@ public class NginxConfigGenerator {
             sb.append("            error_page 401 = @")
                     .append(loginLocation(route.getId()))
                     .append(";\n");
+            sb.append("            limit_req zone=dm_basic burst=40 nodelay;\n");
+            sb.append("            proxy_set_header Authorization $dm_upstream_authorization;\n");
         }
         // A variable makes nginx resolve the container at request time.
         sb.append("            set $")

@@ -4,6 +4,9 @@ export interface Host {
   id: string;
   name: string | null;
   dockerHostUrl: string;
+  /** tcp:// with TLS certificates */
+  tls?: boolean;
+  hasSshKey?: boolean;
 }
 
 // --- Docker objects ---------------------------------------------------------------------------

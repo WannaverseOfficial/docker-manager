@@ -568,6 +568,8 @@ public class ContainerSpecService {
             connectExtraNetworks(client, newId, spec, oldNetworks);
             if (spec.isStart() || wasRunning) {
                 client.startContainerCmd(newId).exec();
+                // Only let go of the original once the new one has shown it works.
+                waitUntilHealthy(api, newId);
             }
         } catch (RuntimeException e) {
             log.warn("Recreating {} failed, restoring the original: {}", name, e.getMessage());
@@ -598,6 +600,49 @@ public class ContainerSpecService {
                     e.getMessage());
         }
         return newId;
+    }
+
+    /** How long a container without a health check must keep running to count as started. */
+    static final long SETTLE_MS = 5_000;
+
+    /** The longest to wait for a health check to pass. Still "starting" after that is accepted. */
+    static final long HEALTH_WAIT_MS = 120_000;
+
+    /**
+     * Waits until a just-started container is up: healthy if it has a health check, otherwise still
+     * running after a few seconds. Throws if it stops, keeps restarting or reports itself
+     * unhealthy, so the caller can put the original container back.
+     */
+    void waitUntilHealthy(DockerAPI api, String containerId) {
+        long start = System.currentTimeMillis();
+        while (true) {
+            var state = api.inspectContainer(containerId).getState();
+            if (Boolean.TRUE.equals(state.getRestarting())
+                    || !Boolean.TRUE.equals(state.getRunning())) {
+                throw new IllegalStateException(
+                        "the new container stopped right after starting (exit code "
+                                + state.getExitCodeLong()
+                                + "). Check its logs");
+            }
+            var health = state.getHealth();
+            long waited = System.currentTimeMillis() - start;
+            if (health == null || health.getStatus() == null) {
+                if (waited >= SETTLE_MS) return;
+            } else if ("healthy".equalsIgnoreCase(health.getStatus())) {
+                return;
+            } else if ("unhealthy".equalsIgnoreCase(health.getStatus())) {
+                throw new IllegalStateException("the new container failed its health check");
+            } else if (waited >= HEALTH_WAIT_MS) {
+                log.info("{} is still starting after {}s; keeping it", containerId, waited / 1000);
+                return;
+            }
+            try {
+                Thread.sleep(1_000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("interrupted while waiting for the new container");
+            }
+        }
     }
 
     // --- helpers -----------------------------------------------------------------------------

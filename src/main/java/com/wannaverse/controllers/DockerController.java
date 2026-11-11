@@ -22,6 +22,8 @@ import com.wannaverse.service.DockerAPI;
 import com.wannaverse.service.DockerRegistryService;
 import com.wannaverse.service.DockerService;
 import com.wannaverse.service.DriftDetectionService;
+import com.wannaverse.service.EncryptionService;
+import com.wannaverse.service.HostConnections;
 import com.wannaverse.service.ImagePolicyService;
 import com.wannaverse.service.OperationTrackingService;
 import com.wannaverse.service.PermissionService;
@@ -50,6 +52,8 @@ public class DockerController {
     private final StatsService statsService;
     private final ContainerSpecService specService;
     private final SelfContainer self;
+    private final HostConnections hostConnections;
+    private final EncryptionService encryptionService;
 
     public DockerController(
             DockerService dockerService,
@@ -61,8 +65,12 @@ public class DockerController {
             DriftDetectionService driftDetectionService,
             StatsService statsService,
             ContainerSpecService specService,
-            SelfContainer self) {
+            SelfContainer self,
+            HostConnections hostConnections,
+            EncryptionService encryptionService) {
         this.self = self;
+        this.hostConnections = hostConnections;
+        this.encryptionService = encryptionService;
         this.statsService = statsService;
         this.specService = specService;
         this.dockerService = dockerService;
@@ -110,7 +118,112 @@ public class DockerController {
                 .orElse(ResponseEntity.notFound().build());
     }
 
-    public record HostRequest(String name, String dockerHostUrl) {}
+    /**
+     * A Docker host. TLS fields (PEM text) are for tcp:// hosts with --tlsverify; the private key
+     * for ssh://user@server hosts. Leaving them out on an update keeps the saved ones.
+     */
+    public record HostRequest(
+            String name,
+            String dockerHostUrl,
+            String tlsCaPem,
+            String tlsCertPem,
+            String tlsKeyPem,
+            String sshPrivateKey) {}
+
+    /** Applies the connection details of a request to a host, encrypted. */
+    private void applyCredentials(DockerHost host, HostRequest request) {
+        String url = host.getDockerHostUrl();
+        if (HostConnections.isSsh(url)) {
+            if (notBlank(request.sshPrivateKey())) {
+                String key = request.sshPrivateKey().strip();
+                if (!key.contains("PRIVATE KEY")) {
+                    throw new ResponseStatusException(
+                            HttpStatus.BAD_REQUEST,
+                            "Paste the private key, starting with -----BEGIN ... PRIVATE KEY-----");
+                }
+                if (key.contains("ENCRYPTED")) {
+                    throw new ResponseStatusException(
+                            HttpStatus.BAD_REQUEST,
+                            "Use a key without a passphrase: Docker Manager connects unattended");
+                }
+                host.setSshPrivateKey(encryptionService.encrypt(key));
+            }
+            if (host.getSshPrivateKey() == null) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST, "An SSH host needs a private key");
+            }
+            host.setTlsCaPem(null);
+            host.setTlsCertPem(null);
+            host.setTlsKeyPem(null);
+            return;
+        }
+        host.setSshPrivateKey(null);
+        boolean anyTls =
+                notBlank(request.tlsCaPem())
+                        || notBlank(request.tlsCertPem())
+                        || notBlank(request.tlsKeyPem());
+        if (!anyTls) return;
+        if (!url.startsWith("tcp://")) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST, "TLS certificates are only used with tcp:// hosts");
+        }
+        if (!(notBlank(request.tlsCaPem())
+                && notBlank(request.tlsCertPem())
+                && notBlank(request.tlsKeyPem()))) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "TLS needs all three: the CA certificate, the client certificate and its key"
+                            + " (ca.pem, cert.pem, key.pem)");
+        }
+        host.setTlsCaPem(encryptionService.encrypt(pem(request.tlsCaPem())));
+        host.setTlsCertPem(encryptionService.encrypt(pem(request.tlsCertPem())));
+        host.setTlsKeyPem(encryptionService.encrypt(pem(request.tlsKeyPem())));
+    }
+
+    private static String pem(String text) {
+        return text.replace("\r\n", "\n").strip() + "\n";
+    }
+
+    /** Pings the host with these details before they are saved. */
+    private void testConnection(DockerHost host) {
+        com.github.dockerjava.api.DockerClient client;
+        try {
+            client = dockerService.createClient(host);
+        } catch (RuntimeException e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage());
+        }
+        try {
+            if (!dockerService.dockerAPI(client).ping()) {
+                String hint =
+                        HostConnections.isSsh(host.getDockerHostUrl())
+                                ? " Signing in over SSH worked, but Docker didn't answer through"
+                                      + " it: the SSH server must allow forwarding"
+                                      + " (AllowTcpForwarding yes in sshd_config) and the user must"
+                                      + " be able to use /var/run/docker.sock (root, or in the"
+                                      + " docker group)."
+                                : host.hasTls()
+                                        ? " Check that the server name matches its certificate and"
+                                                + " that the certificates belong together."
+                                        : " Check the address and that the port is reachable.";
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST,
+                        "Could not reach Docker at " + host.getDockerHostUrl() + "." + hint);
+            }
+        } catch (ResponseStatusException e) {
+            throw e;
+        } catch (RuntimeException e) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Could not reach Docker at " + host.getDockerHostUrl() + ": " + e.getMessage());
+        } finally {
+            dockerService.close(client);
+            if (host.getId() == null) hostConnections.forget(host);
+        }
+    }
+
+    private static boolean notBlank(String s) {
+        return s != null && !s.isBlank();
+    }
 
     @PostMapping("/hosts")
     @RequirePermission(resource = Resource.DOCKER_HOSTS, action = "create")
@@ -120,26 +233,18 @@ public class DockerController {
         if (!InputValidator.isValidDockerHostUrl(url)) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,
-                    "Invalid Docker host URL. Use unix:///var/run/docker.sock, tcp://host:2376 or"
-                            + " ssh://user@host");
+                    "Invalid Docker host address. Use unix:///var/run/docker.sock,"
+                            + " tcp://server:2375 (or :2376 with TLS) or ssh://user@server");
         }
         if (hostRepository.findByDockerHostUrl(url).isPresent()) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "This host is already added");
-        }
-        var client = dockerService.createClient(url);
-        try {
-            if (!dockerService.dockerAPI(client).ping()) {
-                throw new ResponseStatusException(
-                        HttpStatus.BAD_REQUEST,
-                        "Could not reach Docker at " + url + ". Check the address and access.");
-            }
-        } finally {
-            dockerService.close(client);
         }
         DockerHost host = new DockerHost();
         host.setDockerHostUrl(url);
         host.setName(
                 request.name() == null || request.name().isBlank() ? null : request.name().trim());
+        applyCredentials(host, request);
+        testConnection(host);
         return ResponseEntity.status(HttpStatus.CREATED).body(hostRepository.save(host));
     }
 
@@ -158,6 +263,18 @@ public class DockerController {
         if (request.name() != null) {
             host.setName(request.name().isBlank() ? null : request.name().trim());
         }
+        boolean newCredentials =
+                notBlank(request.sshPrivateKey())
+                        || notBlank(request.tlsCaPem())
+                        || notBlank(request.tlsCertPem())
+                        || notBlank(request.tlsKeyPem());
+        if (newCredentials) {
+            applyCredentials(host, request);
+            // Reconnect with the new details.
+            hostConnections.forget(host);
+            dockerService.close(host.getDockerHostUrl());
+            testConnection(host);
+        }
         return ResponseEntity.ok(hostRepository.save(host));
     }
 
@@ -170,6 +287,7 @@ public class DockerController {
                 .ifPresent(
                         host -> {
                             dockerService.close(host.getDockerHostUrl());
+                            hostConnections.forget(host);
                             hostRepository.deleteById(hostId);
                         });
         return ResponseEntity.noContent().build();

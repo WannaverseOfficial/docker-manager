@@ -401,6 +401,20 @@ public class NginxApplier {
 
     // --- self-healing ------------------------------------------------------------------------
 
+    /** The proxy container exists but isn't running. (Missing is a different matter: recreate.) */
+    private boolean stoppedOnPurpose(IngressConfig config) {
+        try {
+            DockerAPI api = api(config);
+            String id = findContainer(api, config.getNginxContainerName());
+            if (id == null) return false;
+            var state = api.inspectContainer(id).getState();
+            return !Boolean.TRUE.equals(state.getRunning())
+                    && !Boolean.TRUE.equals(state.getRestarting());
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     /** True when the proxy is serving the config Docker Manager wrote. */
     private boolean runsOurConfig(IngressConfig config) {
         try {
@@ -424,6 +438,10 @@ public class NginxApplier {
             ReentrantLock lock = lock(config);
             if (!lock.tryLock()) continue;
             try {
+                // Someone stopped the proxy on purpose (it restarts by itself after reboots, as it
+                // runs with restart: unless-stopped). Leave it stopped; "Re-apply configuration"
+                // or turning ingress on again starts it.
+                if (stoppedOnPurpose(config)) continue;
                 boolean recreated = ensureProxy(config);
                 connectTargets(config);
                 if (recreated) {

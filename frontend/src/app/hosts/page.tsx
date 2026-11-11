@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useHost, useSession } from "@/components/app";
-import { Badge, Button, Empty, Field, Menu, Modal, Notice, PageHeader, Spinner, inputClass, useConfirm, useToast } from "@/components/ui";
+import { Badge, Button, Empty, Field, Menu, Modal, Notice, PageHeader, Segmented, Spinner, inputClass, useConfirm, useToast } from "@/components/ui";
 import { api } from "@/lib/api";
 import { hostLabel } from "@/lib/format";
 import { usePoll } from "@/lib/hooks";
@@ -73,6 +73,7 @@ function HostRow({ host, current, onSelect, onRename, onRemove, canEdit }: { hos
         <div className="flex flex-wrap items-center gap-2">
           <span className="font-medium">{hostLabel(host)}</span>
           {current && <Badge tone="live">selected</Badge>}
+          <Badge>{host.dockerHostUrl.startsWith("ssh://") ? "SSH" : host.tls ? "TLS" : host.dockerHostUrl.startsWith("unix://") ? "local" : "TCP"}</Badge>
           <span className="flex items-center gap-1.5 text-[13px] text-slate">
             <span className={`size-1.5 rounded-full ${ping == null ? "bg-slate/60" : ping.connected ? "bg-ok" : "bg-danger"}`} aria-hidden />
             {ping == null ? "Checking" : ping.connected ? "Connected" : "Not reachable"}
@@ -102,13 +103,35 @@ function HostRow({ host, current, onSelect, onRename, onRemove, canEdit }: { hos
   );
 }
 
+type Kind = "local" | "tcp" | "tls" | "ssh";
+
 function AddHost({ open, onClose, onAdded }: { open: boolean; onClose: () => void; onAdded: (h: Host) => void }) {
   const [name, setName] = useState("");
-  const [url, setUrl] = useState("unix:///var/run/docker.sock");
+  const [kind, setKind] = useState<Kind>("ssh");
+  const [server, setServer] = useState("");
+  const [user, setUser] = useState("");
+  const [port, setPort] = useState("");
+  const [ca, setCa] = useState("");
+  const [cert, setCert] = useState("");
+  const [key, setKey] = useState("");
+  const [sshKey, setSshKey] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const address =
+    kind === "local"
+      ? "unix:///var/run/docker.sock"
+      : kind === "ssh"
+        ? `ssh://${user.trim() || "user"}@${server.trim() || "server"}${port.trim() && port.trim() !== "22" ? `:${port.trim()}` : ""}`
+        : `tcp://${server.trim() || "server"}:${port.trim() || (kind === "tls" ? "2376" : "2375")}`;
+  const ready =
+    kind === "local" ||
+    (kind === "tcp" && server.trim()) ||
+    (kind === "tls" && server.trim() && ca.trim() && cert.trim() && key.trim()) ||
+    (kind === "ssh" && server.trim() && user.trim() && sshKey.trim());
+
   return (
-    <Modal open={open} onClose={onClose} title="Add a Docker host">
+    <Modal open={open} onClose={onClose} title="Add a Docker host" wide>
       <form
         className="flex flex-col gap-4"
         onSubmit={async (e) => {
@@ -116,7 +139,14 @@ function AddHost({ open, onClose, onAdded }: { open: boolean; onClose: () => voi
           setBusy(true);
           setError(null);
           try {
-            const h = await api.post<Host>("/api/docker/hosts", { name: name.trim() || null, dockerHostUrl: url.trim() });
+            const h = await api.post<Host>("/api/docker/hosts", {
+              name: name.trim() || null,
+              dockerHostUrl: address,
+              tlsCaPem: kind === "tls" ? ca : null,
+              tlsCertPem: kind === "tls" ? cert : null,
+              tlsKeyPem: kind === "tls" ? key : null,
+              sshPrivateKey: kind === "ssh" ? sshKey : null,
+            });
             onAdded(h);
           } catch (err) {
             setError((err as Error).message);
@@ -128,23 +158,93 @@ function AddHost({ open, onClose, onAdded }: { open: boolean; onClose: () => voi
         <Field label="Name" optional>
           <input className={inputClass} value={name} onChange={(e) => setName(e.target.value)} placeholder="Home server" />
         </Field>
-        <Field
-          label="Address"
-          hint={
-            <>
-              <code className="font-mono">unix:///var/run/docker.sock</code> for this machine, or <code className="font-mono">tcp://server:2375</code> for another one. Docker&apos;s TCP
-              port gives full control of that server and has no password, so only open it on a private network or through a VPN or SSH tunnel.
-            </>
-          }
-        >
-          <input className={`${inputClass} font-mono text-[13px]`} value={url} onChange={(e) => setUrl(e.target.value)} required spellCheck={false} autoCapitalize="off" />
-        </Field>
+        <Segmented<Kind>
+          label="Connect with"
+          value={kind}
+          onChange={setKind}
+          options={[
+            { value: "ssh", label: "SSH" },
+            { value: "tls", label: "TCP with TLS" },
+            { value: "tcp", label: "TCP" },
+            { value: "local", label: "This server" },
+          ]}
+        />
+        {kind === "local" && (
+          <p className="text-[14px] text-slate">
+            The Docker engine on the machine Docker Manager runs on, through <code className="font-mono text-[13px]">/var/run/docker.sock</code>. It&apos;s added automatically
+            when that socket is mounted.
+          </p>
+        )}
+        {kind !== "local" && (
+          <div className={`grid gap-4 ${kind === "ssh" ? "sm:grid-cols-[10rem_1fr_6rem]" : "sm:grid-cols-[1fr_7rem]"}`}>
+            {kind === "ssh" && (
+              <Field label="User" hint="In the docker group there">
+                <input className={inputClass} value={user} onChange={(e) => setUser(e.target.value)} placeholder="deploy" autoCapitalize="off" spellCheck={false} />
+              </Field>
+            )}
+            <Field label="Server" hint={kind === "ssh" ? undefined : "Name or address"}>
+              <input className={inputClass} value={server} onChange={(e) => setServer(e.target.value)} placeholder="server.example.com" autoCapitalize="off" spellCheck={false} />
+            </Field>
+            <Field label="Port" optional>
+              <input
+                className={inputClass}
+                inputMode="numeric"
+                value={port}
+                onChange={(e) => setPort(e.target.value.replace(/\D/g, "").slice(0, 5))}
+                placeholder={kind === "ssh" ? "22" : kind === "tls" ? "2376" : "2375"}
+              />
+            </Field>
+          </div>
+        )}
+        {kind === "ssh" && (
+          <>
+            <Field label="Private key" hint="An OpenSSH key without a passphrase, whose public key is in the user's ~/.ssh/authorized_keys. Stored encrypted.">
+              <textarea
+                className={`${inputClass} h-28 py-2 font-mono text-[12px]`}
+                value={sshKey}
+                onChange={(e) => setSshKey(e.target.value)}
+                placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
+                spellCheck={false}
+              />
+            </Field>
+            <p className="text-[13px] text-slate">The server&apos;s identity is remembered on the first connection and checked every time after.</p>
+          </>
+        )}
+        {kind === "tls" && (
+          <div className="grid gap-4 sm:grid-cols-3">
+            {(
+              [
+                ["CA certificate", "ca.pem", ca, setCa],
+                ["Client certificate", "cert.pem", cert, setCert],
+                ["Client key", "key.pem", key, setKey],
+              ] as const
+            ).map(([label, file, value, set]) => (
+              <Field key={file} label={label} hint={file}>
+                <textarea
+                  className={`${inputClass} h-28 py-2 font-mono text-[11.5px]`}
+                  value={value}
+                  onChange={(e) => set(e.target.value)}
+                  placeholder="-----BEGIN ..."
+                  spellCheck={false}
+                />
+              </Field>
+            ))}
+          </div>
+        )}
+        {kind === "tcp" && (
+          <Notice tone="warn">
+            Docker&apos;s plain TCP port gives full control of the server to anyone who can reach it, with no password. Only use it on a private network, or choose SSH or TLS.
+          </Notice>
+        )}
+        <p className="text-[13px] text-slate">
+          Address: <code className="font-mono">{address}</code>
+        </p>
         {error && <Notice tone="error">{error}</Notice>}
         <div className="flex justify-end gap-2">
           <Button type="button" tone="quiet" onClick={onClose}>
             Cancel
           </Button>
-          <Button type="submit" busy={busy}>
+          <Button type="submit" busy={busy} disabled={!ready}>
             Connect
           </Button>
         </div>
