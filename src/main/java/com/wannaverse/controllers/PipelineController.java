@@ -123,8 +123,12 @@ public class PipelineController {
             @PathVariable String id,
             @RequestBody(required = false) Map<String, String> body,
             Authentication authentication) {
-        String commit = body != null ? body.get("commit") : null;
-        String branch = body != null ? body.get("branch") : null;
+        // Choosing another branch or commit runs that code's steps (with Docker access), so only
+        // admins may; everyone else runs the pipeline's own branch.
+        var ctx = com.wannaverse.security.SecurityContextHolder.getContext();
+        boolean admin = ctx != null && ctx.isAdmin();
+        String commit = admin && body != null ? body.get("commit") : null;
+        String branch = admin && body != null ? body.get("branch") : null;
         String triggeredBy =
                 java.util.Objects.requireNonNullElse(
                         com.wannaverse.security.SecurityContextHolder.getCurrentUsername(),

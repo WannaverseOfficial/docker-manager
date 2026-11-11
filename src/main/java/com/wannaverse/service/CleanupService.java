@@ -92,27 +92,10 @@ public class CleanupService {
                     items.add(new Item("volume", v.getName(), v.getName(), 0));
                 }
             }
-            // Volumes used only by containers that will be removed become unused too.
-            Set<String> freed =
-                    mountedVolumes(
-                            all.stream()
-                                    .filter(c -> removedContainerIds.contains(c.getId()))
-                                    .toList(),
-                            Set.of());
-            Set<String> listed = new HashSet<>();
-            items.stream().filter(i -> i.kind().equals("volume")).forEach(i -> listed.add(i.id()));
-            for (String vol : freed) {
-                if (!stillMounted.contains(vol)
-                        && !listed.contains(vol)
-                        && !isManaged(vol)
-                        && !guard.keep(vol)) {
-                    items.add(new Item("volume", vol, vol, 0));
-                }
-            }
         }
 
         if (options.networks()) {
-            for (Network n : unusedNetworks(api, all, removedContainerIds)) {
+            for (Network n : unusedNetworks(api, all, removedContainerIds, guard)) {
                 items.add(new Item("network", n.getId(), n.getName(), 0));
             }
         }
@@ -125,75 +108,70 @@ public class CleanupService {
         return new Preview(items, bytes);
     }
 
+    /**
+     * Removes exactly what {@link #preview} lists, worked out before anything is removed (working
+     * it out again halfway through would count things the earlier steps just made unused).
+     */
     public Result run(String hostId, DockerAPI api, Options options) {
+        Preview plan = preview(hostId, api, options);
         List<String> errors = new ArrayList<>();
         int containers = 0, images = 0, volumes = 0, networks = 0;
         long bytes = 0;
 
-        if (options.containers()) {
-            for (Container c : stoppedContainers(api.listAllContainers())) {
-                try {
-                    // Keep named volumes; anonymous ones go with the container like `docker rm -v`.
-                    api.client().removeContainerCmd(c.getId()).withRemoveVolumes(true).exec();
-                    containers++;
-                } catch (Exception e) {
-                    errors.add("Container " + name(c) + ": " + e.getMessage());
-                }
-            }
-        }
-
-        if (options.images()) {
-            // Removing an image can make its parent unused, so repeat until nothing changes.
-            for (int pass = 0; pass < 5; pass++) {
-                Set<String> used = usedImageIds(api.listAllContainers(), Set.of());
-                int removedThisPass = 0;
-                for (Image img : api.listImages()) {
-                    if (used.contains(img.getId())) continue;
-                    if (!options.allImages() && !isDangling(img)) continue;
-                    try {
-                        api.client().removeImageCmd(img.getId()).withForce(false).exec();
-                        images++;
-                        removedThisPass++;
-                        bytes += img.getSize() == null ? 0 : img.getSize();
-                    } catch (Exception e) {
-                        if (pass == 4) {
-                            errors.add("Image " + shortId(img.getId()) + ": " + e.getMessage());
-                        }
-                    }
-                }
-                if (removedThisPass == 0) break;
-            }
-        }
-
-        if (options.volumes()) {
-            VolumeGuard guard = new VolumeGuard(hostId, api, api.listAllContainers());
-            for (var v : api.listUnusedVolumes()) {
-                if (isManaged(v.getName()) || guard.keep(v.getName())) continue;
-                try {
-                    api.removeVolume(v.getName());
-                    volumes++;
-                } catch (Exception e) {
-                    errors.add("Volume " + v.getName() + ": " + e.getMessage());
-                }
-            }
-        }
-
-        if (options.networks()) {
-            for (Network n : unusedNetworks(api, api.listAllContainers(), Set.of())) {
-                try {
-                    api.removeNetwork(n.getId());
-                    networks++;
-                } catch (Exception e) {
-                    errors.add("Network " + n.getName() + ": " + e.getMessage());
-                }
-            }
-        }
-
-        if (options.buildCache()) {
+        for (Item item : plan.items()) {
+            if (!item.kind().equals("container")) continue;
             try {
-                bytes += api.pruneBuildCache();
+                // Volumes stay: anonymous volumes often hold an app's data (postgres, mysql...).
+                api.client().removeContainerCmd(item.id()).withRemoveVolumes(false).exec();
+                containers++;
             } catch (Exception e) {
-                errors.add("Build cache: " + e.getMessage());
+                errors.add("Container " + item.name() + ": " + e.getMessage());
+            }
+        }
+
+        // An image can't go while a newer one is built on it, so try those again after.
+        List<Item> pending =
+                new ArrayList<>(
+                        plan.items().stream().filter(i -> i.kind().equals("image")).toList());
+        for (int pass = 0; pass < 3 && !pending.isEmpty(); pass++) {
+            List<Item> failed = new ArrayList<>();
+            for (Item img : pending) {
+                try {
+                    api.client().removeImageCmd(img.id()).withForce(false).exec();
+                    images++;
+                    bytes += img.size();
+                } catch (com.github.dockerjava.api.exception.NotFoundException gone) {
+                    // removed along with an image above
+                } catch (Exception e) {
+                    if (pass == 2) errors.add("Image " + img.name() + ": " + e.getMessage());
+                    failed.add(img);
+                }
+            }
+            if (failed.size() == pending.size()) {
+                if (pass < 2) {
+                    for (Item img : failed) errors.add("Image " + img.name() + ": still in use");
+                }
+                break;
+            }
+            pending = failed;
+        }
+
+        for (Item item : plan.items()) {
+            try {
+                switch (item.kind()) {
+                    case "volume" -> {
+                        api.removeVolume(item.id());
+                        volumes++;
+                    }
+                    case "network" -> {
+                        api.removeNetwork(item.id());
+                        networks++;
+                    }
+                    case "build-cache" -> bytes += api.pruneBuildCache();
+                    default -> {}
+                }
+            } catch (Exception e) {
+                errors.add(item.name() + ": " + e.getMessage());
             }
         }
 
@@ -213,6 +191,14 @@ public class CleanupService {
                                     || state.equals("dead");
                         })
                 .filter(c -> !isManaged(name(c)))
+                // A stopped stack is still an app: Start brings it back. Taking a stack down is
+                // what removes its containers.
+                .filter(
+                        c ->
+                                c.getLabels() == null
+                                        || !c.getLabels()
+                                                .containsKey(
+                                                        ContainerSpecService.COMPOSE_PROJECT_LABEL))
                 .filter(c -> c.getCreated() == null || c.getCreated() < recentCutoff)
                 .filter(c -> !RECREATE_BACKUP.matcher(name(c)).matches())
                 .toList();
@@ -246,7 +232,10 @@ public class CleanupService {
         }
 
         boolean keep(String volume) {
-            String project = projectOf.get(volume);
+            return keepProject(projectOf.get(volume));
+        }
+
+        boolean keepProject(String project) {
             if (project == null) return false;
             return liveProjects.contains(project)
                     || stackRepository.findByDockerHostIdAndName(hostId, project).isPresent();
@@ -276,15 +265,19 @@ public class CleanupService {
     }
 
     private static List<Network> unusedNetworks(
-            DockerAPI api, List<Container> all, Set<String> ignoring) {
+            DockerAPI api, List<Container> all, Set<String> ignoring, VolumeGuard guard) {
         Set<String> inUse = new HashSet<>();
         for (Container c : all) {
             if (ignoring.contains(c.getId())) continue;
             if (c.getNetworkSettings() != null && c.getNetworkSettings().getNetworks() != null) {
                 c.getNetworkSettings()
                         .getNetworks()
-                        .values()
-                        .forEach(n -> inUse.add(n.getNetworkID()));
+                        .forEach(
+                                (netName, n) -> {
+                                    // Stopped containers may not report the ID; match the name.
+                                    inUse.add(netName);
+                                    if (n.getNetworkID() != null) inUse.add(n.getNetworkID());
+                                });
             }
         }
         List<Network> result = new ArrayList<>();
@@ -293,7 +286,12 @@ public class CleanupService {
             if (isManaged(n.getName())) continue;
             if ("swarm".equals(n.getScope())) continue;
             if (n.getName().equals("ingress") || n.getName().equals("docker_gwbridge")) continue;
-            if (!inUse.contains(n.getId())) result.add(n);
+            String project =
+                    n.getLabels() == null
+                            ? null
+                            : n.getLabels().get(ContainerSpecService.COMPOSE_PROJECT_LABEL);
+            if (guard.keepProject(project)) continue;
+            if (!inUse.contains(n.getId()) && !inUse.contains(n.getName())) result.add(n);
         }
         return result;
     }

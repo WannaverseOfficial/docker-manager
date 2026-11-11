@@ -95,17 +95,17 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       # Database, and the secrets generated on first start
       - docker_manager_data:/app/database
-      # Checked-out git repositories
-      - docker_manager_repos:/app/git-repos
-      # Compose stacks. Keep the same path on both sides (see below)
+      # Compose stacks and git checkouts. Keep the same path on both sides (see below)
       - /opt/docker-manager/stacks:/opt/docker-manager/stacks
+      - /opt/docker-manager/git-repos:/opt/docker-manager/git-repos
     environment:
       # The address you open Docker Manager at; used for webhook URLs and email links
       - BASE_URL=http://your-domain.com
+      # Optional: times in emails and logs (default UTC)
+      # - TZ=Europe/London
 
 volumes:
   docker_manager_data:
-  docker_manager_repos:
 ```
 
 The image already has a health check, so none is needed in the compose file.
@@ -127,11 +127,26 @@ in the data volume (`/app/database/.secrets.properties`). To manage them yoursel
 Never reuse the example secrets that older versions of this README showed: they are public. Docker Manager replaces
 public or weak JWT secrets with generated ones automatically.
 
-### Stacks folder
+### Stacks and git folders
 
-Each stack's `compose.yaml` and `.env` are stored in `STACKS_DIR` (default `/opt/docker-manager/stacks`). Docker
-resolves relative bind mounts in a compose file (like `./data:/data`) on the **host**, so mount that folder at the
-same path on the host and in the container, as in the example above.
+Each stack's `compose.yaml` and `.env` are stored in `STACKS_DIR` (default `/opt/docker-manager/stacks`), and git
+repositories are checked out to `GIT_CLONE_DIR` (default `/opt/docker-manager/git-repos`). Docker resolves relative
+bind mounts in a compose file (like `./data:/data`) on the **host**, so mount both folders at the same path on the
+host and in the container, as in the example above.
+
+Stacks you import keep running from their original folder, so their relative paths still point at the same data.
+
+### Behind a reverse proxy
+
+* Put Docker Manager behind HTTPS before exposing it to the internet, and consider publishing its port only to the
+  proxy (`127.0.0.1:8080:8080`).
+* The proxy must send `X-Forwarded-For` and `X-Forwarded-Proto`. They are trusted from private addresses (Docker
+  networks, LAN); for a proxy on a public address set `SERVER_TOMCAT_REMOTEIP_INTERNALPROXIES` to a regex matching it.
+  Otherwise every visitor appears to come from the proxy, which shares one sign-in rate limit.
+* Volume uploads can be up to 100 MB per file; raise the proxy's body size limit to match (nginx defaults to 1 MB:
+  `client_max_body_size 200m;`).
+* Remote Docker hosts are added as `tcp://host:2375`. That port gives full control of the host without a password,
+  so only reach it over a private network, VPN or SSH tunnel.
 
 ### Settings
 
@@ -139,6 +154,8 @@ same path on the host and in the container, as in the example above.
 | --- | --- | --- |
 | `BASE_URL` | `http://localhost:8080` | Public address, used for webhook URLs and email links |
 | `STACKS_DIR` | `/opt/docker-manager/stacks` | Where stack files are kept |
+| `GIT_CLONE_DIR` | `/opt/docker-manager/git-repos` | Where git repositories are checked out |
+| `TZ` | `UTC` | Time zone for emails and logs |
 | `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`, `ENCRYPTION_KEY` | generated | See Secrets |
 | `JWT_ACCESS_EXP`, `JWT_REFRESH_EXP` | 15 minutes, 7 days | Session lengths in milliseconds |
 | `CORS_ALLOWED_ORIGINS` | none | Only needed to run the UI from another origin during development |
@@ -146,13 +163,27 @@ same path on the host and in the container, as in the example above.
 
 ### Upgrading from 1.x
 
+* **Back up first:** copy the `docker_manager_data` volume. On its first start 2.0 also keeps a copy of the database
+  next to it (`data.db.before-2.0-migration`) before adapting its tables.
+* **`ENCRYPTION_KEY`:** registry passwords, git tokens and the SMTP password are encrypted with it.
+  * If your 1.x compose file had the example value from the old README, or no key at all, you can drop it: 2.0 still
+    reads credentials saved with those, and uses a strong generated key for anything saved from now on.
+  * If you set **your own** value, keep that exact line in the new compose file, or those credentials can't be read
+    and have to be entered again.
+* **Folders:** add the two `/opt/docker-manager/...` mounts from the example above. Without them stacks are kept
+  inside the container and relative paths in compose files point at empty folders.
 * Everyone signs in again once: sign-in tokens are now derived differently.
 * Compose deployments made with 1.x were never saved anywhere; they show up under **Stacks** as "not managed here".
-  Use **Import** on the stack page to manage them.
-* If you never set `ENCRYPTION_KEY`, existing stored credentials keep working; set a new key only together with
-  re-entering them.
+  Use **Find the compose file** on the stack page, or **Import all** on the Stacks page, to manage them. Importing
+  never restarts anything, and an imported stack deploys without removing services it doesn't know about.
 * Git repositories that deploy a Dockerfile now also run the built image. Check their container settings.
-* Creating and editing users, groups, git repositories and pipelines is now limited to administrators.
+* Creating and editing users, groups, git repositories, pipelines and compose files is now limited to administrators.
+
+### Docker Manager manages itself carefully
+
+Docker Manager won't stop, remove, replace or disconnect its own container, and won't deploy or stop its own compose
+project: compose runs inside it, so it would go offline halfway with nothing to bring it back. Update it on the
+server with `docker compose pull && docker compose up -d`.
 
 ## 🔐 Logging In
 Username: `admin`

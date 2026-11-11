@@ -15,9 +15,7 @@ import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
-import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -83,19 +81,15 @@ public class VolumeBrowserController {
         if (files.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Choose at least one file");
         }
-        Map<String, byte[]> content = new LinkedHashMap<>();
-        try {
-            for (MultipartFile f : files) {
-                String name = f.getOriginalFilename() == null ? "" : f.getOriginalFilename();
-                // Browsers may send a path for folder uploads; keep only the file name.
-                name = name.substring(Math.max(name.lastIndexOf('/'), name.lastIndexOf('\\')) + 1);
-                content.put(name, f.getBytes());
-            }
-        } catch (IOException e) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Couldn't read the upload");
+        List<VolumeBrowserService.Upload> uploads = new java.util.ArrayList<>();
+        for (MultipartFile f : files) {
+            String name = f.getOriginalFilename() == null ? "" : f.getOriginalFilename();
+            // Browsers may send a path for folder uploads; keep only the file name.
+            name = name.substring(Math.max(name.lastIndexOf('/'), name.lastIndexOf('\\')) + 1);
+            uploads.add(new VolumeBrowserService.Upload(name, f.getSize(), f::getInputStream));
         }
-        browser.upload(hostId, volume, path, content);
-        return Map.of("uploaded", content.size());
+        browser.upload(hostId, volume, path, uploads);
+        return Map.of("uploaded", uploads.size());
     }
 
     public record FolderRequest(String path, String name) {}

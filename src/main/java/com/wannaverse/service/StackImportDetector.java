@@ -153,8 +153,10 @@ public class StackImportDetector {
                 }
             }
             if (!missing.isEmpty()) {
+                // Left commented out: deploying refuses until they're set, rather than giving the
+                // containers blank values.
                 env.append("\n# Not found in the containers. Set these before deploying.\n");
-                for (String v : missing) env.append(v).append("=\n");
+                for (String v : missing) env.append("# ").append(v).append("=\n");
             }
             if (!rebuilt.isEmpty() || !missing.isEmpty()) {
                 envContent = env.toString();
@@ -285,10 +287,41 @@ public class StackImportDetector {
 
     // --- variables ---------------------------------------------------------------------------
 
+    /**
+     * The text compose interpolates: every value in the file (keys and comments are not
+     * interpolated). Falls back to the raw text when it isn't valid YAML.
+     */
+    static String interpolated(String compose) {
+        try {
+            org.yaml.snakeyaml.LoaderOptions options = new org.yaml.snakeyaml.LoaderOptions();
+            options.setAllowDuplicateKeys(false);
+            options.setMaxAliasesForCollections(50);
+            Object root =
+                    new org.yaml.snakeyaml.Yaml(
+                                    new org.yaml.snakeyaml.constructor.SafeConstructor(options))
+                            .load(compose);
+            StringBuilder sb = new StringBuilder();
+            collectValues(root, sb);
+            return sb.toString();
+        } catch (Exception e) {
+            return compose;
+        }
+    }
+
+    private static void collectValues(Object node, StringBuilder sb) {
+        if (node instanceof Map<?, ?> map) {
+            for (Object v : map.values()) collectValues(v, sb);
+        } else if (node instanceof Collection<?> list) {
+            for (Object v : list) collectValues(v, sb);
+        } else if (node != null) {
+            sb.append(node).append('\n');
+        }
+    }
+
     /** Every variable the compose file refers to, in order of first use. */
     static Set<String> variables(String compose) {
         Set<String> vars = new LinkedHashSet<>();
-        Matcher m = VAR.matcher(compose);
+        Matcher m = VAR.matcher(interpolated(compose));
         while (m.find()) vars.add(m.group(1) != null ? m.group(1) : m.group(3));
         return vars;
     }
@@ -297,7 +330,7 @@ public class StackImportDetector {
     static Set<String> optionalVariables(String compose) {
         Set<String> withDefault = new HashSet<>();
         Set<String> without = new HashSet<>();
-        Matcher m = VAR.matcher(compose);
+        Matcher m = VAR.matcher(interpolated(compose));
         while (m.find()) {
             String name = m.group(1) != null ? m.group(1) : m.group(3);
             String op = m.group(2);

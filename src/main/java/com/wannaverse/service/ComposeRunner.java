@@ -29,6 +29,13 @@ public class ComposeRunner {
     private static final int MAX_LINES = 5_000;
     private static final int MAX_LINE_LENGTH = 4_000;
 
+    private final DockerRegistryService registryService;
+
+    public ComposeRunner(
+            @org.springframework.context.annotation.Lazy DockerRegistryService registryService) {
+        this.registryService = registryService;
+    }
+
     public record Result(int exitCode, List<String> output) {
         public boolean ok() {
             return exitCode == 0;
@@ -108,6 +115,62 @@ public class ComposeRunner {
         // Compose must never wait for input (an interactive prompt would hang the job forever).
         pb.redirectInput(ProcessBuilder.Redirect.from(nullDevice()));
 
+        Path dockerConfig = null;
+        try {
+            dockerConfig = writeRegistryLogins();
+            if (dockerConfig != null)
+                pb.environment().put("DOCKER_CONFIG", dockerConfig.toString());
+            return runProcess(pb, project, onLine);
+        } finally {
+            deleteQuietly(dockerConfig);
+        }
+    }
+
+    /**
+     * Compose reads registry logins from the Docker CLI's config.json, not from Docker Manager, so
+     * private images in a stack wouldn't pull. Writes the saved logins to a private temporary
+     * folder for this one run.
+     */
+    private Path writeRegistryLogins() {
+        String json;
+        try {
+            json = registryService == null ? null : registryService.dockerConfigJson();
+        } catch (Exception e) {
+            log.warn("Could not prepare registry logins for compose: {}", e.getMessage());
+            return null;
+        }
+        if (json == null) return null;
+        try {
+            Path dir;
+            Path file;
+            try {
+                var ownerOnly =
+                        java.nio.file.attribute.PosixFilePermissions.asFileAttribute(
+                                java.nio.file.attribute.PosixFilePermissions.fromString(
+                                        "rwx------"));
+                dir = java.nio.file.Files.createTempDirectory("dm-compose-", ownerOnly);
+            } catch (UnsupportedOperationException notPosix) {
+                dir = java.nio.file.Files.createTempDirectory("dm-compose-");
+            }
+            file = dir.resolve("config.json");
+            java.nio.file.Files.writeString(file, json, StandardCharsets.UTF_8);
+            return dir;
+        } catch (IOException e) {
+            log.warn("Could not write registry logins for compose: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    private static void deleteQuietly(Path dir) {
+        if (dir == null) return;
+        try (var files = java.nio.file.Files.list(dir)) {
+            for (Path f : files.toList()) java.nio.file.Files.deleteIfExists(f);
+            java.nio.file.Files.deleteIfExists(dir);
+        } catch (IOException ignored) {
+        }
+    }
+
+    private Result runProcess(ProcessBuilder pb, String project, Consumer<String> onLine) {
         List<String> output = Collections.synchronizedList(new ArrayList<>());
         Process process;
         try {

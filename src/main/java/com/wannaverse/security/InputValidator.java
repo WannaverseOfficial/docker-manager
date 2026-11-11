@@ -11,8 +11,6 @@ public final class InputValidator {
             Pattern.compile("^unix:///[a-zA-Z0-9/_.-]+\\.sock$");
     private static final Pattern DOCKER_HOST_TCP =
             Pattern.compile("^tcp://[a-zA-Z0-9.-]+(:[0-9]{1,5})?$");
-    private static final Pattern DOCKER_HOST_SSH =
-            Pattern.compile("^ssh://[a-zA-Z0-9._@-]+(:[0-9]{1,5})?(/.*)?$");
 
     private static final Pattern CONTAINER_NAME = Pattern.compile("^[a-zA-Z0-9][a-zA-Z0-9_.-]*$");
     private static final Pattern IMAGE_NAME =
@@ -95,9 +93,9 @@ public final class InputValidator {
         if (url == null || url.isBlank()) {
             return false;
         }
-        return DOCKER_HOST_UNIX.matcher(url).matches()
-                || DOCKER_HOST_TCP.matcher(url).matches()
-                || DOCKER_HOST_SSH.matcher(url).matches();
+        // ssh:// isn't supported by the Docker client library used here (only unix and tcp), so
+        // it is refused up front instead of failing on every request.
+        return DOCKER_HOST_UNIX.matcher(url).matches() || DOCKER_HOST_TCP.matcher(url).matches();
     }
 
     public static boolean isValidContainerName(String name) {

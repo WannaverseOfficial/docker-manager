@@ -401,6 +401,22 @@ public class NginxApplier {
 
     // --- self-healing ------------------------------------------------------------------------
 
+    /** True when the proxy is serving the config Docker Manager wrote. */
+    private boolean runsOurConfig(IngressConfig config) {
+        try {
+            return api(config)
+                    .exec(
+                            config.getNginxContainerId(),
+                            "grep",
+                            "-q",
+                            "Managed by Docker Manager",
+                            CONF)
+                    .ok();
+        } catch (Exception e) {
+            return true; // can't tell; don't keep re-applying
+        }
+    }
+
     @Scheduled(initialDelay = 30_000, fixedDelay = 60_000)
     public void reconcile() {
         for (IngressConfig config : configRepository.findAll()) {
@@ -414,6 +430,10 @@ public class NginxApplier {
                     log.info(
                             "Ingress proxy for host {} was missing and has been recreated",
                             config.getDockerHostId());
+                    apply(config);
+                } else if (config.getLastError() != null || !runsOurConfig(config)) {
+                    // A previous apply failed, or the proxy came back with nginx's stock config
+                    // (recreated by hand, restored from a backup...): try again until it's right.
                     apply(config);
                 }
             } catch (Exception e) {

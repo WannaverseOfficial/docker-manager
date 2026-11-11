@@ -39,7 +39,10 @@ public final class SecretsBootstrap {
     private static final String FILE_NAME = ".secrets.properties";
 
     /** application.yaml's old fallback, used by installs that never set ENCRYPTION_KEY. */
-    static final String LEGACY_DEFAULT_ENCRYPTION_KEY = "change-this-in-production-32chars";
+    public static final String LEGACY_DEFAULT_ENCRYPTION_KEY = "change-this-in-production-32chars";
+
+    /** The ENCRYPTION_KEY in the 1.x docker-compose.yml and README. */
+    public static final String PUBLISHED_ENCRYPTION_KEY = "bI4pEE+5oVq9gkWyy/plIsRvaZ8ghj54";
 
     private SecretsBootstrap() {}
 
@@ -108,15 +111,15 @@ public final class SecretsBootstrap {
         }
 
         if (!replaceable && Files.exists(dataDir().resolve("data.db"))) {
-            // An existing install that never set ENCRYPTION_KEY has been encrypting with the
-            // built-in default. Keep using it so stored credentials stay readable.
+            // An existing install without ENCRYPTION_KEY: 1.x encrypted with its built-in default
+            // or the key from its example compose file. Both are still read (EncryptionService),
+            // so a strong generated key can be used from now on for anything saved.
             warn(
                     envName
-                            + " is not set, so the old built-in default is still used to read"
-                            + " existing credentials. Set ENCRYPTION_KEY to a random value of 32+"
-                            + " characters only together with re-entering stored credentials.");
-            System.setProperty(property, LEGACY_DEFAULT_ENCRYPTION_KEY);
-            return false;
+                            + " is not set. Existing credentials saved by 1.x with its default key"
+                            + " are still readable; new ones use a generated key stored in the"
+                            + " data directory. If you set your own ENCRYPTION_KEY in 1.x, set"
+                            + " the same value again, or those credentials can't be read.");
         }
 
         String generated = random();

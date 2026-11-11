@@ -194,6 +194,8 @@ export interface StackSummary {
   lastError: string | null;
   configFiles: string | null;
   workingDir: string | null;
+  /** Docker Manager's own compose project. */
+  dockerManager?: boolean;
 }
 
 export interface StackDetail {
@@ -210,7 +212,7 @@ export interface Job {
   id: string;
   stack: string;
   action: string;
-  status: "running" | "success" | "failed";
+  status: "running" | "success" | "failed" | "unknown";
   startedAt: number;
   finishedAt: number | null;
   from: number;

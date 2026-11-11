@@ -44,7 +44,7 @@ RUN groupadd -f dockermanager \
     && (useradd -g dockermanager -s /usr/sbin/nologin -m dockermanager || true)
 
 WORKDIR /app
-RUN mkdir -p /app/database /app/git-repos /opt/docker-manager/stacks \
+RUN mkdir -p /app/database /opt/docker-manager/git-repos /opt/docker-manager/stacks \
     && chown -R dockermanager:dockermanager /app /opt/docker-manager
 
 COPY --from=builder /app/build/libs/*.jar app.jar
@@ -55,7 +55,7 @@ ENV JAVA_OPTS="-Xms128m -Xmx512m -XX:+UseSerialGC" \
     SERVER_PORT=8080 \
     SPRING_DATASOURCE_URL="jdbc:sqlite:/app/database/data.db?journal_mode=WAL&busy_timeout=30000&synchronous=NORMAL" \
     APP_DATA_DIR=/app/database \
-    GIT_CLONE_DIR=/app/git-repos \
+    GIT_CLONE_DIR=/opt/docker-manager/git-repos \
     STACKS_DIR=/opt/docker-manager/stacks
 
 EXPOSE 8080

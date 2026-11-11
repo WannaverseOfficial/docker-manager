@@ -198,7 +198,13 @@ public class DockerAPI {
     }
 
     public void forceRemoveContainer(String containerId) {
-        dockerClient.removeContainerCmd(containerId).withForce(true).withRemoveVolumes(true).exec();
+        // Force stops it first. Volumes are kept, anonymous ones included: they often hold the
+        // app's data, and the UI promises that removing a container keeps its data.
+        dockerClient
+                .removeContainerCmd(containerId)
+                .withForce(true)
+                .withRemoveVolumes(false)
+                .exec();
     }
 
     public void renameContainer(String containerId, String newName) {

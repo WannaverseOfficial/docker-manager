@@ -95,9 +95,18 @@ export function useStackJob(hostId: string | null, onDone?: (job: Job) => void) 
       if (timer.current) clearTimeout(timer.current);
       setLines([]);
       let next = 0;
+      let failures = 0;
+      // A proxy hiccup or a token refresh shouldn't leave the page stuck on "running" with every
+      // button disabled: keep trying for a while, then let go and say so.
+      const giveUp = (why: string) => {
+        setLines((l) => [...l, why]);
+        setJob((j) => (j ? { ...j, status: "unknown" } : j));
+        doneRef.current?.({ id: jobId, status: "unknown" } as Job);
+      };
       const tick = async () => {
         try {
           const j = await api.get<Job>(`/api/docker/hosts/${hostId}/stacks/jobs/${jobId}?from=${next}`);
+          failures = 0;
           next = j.next;
           setJob(j);
           if (j.lines.length) setLines((l) => [...l, ...j.lines]);
@@ -105,7 +114,17 @@ export function useStackJob(hostId: string | null, onDone?: (job: Job) => void) 
             doneRef.current?.(j);
             return;
           }
-        } catch {
+        } catch (e) {
+          failures++;
+          if ((e as { status?: number }).status === 404) {
+            giveUp("Docker Manager no longer knows this action (it may have restarted). Check the stack's state below.");
+            return;
+          }
+          if (failures >= 12) {
+            giveUp("Lost contact while this was running. It may still finish on the server; check the stack's state below.");
+            return;
+          }
+          timer.current = setTimeout(tick, Math.min(800 * 2 ** failures, 10_000));
           return;
         }
         timer.current = setTimeout(tick, 800);

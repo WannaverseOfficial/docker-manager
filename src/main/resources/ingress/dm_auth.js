@@ -100,8 +100,11 @@ function challenge(r) {
 }
 
 function safeNext(next) {
-    if (typeof next !== 'string' || next[0] !== '/' || next[1] === '/' || next[1] === '\\') return '/';
-    return next.length > 2000 ? '/' : next;
+    if (typeof next !== 'string' || next.length > 2000 || next[0] !== '/') return '/';
+    // Browsers drop tabs and newlines and treat \ as /, so "/\t/evil.com" or "/\evil.com" would
+    // become "//evil.com", another site. Only plain same-site paths are allowed.
+    if (/[\x00-\x1f\x7f\\]/.test(next) || next[1] === '/') return '/';
+    return next;
 }
 
 function escapeHtml(s) {

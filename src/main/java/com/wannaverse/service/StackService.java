@@ -62,6 +62,7 @@ public class StackService {
     private final Map<String, Job> jobs = new ConcurrentHashMap<>();
     private final Set<String> busy = ConcurrentHashMap.newKeySet();
     private final StackImportDetector detector;
+    private final SelfContainer self;
 
     public StackService(
             StackRepository stackRepository,
@@ -72,6 +73,7 @@ public class StackService {
             ComposeInspector inspector,
             ImagePolicyService imagePolicyService,
             StackImportDetector detector,
+            SelfContainer self,
             @Qualifier("deploymentExecutor") Executor executor,
             @Value("${app.stacks-dir:stacks}") String stacksDir) {
         this.stackRepository = stackRepository;
@@ -82,6 +84,7 @@ public class StackService {
         this.inspector = inspector;
         this.imagePolicyService = imagePolicyService;
         this.detector = detector;
+        this.self = self;
         this.executor = executor;
         this.stacksDir = Path.of(stacksDir).toAbsolutePath();
     }
@@ -110,7 +113,9 @@ public class StackService {
             long updatedAt,
             String lastError,
             String configFiles,
-            String workingDir) {}
+            String workingDir,
+            /** Docker Manager's own project: its actions would stop Docker Manager. */
+            boolean dockerManager) {}
 
     public record StackDetail(
             StackSummary summary,
@@ -391,6 +396,7 @@ public class StackService {
     /** Starts an action in the background; follow it with {@link #job(String)}. */
     public Job start(String hostId, String name, Action action, String username) {
         String hostUrl = requireHost(hostId).getDockerHostUrl();
+        protectOwnProject(hostId, name);
         Optional<Stack> managed = stackRepository.findByDockerHostIdAndName(hostId, name);
 
         if (managed.isEmpty()
@@ -412,6 +418,63 @@ public class StackService {
 
         String key = claim(hostId, name);
         return launch(key, hostId, hostUrl, name, action, username);
+    }
+
+    /**
+     * Docker Manager's own compose project can't be run from Docker Manager: compose runs inside
+     * the container it would stop or replace, so it would go down with nothing to bring it back.
+     */
+    private void protectOwnProject(String hostId, String name) {
+        if (self.shortId() == null) return;
+        List<Container> own = groupByProject(containers(hostId)).getOrDefault(name, List.of());
+        if (own.stream().anyMatch(c -> self.is(c.getId()))) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "This stack runs Docker Manager itself, so it can't deploy, stop or restart it"
+                            + " (it would go offline mid-way). Update it on the server with"
+                            + " docker compose pull && docker compose up -d.");
+        }
+    }
+
+    /**
+     * Arguments for deploying. Imported stacks keep what compose did before: no --remove-orphans
+     * (services from other compose files or --profile runs would otherwise be removed) and no
+     * --build (their build folder may not be readable here; the image they run already exists).
+     */
+    static List<String> upArgs(Stack stack) {
+        if (stack != null && stack.getSource() == Stack.Source.IMPORTED) {
+            return List.of("up", "-d");
+        }
+        return List.of("up", "-d", "--remove-orphans", "--build");
+    }
+
+    /**
+     * Variables the compose file uses (without a default) that neither the stack's .env nor the
+     * environment compose runs in sets. Compose would give them blank values.
+     */
+    static List<String> unsetVariables(Stack stack) {
+        if (stack == null || stack.getComposeContent() == null) return List.of();
+        if (stack.getSource() == Stack.Source.GIT) return List.of(); // .env lives in the repo
+        Set<String> set = new HashSet<>();
+        String env = stack.getEnvContent();
+        if (env != null) {
+            for (String line : env.split("\\R")) {
+                String l = line.strip();
+                if (l.isEmpty() || l.startsWith("#")) continue;
+                if (l.startsWith("export ")) l = l.substring(7).strip();
+                int eq = l.indexOf('=');
+                if (eq > 0) set.add(l.substring(0, eq).strip());
+            }
+        }
+        String compose = stack.getComposeContent();
+        Set<String> optional = StackImportDetector.optionalVariables(compose);
+        List<String> unset = new ArrayList<>();
+        for (String v : StackImportDetector.variables(compose)) {
+            if (!set.contains(v) && !optional.contains(v) && System.getenv(v) == null) {
+                unset.add(v);
+            }
+        }
+        return unset;
     }
 
     /** One action per stack at a time: claimed here, released when the action ends. */
@@ -491,6 +554,20 @@ public class StackService {
         ComposeRunner.Result result;
         switch (action) {
             case DEPLOY, PULL_AND_DEPLOY -> {
+                List<String> unset = unsetVariables(stack);
+                if (!unset.isEmpty()) {
+                    job.line(
+                            "Not deploying: "
+                                    + String.join(", ", unset)
+                                    + (unset.size() == 1 ? " is" : " are")
+                                    + " used in the compose file but not set in .env. The"
+                                    + " containers would get blank values. Set "
+                                    + (unset.size() == 1 ? "it" : "them")
+                                    + " (an empty value like NAME= is fine if that's intended) and"
+                                    + " deploy again.");
+                    job.finish(false);
+                    return;
+                }
                 if (action == Action.PULL_AND_DEPLOY) {
                     job.line("Pulling images...");
                     var pull =
@@ -517,7 +594,7 @@ public class StackService {
                                 envFile,
                                 name,
                                 projectDir,
-                                List.of("up", "-d", "--remove-orphans", "--build"),
+                                upArgs(stack),
                                 out);
                 recordVersion(hostId, stack, result, username, null);
             }
@@ -572,7 +649,7 @@ public class StackService {
                         runner.run(hostUrl, dir, composeFile, envFile, name, projectDir, args, out);
                 if (result.ok() && stack != null) {
                     stackRepository.delete(stack);
-                    if (stack.getSource() != Stack.Source.GIT) deleteDir(dir(hostId, name));
+                    if (stack.getSource() != Stack.Source.GIT) removeStackFiles(dir(hostId, name));
                     job.line("Stack removed");
                 }
             }
@@ -619,6 +696,7 @@ public class StackService {
         }
         check(old.getComposeContent(), isAdmin);
         String hostUrl = requireHost(hostId).getDockerHostUrl();
+        protectOwnProject(hostId, name);
         String key = claim(hostId, name);
         try {
             stack.setComposeContent(old.getComposeContent());
@@ -668,6 +746,7 @@ public class StackService {
                             + "' is already running on this host. Rename the repository or remove"
                             + " that project first.");
         }
+        protectOwnProject(hostId, name);
         String key = key(hostId, name);
         if (!busy.add(key)) {
             throw new IllegalStateException("Another action is already running for this stack");
@@ -905,14 +984,19 @@ public class StackService {
         }
     }
 
-    private static void deleteDir(Path dir) {
+    /**
+     * Removes the files Docker Manager wrote for a stack. Anything else in the folder (./data bind
+     * mounts, uploads...) is the app's data and stays, as the "remove stack" dialog promises.
+     */
+    private static void removeStackFiles(Path dir) {
         try {
-            if (!Files.exists(dir)) return;
-            try (var walk = Files.walk(dir)) {
-                walk.sorted(Comparator.reverseOrder()).forEach(p -> p.toFile().delete());
+            Files.deleteIfExists(dir.resolve(COMPOSE_FILE));
+            Files.deleteIfExists(dir.resolve(ENV_FILE));
+            try (var left = Files.list(dir)) {
+                if (left.findAny().isEmpty()) Files.deleteIfExists(dir);
             }
         } catch (IOException e) {
-            log.warn("Could not delete {}: {}", dir, e.getMessage());
+            log.warn("Could not remove the stack files in {}: {}", dir, e.getMessage());
         }
     }
 
@@ -939,10 +1023,11 @@ public class StackService {
                 s.getUpdatedAt(),
                 s.getLastError(),
                 null,
-                null);
+                null,
+                containers.stream().anyMatch(c -> self.is(c.getId())));
     }
 
-    private static StackSummary external(String name, List<Container> containers) {
+    private StackSummary external(String name, List<Container> containers) {
         int running = (int) containers.stream().filter(c -> "running".equals(c.getState())).count();
         List<String> services =
                 containers.stream()
@@ -976,7 +1061,8 @@ public class StackService {
                 0,
                 null,
                 configFiles,
-                workingDir);
+                workingDir,
+                containers.stream().anyMatch(c -> self.is(c.getId())));
     }
 
     private List<Container> containers(String hostId) {

@@ -61,6 +61,7 @@ public class BuildService {
     private final NotificationService notificationService;
     private final StackService stackService;
     private final ContainerSpecService specService;
+    private final SelfContainer selfContainer;
 
     private final Map<String, Set<SseEmitter>> jobEmitters = new ConcurrentHashMap<>();
     private final Map<String, ReentrantLock> repoLocks = new ConcurrentHashMap<>();
@@ -73,7 +74,9 @@ public class BuildService {
             GitRepositoryRepository gitRepoRepository,
             NotificationService notificationService,
             StackService stackService,
-            ContainerSpecService specService) {
+            ContainerSpecService specService,
+            SelfContainer selfContainer) {
+        this.selfContainer = selfContainer;
         this.gitService = gitService;
         this.dockerService = dockerService;
         this.jobRepository = jobRepository;
@@ -287,8 +290,44 @@ public class BuildService {
                                                 && Arrays.asList(c.getNames()).contains("/" + name))
                         .findFirst();
         if (existing.isPresent()) {
+            Container old = existing.get();
+            selfContainer.protect(old.getId(), "replace");
+            String owner =
+                    old.getLabels() == null
+                            ? null
+                            : old.getLabels().get("com.wannaverse.git-repository");
+            // Containers deployed by 1.x have no label, but run this repository's image.
+            String oldImage = old.getImage() == null ? "" : old.getImage();
+            boolean ourImage = owner == null && oldImage.startsWith(imageName(repo) + ":");
+            if (!repo.getId().equals(owner) && !ourImage) {
+                throw new IllegalStateException(
+                        "A container named "
+                                + name
+                                + " already exists and wasn't created by this repository. Rename"
+                                + " it, or set another container name for the repository.");
+            }
+            // Keep every volume the running container has, including anonymous ones the image
+            // declares (a database's data folder), even when the saved settings don't list them.
+            List<String> volumes =
+                    new ArrayList<>(spec.getVolumes() == null ? List.of() : spec.getVolumes());
+            Set<String> targets = new HashSet<>();
+            for (String v : volumes) {
+                String[] parts = v.split(":");
+                if (parts.length >= 2) targets.add(parts[1]);
+            }
+            var inspect = api.inspectContainer(old.getId());
+            if (inspect.getMounts() != null) {
+                for (var m : inspect.getMounts()) {
+                    String dest = m.getDestination() == null ? null : m.getDestination().getPath();
+                    if (m.getName() != null && dest != null && !targets.contains(dest)) {
+                        volumes.add(m.getName() + ":" + dest);
+                        targets.add(dest);
+                    }
+                }
+            }
+            spec.setVolumes(volumes);
             jobLog.line("Replacing container " + name + " with the new image");
-            String id = specService.recreate(api, existing.get().getId(), spec, false, true);
+            String id = specService.recreate(api, old.getId(), spec, false, true);
             jobLog.line("Container " + name + " is running (" + id.substring(0, 12) + ")");
         } else {
             jobLog.line("Starting container " + name);

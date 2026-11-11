@@ -132,8 +132,8 @@ function AddHost({ open, onClose, onAdded }: { open: boolean; onClose: () => voi
           label="Address"
           hint={
             <>
-              <code className="font-mono">unix:///var/run/docker.sock</code> for this machine, <code className="font-mono">ssh://user@server</code> for another one over SSH,
-              or <code className="font-mono">tcp://server:2376</code>. Only expose Docker over TCP with TLS on a trusted network.
+              <code className="font-mono">unix:///var/run/docker.sock</code> for this machine, or <code className="font-mono">tcp://server:2375</code> for another one. Docker&apos;s TCP
+              port gives full control of that server and has no password, so only open it on a private network or through a VPN or SSH tunnel.
             </>
           }
         >

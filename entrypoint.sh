@@ -2,7 +2,7 @@
 set -e
 
 # Volumes mounted from the host may be owned by root; the app runs as an unprivileged user.
-for dir in /app/database /app/git-repos "${STACKS_DIR:-/opt/docker-manager/stacks}"; do
+for dir in /app/database "${GIT_CLONE_DIR:-/opt/docker-manager/git-repos}" "${STACKS_DIR:-/opt/docker-manager/stacks}"; do
   mkdir -p "$dir"
   chown dockermanager:dockermanager "$dir" 2>/dev/null || true
 done

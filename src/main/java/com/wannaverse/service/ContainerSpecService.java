@@ -92,6 +92,15 @@ public class ContainerSpecService {
         }
 
         if (!isAdmin) {
+            // Docker Manager's own labels hide containers or mark them as its helpers, and compose
+            // labels would make a container pass for part of someone else's stack.
+            for (String label :
+                    spec.getLabels() == null ? Set.<String>of() : spec.getLabels().keySet()) {
+                if (label.startsWith("com.wannaverse.")
+                        || label.startsWith("com.docker.compose.")) {
+                    throw forbidden("Only administrators can set the label " + label);
+                }
+            }
             if (spec.isPrivileged()) {
                 throw forbidden("Only administrators can create privileged containers");
             }
@@ -115,6 +124,32 @@ public class ContainerSpecService {
                             "Only administrators can mount folders from the host. Use a named"
                                     + " volume instead.");
                 }
+            }
+        }
+    }
+
+    /**
+     * Named volumes a non-admin may not mount: Docker Manager's own (its database and secrets) and
+     * pipeline workspaces. Mounting them in a container of your own would expose everything.
+     */
+    public void checkVolumesForNonAdmin(DockerAPI api, ContainerSpec spec, String selfId) {
+        Set<String> protectedVolumes = new HashSet<>();
+        if (selfId != null) {
+            try {
+                var self = api.inspectContainer(selfId);
+                if (self.getMounts() != null) {
+                    for (var m : self.getMounts()) {
+                        if (m.getName() != null) protectedVolumes.add(m.getName());
+                    }
+                }
+            } catch (Exception ignored) {
+                // Docker Manager doesn't run on this host
+            }
+        }
+        for (String v : nullSafe(spec.getVolumes())) {
+            String source = v.split(":", 2)[0];
+            if (protectedVolumes.contains(source) || source.startsWith("dm-pipeline-")) {
+                throw forbidden("Only administrators can mount the volume " + source);
             }
         }
     }
@@ -195,6 +230,15 @@ public class ContainerSpecService {
         if (base != null && base.getConfig() != null) {
             ContainerConfig old = base.getConfig();
             if (old.getHealthcheck() != null) cmd.withHealthcheck(old.getHealthcheck());
+            // A hostname someone chose (not the container ID Docker picks): some apps, such as
+            // RabbitMQ, keep their data in a folder named after it.
+            String hostname = old.getHostName();
+            if (hostname != null
+                    && !hostname.isBlank()
+                    && base.getId() != null
+                    && !base.getId().startsWith(hostname)) {
+                cmd.withHostName(hostname);
+            }
             if (old.getTty() != null) cmd.withTty(old.getTty());
             if (old.getStdinOpen() != null) cmd.withStdinOpen(old.getStdinOpen());
             if (old.getVolumes() != null && !old.getVolumes().isEmpty()) {
@@ -255,6 +299,18 @@ public class ContainerSpecService {
         } else if (base == null) {
             hostConfig.withNetworkMode("bridge");
         }
+        // Aliases and a fixed address on the first network (the others are connected after).
+        String primary = networks.isEmpty() ? hostConfig.getNetworkMode() : networks.get(0);
+        ContainerNetwork before = previousNetwork(base, primary);
+        if (before != null) {
+            List<String> aliases = userAliases(before, base);
+            if (!aliases.isEmpty()) cmd.withAliases(aliases);
+            if (before.getIpamConfig() != null
+                    && before.getIpamConfig().getIpv4Address() != null
+                    && !before.getIpamConfig().getIpv4Address().isBlank()) {
+                cmd.withIpv4Address(before.getIpamConfig().getIpv4Address());
+            }
+        }
 
         cmd.withHostConfig(hostConfig);
         return cmd.exec().getId();
@@ -273,11 +329,36 @@ public class ContainerSpecService {
                             .withNetworkId(network)
                             .withContainerId(containerId);
             ContainerNetwork old = previous.get(network);
-            if (old != null && old.getAliases() != null && !old.getAliases().isEmpty()) {
-                connect.withContainerNetwork(new ContainerNetwork().withAliases(old.getAliases()));
+            if (old != null) {
+                ContainerNetwork settings = new ContainerNetwork();
+                List<String> aliases = old.getAliases() == null ? List.of() : old.getAliases();
+                if (!aliases.isEmpty()) settings.withAliases(aliases);
+                if (old.getIpamConfig() != null && old.getIpamConfig().getIpv4Address() != null) {
+                    settings.withIpamConfig(
+                            new ContainerNetwork.Ipam()
+                                    .withIpv4Address(old.getIpamConfig().getIpv4Address()));
+                }
+                connect.withContainerNetwork(settings);
             }
             connect.exec();
         }
+    }
+
+    /** The old container's settings on a network, if it was on it. */
+    private static ContainerNetwork previousNetwork(InspectContainerResponse base, String network) {
+        if (base == null || network == null || base.getNetworkSettings() == null) return null;
+        Map<String, ContainerNetwork> nets = base.getNetworkSettings().getNetworks();
+        return nets == null ? null : nets.get(network);
+    }
+
+    /** Aliases someone set, without the container ID Docker adds on its own. */
+    private static List<String> userAliases(ContainerNetwork net, InspectContainerResponse base) {
+        if (net.getAliases() == null) return List.of();
+        String shortId =
+                base.getId() == null
+                        ? ""
+                        : base.getId().substring(0, Math.min(12, base.getId().length()));
+        return net.getAliases().stream().filter(a -> !a.equals(shortId)).toList();
     }
 
     // --- read --------------------------------------------------------------------------------
@@ -452,6 +533,16 @@ public class ContainerSpecService {
                             + "'. Edit the stack's compose file instead.");
         }
 
+        // Stopping a --rm container deletes it, so it could never be put back if creating the new
+        // one failed.
+        if (old.getHostConfig() != null
+                && Boolean.TRUE.equals(old.getHostConfig().getAutoRemove())) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "This container was started with --rm, so it is deleted as soon as it stops"
+                            + " and can't be safely replaced. Create a new container instead.");
+        }
+
         String image = spec.getImage().trim();
         ensureImage(api, image, pull);
 
@@ -525,7 +616,7 @@ public class ContainerSpecService {
     }
 
     /** Carried-over settings that reach outside the container's own sandbox. */
-    static List<String> hostLevelSettings(InspectContainerResponse inspect) {
+    public static List<String> hostLevelSettings(InspectContainerResponse inspect) {
         List<String> found = new ArrayList<>();
         HostConfig h = inspect.getHostConfig();
         if (h == null) return found;

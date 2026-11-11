@@ -160,6 +160,28 @@ public class RollbackService {
         }
     }
 
+    /**
+     * After "Update image" the tag names the new image, so recreating from the tag would start the
+     * new version again. Point the tag back at the image the container ran before, if it's still
+     * there.
+     */
+    private static void pointTagAtPreviousImage(DockerAPI api, String imageId, String tag) {
+        if (imageId == null || tag == null || tag.contains("@") || tag.startsWith("sha256:"))
+            return;
+        try {
+            api.inspectImage(imageId);
+        } catch (Exception e) {
+            throw new IllegalStateException(
+                    "The image this container ran before has been deleted (perhaps by a cleanup),"
+                            + " so it can't be put back.");
+        }
+        int slash = tag.lastIndexOf('/');
+        int colon = tag.lastIndexOf(':');
+        String repository = colon > slash ? tag.substring(0, colon) : tag;
+        String version = colon > slash ? tag.substring(colon + 1) : "latest";
+        api.client().tagImageCmd(imageId, repository, version).withForce().exec();
+    }
+
     private String performRollback(
             DockerHost host, DockerOperation operation, StateSnapshot beforeSnapshot)
             throws Exception {
@@ -169,14 +191,13 @@ public class RollbackService {
 
         return switch (operation.getOperationType()) {
             case CONTAINER_DELETE -> recreateContainerFromSnapshot(api, beforeSnapshot);
-            case CONTAINER_UPDATE ->
-                    specService.recreate(
-                            api,
-                            operation.getResourceId(),
-                            specService.specFrom(inspectFrom(beforeSnapshot)),
-                            false,
-                            // Restores the container's own recorded settings.
-                            true);
+            case CONTAINER_UPDATE -> {
+                var before = inspectFrom(beforeSnapshot);
+                var spec = specService.specFrom(before);
+                pointTagAtPreviousImage(api, before.getImageId(), spec.getImage());
+                // Restores the container's own recorded settings.
+                yield specService.recreate(api, operation.getResourceId(), spec, false, true);
+            }
             case CONTAINER_STOP -> {
                 api.startContainer(operation.getResourceId());
                 yield operation.getResourceId();

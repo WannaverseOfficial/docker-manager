@@ -11,6 +11,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 @Service
@@ -81,7 +82,20 @@ public class DockerRegistryService {
 
         registry.setName(request.name());
         if (request.url() != null) {
-            registry.setUrl(normalizeUrl(request.url()));
+            String newUrl = normalizeUrl(request.url());
+            boolean moved =
+                    registry.getUrl() != null
+                            && !registryHost(registry.getUrl()).equals(registryHost(newUrl));
+            // Saved credentials were meant for the old address; sending them anywhere else (on the
+            // next pull or "Test") would hand them to whoever runs that server.
+            if (moved
+                    && (request.password() == null || request.password().isEmpty())
+                    && registry.getPassword() != null
+                    && !registry.getPassword().isEmpty()) {
+                throw new IllegalArgumentException(
+                        "Enter the password again when changing the registry's address");
+            }
+            registry.setUrl(newUrl);
         }
         registry.setEnabled(request.enabled());
 
@@ -156,6 +170,38 @@ public class DockerRegistryService {
         int at = s.lastIndexOf('@');
         if (at >= 0) s = s.substring(at + 1);
         return s.toLowerCase(java.util.Locale.ROOT);
+    }
+
+    /**
+     * A Docker CLI config.json with the logins of every enabled registry, for docker compose (which
+     * reads logins from there, not from Docker Manager). Null when there are none.
+     */
+    public String dockerConfigJson() {
+        Map<String, Object> auths = new java.util.LinkedHashMap<>();
+        for (DockerRegistry registry : registryRepository.findByEnabledTrue()) {
+            try {
+                AuthConfig auth = buildAuthConfig(registry);
+                if (auth.getUsername() == null || auth.getPassword() == null) continue;
+                String token =
+                        java.util.Base64.getEncoder()
+                                .encodeToString(
+                                        (auth.getUsername() + ":" + auth.getPassword())
+                                                .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                auths.put(auth.getRegistryAddress(), Map.of("auth", token));
+            } catch (Exception e) {
+                log.warn(
+                        "Skipping the login for registry {}: {}",
+                        registry.getName(),
+                        e.getMessage());
+            }
+        }
+        if (auths.isEmpty()) return null;
+        try {
+            return new com.fasterxml.jackson.databind.ObjectMapper()
+                    .writeValueAsString(Map.of("auths", auths));
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     public AuthConfig getAuthConfigForRegistry(String registryId) {

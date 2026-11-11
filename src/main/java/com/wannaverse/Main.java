@@ -15,6 +15,8 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 public class Main {
     public static void main(String[] args) {
         SecretsBootstrap.apply();
+        // Before Hibernate opens the database: old enum constraints would reject new values.
+        com.wannaverse.config.SqliteEnumCheckMigration.run();
         SpringApplication.run(Main.class, args);
     }
 }

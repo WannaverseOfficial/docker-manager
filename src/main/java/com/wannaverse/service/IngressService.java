@@ -398,6 +398,7 @@ public class IngressService {
             String hostId, ExposeAppRequest request, String userId, String username) {
         IngressConfig config = requireEnabled(hostId);
         IngressRoute route = toRoute(request, config, null);
+        requireHostnameOwner(config, route.getHostname(), null);
         if (routeRepository.existsByIngressConfigIdAndHostnameAndPathPrefix(
                 config.getId(), route.getHostname(), route.getPathPrefix())) {
             throw new ResponseStatusException(
@@ -469,6 +470,7 @@ public class IngressService {
 
         if (request != null) {
             IngressRoute updated = toRoute(request, config, route.getAuthConfig());
+            requireHostnameOwner(config, updated.getHostname(), route.getId());
             boolean moved =
                     !updated.getHostname().equals(route.getHostname())
                             || !updated.getPathPrefix().equals(route.getPathPrefix());
@@ -584,6 +586,26 @@ public class IngressService {
     // --- helpers -----------------------------------------------------------------------------
 
     /** Finds the target container by name; routes follow the name, so redeploys keep working. */
+    /**
+     * A hostname belongs to whoever made its first route. Others (unless admins) can't add a path
+     * to it: a longer path such as /api/auth/login would take that part of someone else's site.
+     */
+    private void requireHostnameOwner(IngressConfig config, String hostname, String exceptRouteId) {
+        var ctx = com.wannaverse.security.SecurityContextHolder.getContext();
+        if (ctx == null || ctx.isAdmin()) return;
+        for (IngressRoute other : routeRepository.findByIngressConfigId(config.getId())) {
+            if (other.getId().equals(exceptRouteId) || !other.getHostname().equals(hostname))
+                continue;
+            if (!ctx.getUserId().equals(other.getCreatedByUserId())) {
+                throw new ResponseStatusException(
+                        HttpStatus.FORBIDDEN,
+                        hostname
+                                + " already has routes made by someone else. Ask an"
+                                + " administrator.");
+            }
+        }
+    }
+
     private void resolveTarget(IngressConfig config, IngressRoute route) {
         String id = NginxApplier.findContainer(applier.api(config), route.getTargetContainerName());
         if (id == null) {

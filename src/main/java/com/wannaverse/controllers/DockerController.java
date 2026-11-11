@@ -25,6 +25,7 @@ import com.wannaverse.service.DriftDetectionService;
 import com.wannaverse.service.ImagePolicyService;
 import com.wannaverse.service.OperationTrackingService;
 import com.wannaverse.service.PermissionService;
+import com.wannaverse.service.SelfContainer;
 import com.wannaverse.service.StatsCalculator;
 import com.wannaverse.service.StatsService;
 import com.wannaverse.service.VolumeBrowserService;
@@ -48,6 +49,7 @@ public class DockerController {
     private final DriftDetectionService driftDetectionService;
     private final StatsService statsService;
     private final ContainerSpecService specService;
+    private final SelfContainer self;
 
     public DockerController(
             DockerService dockerService,
@@ -58,7 +60,9 @@ public class DockerController {
             DockerRegistryService registryService,
             DriftDetectionService driftDetectionService,
             StatsService statsService,
-            ContainerSpecService specService) {
+            ContainerSpecService specService,
+            SelfContainer self) {
+        this.self = self;
         this.statsService = statsService;
         this.specService = specService;
         this.dockerService = dockerService;
@@ -234,7 +238,9 @@ public class DockerController {
             resourceIdParam = "containerId")
     public ResponseEntity<InspectContainerResponse> inspectContainer(
             @PathVariable String hostId, @PathVariable String containerId) {
-        return ResponseEntity.ok(getDockerAPI(hostId).inspectContainer(containerId));
+        InspectContainerResponse inspect = getDockerAPI(hostId).inspectContainer(containerId);
+        selfIsAdminOnly(inspect.getId(), "inspect");
+        return ResponseEntity.ok(inspect);
     }
 
     @GetMapping("/hosts/{hostId}/containers/{containerId}/health")
@@ -263,7 +269,13 @@ public class DockerController {
             @PathVariable String containerId,
             @RequestParam(defaultValue = "500") int tail,
             @RequestParam(defaultValue = "false") boolean timestamps) {
-        String logs = getDockerAPI(hostId).getContainerLogs(containerId, tail, timestamps);
+        DockerAPI api = getDockerAPI(hostId);
+        // Its log shows the first admin's temporary password, among other things.
+        if (!isAdmin())
+            selfIsAdminOnly(api.inspectContainer(containerId).getId(), "read the logs of");
+        // A huge or negative ("all") tail would load the whole log into memory on every poll.
+        int lines = tail <= 0 || tail > 20_000 ? 20_000 : tail;
+        String logs = api.getContainerLogs(containerId, lines, timestamps);
         return ResponseEntity.ok(Map.of("logs", logs));
     }
 
@@ -309,6 +321,7 @@ public class DockerController {
             @PathVariable String hostId, @RequestBody ContainerSpec spec) {
         specService.validate(spec, isAdmin());
         DockerAPI dockerAPI = getDockerAPI(hostId);
+        if (!isAdmin()) specService.checkVolumesForNonAdmin(dockerAPI, spec, self.id());
 
         DockerOperation operation =
                 trackingService.beginOperation(
@@ -339,7 +352,9 @@ public class DockerController {
     public ResponseEntity<ContainerSpec> getContainerSpec(
             @PathVariable String hostId, @PathVariable String containerId) {
         DockerAPI api = getDockerAPI(hostId);
-        return ResponseEntity.ok(specService.specFrom(api, api.inspectContainer(containerId)));
+        InspectContainerResponse inspect = api.inspectContainer(containerId);
+        selfIsAdminOnly(inspect.getId(), "read the settings of");
+        return ResponseEntity.ok(specService.specFrom(api, inspect));
     }
 
     /**
@@ -358,7 +373,9 @@ public class DockerController {
             @PathVariable String containerId,
             @RequestBody ContainerSpec spec,
             @RequestParam(defaultValue = "false") boolean pull) {
+        protectSelf(hostId, containerId, "replace");
         specService.validate(spec, isAdmin());
+        if (!isAdmin()) specService.checkVolumesForNonAdmin(getDockerAPI(hostId), spec, self.id());
         return ResponseEntity.ok(
                 Map.of("id", recreateTracked(hostId, containerId, spec, pull, isAdmin())));
     }
@@ -376,6 +393,7 @@ public class DockerController {
             resourceIdParam = "containerId")
     public ResponseEntity<Map<String, String>> updateImage(
             @PathVariable String hostId, @PathVariable String containerId) {
+        protectSelf(hostId, containerId, "replace");
         DockerAPI api = getDockerAPI(hostId);
         // Without the old image's defaults, so the new image's own values (versions, paths)
         // are used.
@@ -407,6 +425,27 @@ public class DockerController {
             trackingService.completeOperation(operation, false, e.getMessage());
             throw e;
         }
+    }
+
+    /** Only admins may look inside Docker Manager's own container: it holds its secrets. */
+    private void selfIsAdminOnly(String containerId, String action) {
+        if (!isAdmin() && self.is(containerId)) {
+            throw new ResponseStatusException(
+                    HttpStatus.FORBIDDEN,
+                    "Only administrators can " + action + " Docker Manager's own container.");
+        }
+    }
+
+    /** Docker Manager must not stop, remove or replace its own container. */
+    private void protectSelf(String hostId, String containerRef, String action) {
+        if (self.shortId() == null) return;
+        String id;
+        try {
+            id = getDockerAPI(hostId).inspectContainer(containerRef).getId();
+        } catch (RuntimeException e) {
+            return; // the action itself reports a missing container
+        }
+        self.protect(id, action);
     }
 
     /** Short-lived containers Docker Manager runs for itself (browsing a volume, reading files). */
@@ -466,6 +505,7 @@ public class DockerController {
             @PathVariable String hostId,
             @PathVariable String containerId,
             @RequestParam(required = false) Integer timeout) {
+        protectSelf(hostId, containerId, "stop");
         DockerOperation operation =
                 trackingService.beginOperation(
                         hostId,
@@ -531,6 +571,7 @@ public class DockerController {
     @Auditable(resource = Resource.CONTAINERS, action = "pause", resourceIdParam = "containerId")
     public ResponseEntity<Void> pauseContainer(
             @PathVariable String hostId, @PathVariable String containerId) {
+        protectSelf(hostId, containerId, "pause");
         getDockerAPI(hostId).pauseContainer(containerId);
         return ResponseEntity.ok().build();
     }
@@ -559,6 +600,7 @@ public class DockerController {
             @PathVariable String hostId,
             @PathVariable String containerId,
             @RequestParam(required = false) String signal) {
+        protectSelf(hostId, containerId, "kill");
         DockerAPI api = getDockerAPI(hostId);
         if (signal != null) {
             api.killContainer(containerId, signal);
@@ -579,6 +621,7 @@ public class DockerController {
             @PathVariable String hostId,
             @PathVariable String containerId,
             @RequestParam(defaultValue = "false") boolean force) {
+        protectSelf(hostId, containerId, "remove");
         DockerOperation operation =
                 trackingService.beginOperation(
                         hostId,
@@ -614,6 +657,7 @@ public class DockerController {
             @PathVariable String hostId,
             @PathVariable String containerId,
             @RequestParam String newName) {
+        protectSelf(hostId, containerId, "rename");
         if (!InputValidator.isValidContainerName(newName)) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,
@@ -643,6 +687,20 @@ public class DockerController {
                     HttpStatus.BAD_REQUEST,
                     "Command not allowed. Dangerous commands and shell operators are blocked "
                             + "for security reasons.");
+        }
+        if (!isAdmin()) {
+            // A shell in Docker Manager, or in any container with host access (such as a mounted
+            // docker.sock), is a shell on the host. The command filter above can't prevent that.
+            InspectContainerResponse target = getDockerAPI(hostId).inspectContainer(containerId);
+            selfIsAdminOnly(target.getId(), "run commands in");
+            List<String> hostLevel = ContainerSpecService.hostLevelSettings(target);
+            if (!hostLevel.isEmpty()) {
+                throw new ResponseStatusException(
+                        HttpStatus.FORBIDDEN,
+                        "This container has host-level access ("
+                                + String.join(", ", hostLevel)
+                                + "), so only administrators can run commands in it.");
+            }
         }
 
         String output = getDockerAPI(hostId).execCommand(containerId, request.getCommand());
@@ -902,6 +960,8 @@ public class DockerController {
             @PathVariable String hostId,
             @PathVariable String networkId,
             @RequestParam String containerId) {
+        // Cut off from its network, Docker Manager's own UI would stop answering.
+        protectSelf(hostId, containerId, "disconnect");
         getDockerAPI(hostId).disconnectContainerFromNetwork(networkId, containerId);
         return ResponseEntity.ok().build();
     }

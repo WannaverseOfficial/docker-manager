@@ -135,6 +135,8 @@ function StackView() {
           </span>
         }
       >
+        {!s.dockerManager && (
+          <>
         {s.managed && !git && (
           <Button busy={job.running && job.job?.action === "DEPLOY"} disabled={job.running} onClick={() => action("DEPLOY")}>
             Deploy
@@ -164,7 +166,18 @@ function StackView() {
             s.managed && session?.admin && { label: "Remove stack and its volumes", danger: true, onClick: () => action("REMOVE_WITH_VOLUMES"), disabled: job.running },
           ]}
         />
+          </>
+        )}
       </PageHeader>
+
+      {s.dockerManager && (
+        <div className="mb-6">
+          <Notice title="This is Docker Manager itself">
+            Deploying, stopping or restarting it from here would take Docker Manager offline halfway through, so those actions are turned off. Update it on the server with{" "}
+            <code className="font-mono text-[13px]">docker compose pull && docker compose up -d</code>.
+          </Notice>
+        </div>
+      )}
 
       {s.lastError && !job.job && (
         <div className="mb-6">
@@ -181,7 +194,11 @@ function StackView() {
             <span className="flex items-center gap-2">
               {job.running && <span className="size-2 rounded-full bg-marigold animate-pulse" aria-hidden />}
               {ACTION_LABEL[job.job.action] ?? job.job.action}
-              {!job.running && <span className={job.job.status === "success" ? "text-ok" : "text-danger"}>{job.job.status === "success" ? "finished" : "failed"}</span>}
+              {!job.running && (
+                <span className={job.job.status === "success" ? "text-ok" : job.job.status === "unknown" ? "text-slate" : "text-danger"}>
+                  {job.job.status === "success" ? "finished" : job.job.status === "unknown" ? "status unknown" : "failed"}
+                </span>
+              )}
             </span>
           }
           action={

@@ -18,8 +18,6 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -171,8 +169,31 @@ public class VolumeBrowserService {
     // --- changing ----------------------------------------------------------------------------
 
     /** Writes files into a folder, owned by the folder's owner so the app can still use them. */
-    public void upload(String hostId, String volume, String dir, Map<String, byte[]> files) {
+    /** One file to upload: its name, its size, and a way to read it. */
+    public record Upload(String name, long size, IoSource source) {}
+
+    @FunctionalInterface
+    public interface IoSource {
+        InputStream open() throws IOException;
+    }
+
+    /**
+     * Writes files into a folder, owned by the folder's owner so the app can still use them. The
+     * upload is streamed through a temporary tar file, so large files don't need to fit in memory.
+     */
+    public void upload(String hostId, String volume, String dir, List<Upload> files) {
         String p = normalize(dir);
+        for (Upload f : files) {
+            String name = f.name();
+            if (name.isBlank()
+                    || name.contains("/")
+                    || name.contains("\\")
+                    || name.equals(".")
+                    || name.equals("..")) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST, "Invalid file name: " + name);
+            }
+        }
         String helper = helper(hostId, volume, true);
         var owner = api(hostId).exec(helper, "stat", "-c", "%u %g", "--", ROOT + p);
         if (!owner.ok())
@@ -181,39 +202,50 @@ public class VolumeBrowserService {
         int uid = (int) parseLong(ids[0]);
         int gid = ids.length > 1 ? (int) parseLong(ids[1]) : uid;
 
-        ByteArrayOutputStream buf = new ByteArrayOutputStream();
-        try (TarArchiveOutputStream tar = new TarArchiveOutputStream(buf)) {
-            tar.setLongFileMode(TarArchiveOutputStream.LONGFILE_POSIX);
-            for (var f : files.entrySet()) {
-                String name = f.getKey();
-                if (name.isBlank()
-                        || name.contains("/")
-                        || name.contains("\\")
-                        || name.equals(".")
-                        || name.equals("..")) {
-                    throw new ResponseStatusException(
-                            HttpStatus.BAD_REQUEST, "Invalid file name: " + name);
+        java.nio.file.Path tarFile = null;
+        try {
+            tarFile = java.nio.file.Files.createTempFile("dm-upload-", ".tar");
+            try (TarArchiveOutputStream tar =
+                    new TarArchiveOutputStream(
+                            new java.io.BufferedOutputStream(
+                                    java.nio.file.Files.newOutputStream(tarFile)))) {
+                tar.setLongFileMode(TarArchiveOutputStream.LONGFILE_POSIX);
+                tar.setBigNumberMode(TarArchiveOutputStream.BIGNUMBER_POSIX);
+                for (Upload f : files) {
+                    // Only file entries: no folder entries, which would reset the folder's owner.
+                    TarArchiveEntry e = new TarArchiveEntry(f.name());
+                    e.setSize(f.size());
+                    e.setMode(0100644);
+                    e.setUserId(uid);
+                    e.setGroupId(gid);
+                    e.setModTime(System.currentTimeMillis());
+                    tar.putArchiveEntry(e);
+                    try (InputStream in = f.source().open()) {
+                        in.transferTo(tar);
+                    }
+                    tar.closeArchiveEntry();
                 }
-                // Only file entries: no folder entries, which would reset the folder's owner.
-                TarArchiveEntry e = new TarArchiveEntry(name);
-                e.setSize(f.getValue().length);
-                e.setMode(0100644);
-                e.setUserId(uid);
-                e.setGroupId(gid);
-                e.setModTime(System.currentTimeMillis());
-                tar.putArchiveEntry(e);
-                tar.write(f.getValue());
-                tar.closeArchiveEntry();
+            }
+            try (InputStream in =
+                    new java.io.BufferedInputStream(java.nio.file.Files.newInputStream(tarFile))) {
+                api(hostId)
+                        .client()
+                        .copyArchiveToContainerCmd(helper)
+                        .withRemotePath(ROOT + p)
+                        .withTarInputStream(in)
+                        .exec();
             }
         } catch (IOException e) {
-            throw new IllegalStateException(e);
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_GATEWAY, "Couldn't upload: " + e.getMessage());
+        } finally {
+            if (tarFile != null) {
+                try {
+                    java.nio.file.Files.deleteIfExists(tarFile);
+                } catch (IOException ignored) {
+                }
+            }
         }
-        api(hostId)
-                .client()
-                .copyArchiveToContainerCmd(helper)
-                .withRemotePath(ROOT + p)
-                .withTarInputStream(new ByteArrayInputStream(buf.toByteArray()))
-                .exec();
     }
 
     public void createFolder(String hostId, String volume, String dir, String name) {
