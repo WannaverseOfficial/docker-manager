@@ -138,7 +138,13 @@ export default function StacksPage() {
                   {s.services.length > 6 && <Badge>+{s.services.length - 6}</Badge>}
                 </div>
                 <div className="text-[12.5px] text-slate mt-auto">
-                  {s.lastError ? <span className="text-danger line-clamp-1">Last deploy failed</span> : s.lastDeployedAt ? `Deployed ${ago(s.lastDeployedAt)}` : s.managed ? "Not deployed yet" : "Started outside Docker Manager"}
+                  {s.lastError ? <span className="text-danger line-clamp-1">Last deploy failed</span> : s.lastDeployedAt
+                      ? `Deployed ${ago(s.lastDeployedAt)}`
+                      : s.source === "IMPORTED"
+                        ? "Imported, not redeployed from here yet"
+                        : s.managed
+                          ? "Not deployed yet"
+                          : "Started outside Docker Manager"}
                 </div>
               </Link>
             );
