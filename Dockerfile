@@ -33,7 +33,9 @@ LABEL org.opencontainers.image.title="Docker Manager"
 LABEL org.opencontainers.image.description="A self-hosted web interface for managing Docker"
 LABEL org.opencontainers.image.source="https://github.com/WannaverseOfficial/docker-manager"
 
+# Upgrade first: the base image can lag behind Ubuntu's security updates.
 RUN apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
     && apt-get install -y --no-install-recommends curl tini gosu openssh-client ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 

@@ -104,6 +104,18 @@ const parse = <T,>(s: string | null | undefined): T | null => {
   }
 };
 
+/** Where in the image a finding is, in plain words (Trivy reports a target per package type or file). */
+function whereLabel(target?: string) {
+  const t = target ?? "";
+  if (/\((alpine|ubuntu|debian|centos|rocky|alma|redhat|amazon|oracle|suse|photon|wolfi|chainguard|distroless)/i.test(t)) return "System packages";
+  if (t === "Java") return "Java libraries";
+  if (t === "Node.js") return "Node.js packages";
+  if (t === "Python") return "Python packages";
+  if (!t) return "Image";
+  const file = t.split("/").pop() ?? t;
+  return file === "go.mod" || file === "go.sum" ? "Go modules" : `${file} (program)`;
+}
+
 const SCANNERS: Record<Kind, string> = { TRIVY: "Trivy", SCOUT: "Docker Scout", BENCH: "Docker Bench" };
 
 export default function SecurityPage() {
@@ -272,7 +284,12 @@ function Images({ hostId, scans, onStarted }: { hostId: string; scans: Scan[]; o
             const sum = parse<VulnSummary>(s.summaryJson);
             const users = (containers ?? []).filter((c) => c.Image === s.target);
             return (
-              <tr key={s.id}>
+              <tr
+                key={s.id}
+                onClick={s.status === "DONE" ? () => setOpen(s.id) : undefined}
+                className={s.status === "DONE" ? "cursor-pointer hover:bg-well/60 transition-colors" : ""}
+                title={s.status === "DONE" ? "Show the vulnerabilities" : undefined}
+              >
                 <td className="max-w-[320px]">
                   <div className="font-mono text-[13px] truncate">{s.target}</div>
                   {users.length > 0 && <div className="text-[12.5px] text-slate truncate">Used by {users.map((c) => c.Names[0]?.replace(/^\//, "")).join(", ")}</div>}
@@ -288,7 +305,7 @@ function Images({ hostId, scans, onStarted }: { hostId: string; scans: Scan[]; o
                 <td className="text-right">
                   {s.status === "DONE" && (
                     <Button tone="quiet" size="sm" onClick={() => setOpen(s.id)}>
-                      Report
+                      View details
                     </Button>
                   )}
                 </td>
@@ -310,6 +327,12 @@ function VulnReport({ id, containers, onClose }: { id: string; containers: Conta
   const sum = parse<VulnSummary>(scan?.summaryJson);
   const shown = findings.filter((f) => (severity === "ALL" || f.severity === severity) && (!fixableOnly || f.fixed));
   const users = containers.filter((c) => c.Image === scan?.target);
+  const own = /(^|\/)wannaverse\/docker-manager(:|@|$)/.test(scan?.target ?? "");
+  const where = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const f of findings) m.set(whereLabel(f.target), (m.get(whereLabel(f.target)) ?? 0) + 1);
+    return [...m.entries()].sort((a, b) => b[1] - a[1]);
+  }, [findings]);
 
   return (
     <Modal open wide onClose={onClose} title={scan ? `${scan.target}` : "Report"}>
@@ -327,7 +350,13 @@ function VulnReport({ id, containers, onClose }: { id: string; containers: Conta
               It gets no more security updates. Rebuild the image on a supported base image.
             </Notice>
           )}
-          {sum.total > 0 && (
+          {sum.total > 0 && own && (
+            <Notice title="How to fix">
+              These are inside Docker Manager itself (the libraries it is built with and its base system), not in anything you set up. They are fixed by updating Docker Manager: on the server, run{" "}
+              <span className="font-mono">docker compose pull &amp;&amp; docker compose up -d</span> in its folder once a newer version is out, then scan again.
+            </Notice>
+          )}
+          {sum.total > 0 && !own && (
             <Notice title="How to fix">
               {sum.fixable > 0 ? (
                 <>
@@ -351,6 +380,16 @@ function VulnReport({ id, containers, onClose }: { id: string; containers: Conta
                 "None of these have a fixed version yet. Check whether the image has a newer release, or a slimmer variant (alpine, distroless) with fewer packages."
               )}
             </Notice>
+          )}
+          {where.length > 1 && (
+            <div className="flex flex-wrap items-center gap-1.5 text-[13px]">
+              <span className="text-slate mr-1">Found in</span>
+              {where.map(([w, n]) => (
+                <Badge key={w}>
+                  {w}: {n}
+                </Badge>
+              ))}
+            </div>
           )}
           <div className="flex flex-wrap items-center justify-between gap-3">
             <Segmented
@@ -391,6 +430,7 @@ function VulnReport({ id, containers, onClose }: { id: string; containers: Conta
                       <td className="px-3 py-2 font-mono break-all">
                         {f.package}
                         {f.installed && <div className="text-slate">{f.installed}</div>}
+                        <div className="text-slate font-sans text-[12px] mt-0.5">{whereLabel(f.target)}</div>
                       </td>
                       <td className="px-3 py-2 font-mono break-all">{f.fixed || <span className="text-slate font-sans">Not yet</span>}</td>
                     </tr>
