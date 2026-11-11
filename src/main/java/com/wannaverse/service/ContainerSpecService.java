@@ -158,7 +158,7 @@ public class ContainerSpecService {
 
     public String create(DockerAPI api, ContainerSpec spec) {
         ensureImage(api, spec.getImage().trim(), false);
-        String id = createOnly(api.client(), spec, null, null);
+        String id = createOnly(api.client(), spec, null, null, null);
         connectExtraNetworks(api.client(), id, spec, Map.of());
         if (spec.isStart()) {
             api.startContainer(id);
@@ -175,7 +175,7 @@ public class ContainerSpecService {
                                 && inspect.getNetworkSettings().getNetworks() != null
                         ? inspect.getNetworkSettings().getNetworks()
                         : Map.of();
-        String id = createOnly(api.client(), spec, inspect, spec.getName());
+        String id = createOnly(api.client(), spec, inspect, spec.getName(), null);
         connectExtraNetworks(api.client(), id, spec, networks);
         api.startContainer(id);
         return id;
@@ -216,7 +216,8 @@ public class ContainerSpecService {
             DockerClient client,
             ContainerSpec spec,
             InspectContainerResponse base,
-            String nameOverride) {
+            String nameOverride,
+            java.util.function.Consumer<HostConfig> tweak) {
         CreateContainerCmd cmd = client.createContainerCmd(spec.getImage().trim());
 
         String name = nameOverride != null ? nameOverride : spec.getName();
@@ -290,7 +291,15 @@ public class ContainerSpecService {
                 nullSafe(spec.getCapAdd()).stream()
                         .map(c -> Capability.valueOf(c.toUpperCase(Locale.ROOT)))
                         .toArray(Capability[]::new));
-        hostConfig.withMemory(spec.getMemoryLimitMb() > 0 ? spec.getMemoryLimitMb() << 20 : 0L);
+        long memory = spec.getMemoryLimitMb() > 0 ? spec.getMemoryLimitMb() << 20 : 0L;
+        Long previousMemory = hostConfig.getMemory();
+        hostConfig.withMemory(memory);
+        if (previousMemory == null || previousMemory != memory) {
+            // The carried-over swap limit belongs to the old memory limit (Docker sets it to twice
+            // the memory); kept, Docker refuses a removed limit or a raised one. 0 lets Docker
+            // work it out again.
+            hostConfig.withMemorySwap(0L);
+        }
         hostConfig.withNanoCPUs(spec.getCpus() > 0 ? (long) (spec.getCpus() * 1e9) : 0L);
 
         List<String> networks = nullSafe(spec.getNetworks());
@@ -312,6 +321,7 @@ public class ContainerSpecService {
             }
         }
 
+        if (tweak != null) tweak.accept(hostConfig);
         cmd.withHostConfig(hostConfig);
         return cmd.exec().getId();
     }
@@ -502,6 +512,20 @@ public class ContainerSpecService {
      */
     public String recreate(
             DockerAPI api, String containerRef, ContainerSpec spec, boolean pull, boolean isAdmin) {
+        return recreate(api, containerRef, spec, pull, isAdmin, null);
+    }
+
+    /**
+     * Like {@link #recreate(DockerAPI, String, ContainerSpec, boolean, boolean)}, also changing
+     * settings the spec doesn't cover (security options, PID limit...) through {@code tweak}.
+     */
+    public String recreate(
+            DockerAPI api,
+            String containerRef,
+            ContainerSpec spec,
+            boolean pull,
+            boolean isAdmin,
+            java.util.function.Consumer<HostConfig> tweak) {
         DockerClient client = api.client();
         InspectContainerResponse old = api.inspectContainer(containerRef);
         // Work with the ID from here on: once the old container is renamed, its name belongs to
@@ -564,7 +588,7 @@ public class ContainerSpecService {
 
         String newId = null;
         try {
-            newId = createOnly(client, spec, old, name);
+            newId = createOnly(client, spec, old, name, tweak);
             connectExtraNetworks(client, newId, spec, oldNetworks);
             if (spec.isStart() || wasRunning) {
                 client.startContainerCmd(newId).exec();

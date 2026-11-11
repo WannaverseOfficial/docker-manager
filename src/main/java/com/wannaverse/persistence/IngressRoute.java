@@ -73,6 +73,12 @@ public class IngressRoute {
 
     private String createdByUsername;
 
+    /**
+     * No limit on request size and no buffering, for uploads of any size (a hosted Docker registry
+     * receives image layers of several GB). Null means the default limit.
+     */
+    private Boolean unlimitedUploads;
+
     public enum Protocol {
         HTTP,
         HTTPS

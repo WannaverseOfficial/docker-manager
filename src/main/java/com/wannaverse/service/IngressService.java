@@ -488,6 +488,9 @@ public class IngressService {
             route.setProtocol(updated.getProtocol());
             route.setTlsMode(updated.getTlsMode());
             route.setForceHttpsRedirect(updated.isForceHttpsRedirect());
+            if (updated.getUnlimitedUploads() != null) {
+                route.setUnlimitedUploads(updated.getUnlimitedUploads());
+            }
             route.setAuthEnabled(updated.isAuthEnabled());
             route.setAuthType(updated.getAuthType());
             // Keep the existing password when the form leaves it empty.
@@ -720,6 +723,7 @@ public class IngressService {
         route.setTlsMode(tls);
         route.setForceHttpsRedirect(
                 request.forceHttpsRedirect() && tls != IngressRoute.TlsMode.NONE);
+        route.setUnlimitedUploads(request.unlimitedUploads());
         route.setAuthEnabled(request.authEnabled());
         if (request.authEnabled()) {
             route.setAuthType(IngressRoute.AuthType.BASIC);
@@ -918,7 +922,9 @@ public class IngressService {
             String authConfig,
             boolean forceHttpsRedirect,
             /** Who may sign in. A blank password keeps that user's current one. */
-            List<AuthUser> authUsers) {}
+            List<AuthUser> authUsers,
+            /** No size limit or buffering for uploads (a hosted registry). Null keeps it as is. */
+            Boolean unlimitedUploads) {}
 
     public record AuthUser(String username, String password) {}
 

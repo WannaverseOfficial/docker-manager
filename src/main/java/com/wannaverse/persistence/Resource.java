@@ -25,5 +25,7 @@ public enum Resource {
     PIPELINES,
     PIPELINE_EXECUTIONS,
     DEPLOYMENT_ENVIRONMENTS,
-    STACKS
+    STACKS,
+    DATABASES,
+    SECURITY
 }

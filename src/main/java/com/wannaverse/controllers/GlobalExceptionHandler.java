@@ -103,7 +103,22 @@ public class GlobalExceptionHandler {
     }
 
     @ExceptionHandler(org.springframework.web.servlet.resource.NoResourceFoundException.class)
-    public ResponseEntity<Map<String, Object>> handleNoResource(Exception ex) {
+    public ResponseEntity<?> handleNoResource(
+            Exception ex, jakarta.servlet.http.HttpServletRequest request) {
+        // Pages that don't exist get the UI's "not found" page (with a real 404 status, so
+        // crawlers and monitors see it); API calls get JSON.
+        String path = request.getRequestURI();
+        String accept = request.getHeader("Accept");
+        if (!path.startsWith("/api/") && accept != null && accept.contains("text/html")) {
+            try (var in = getClass().getResourceAsStream("/static/404.html")) {
+                if (in != null) {
+                    return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                            .contentType(org.springframework.http.MediaType.TEXT_HTML)
+                            .body(in.readAllBytes());
+                }
+            } catch (java.io.IOException ignored) {
+            }
+        }
         return message(HttpStatus.NOT_FOUND, "Not found");
     }
 

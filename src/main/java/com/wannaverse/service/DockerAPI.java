@@ -288,6 +288,87 @@ public class DockerAPI {
         return new ExecResult(exit == null ? -1 : exit.intValue(), output.toString());
     }
 
+    /** Output of {@link #execFull}: stdout and stderr kept apart. */
+    public record ExecOutput(int exitCode, byte[] stdout, String stderr) {
+        public boolean ok() {
+            return exitCode == 0;
+        }
+
+        public String stdoutText() {
+            return new String(stdout, java.nio.charset.StandardCharsets.UTF_8);
+        }
+    }
+
+    /**
+     * Runs a command with extra environment variables (so secrets such as passwords never appear in
+     * the command line), keeping stdout and stderr apart. Output is decoded once at the end, so
+     * characters split across frames stay intact.
+     */
+    public ExecOutput execFull(
+            String containerId, Map<String, String> env, long timeoutSeconds, String... command) {
+        return execFull(containerId, env, timeoutSeconds, Integer.MAX_VALUE - 16, command);
+    }
+
+    /**
+     * Like {@link #execFull(String, Map, long, String...)}, keeping at most {@code maxStdout} bytes
+     * of stdout (the rest is read and dropped, so the command still finishes).
+     */
+    public ExecOutput execFull(
+            String containerId,
+            Map<String, String> env,
+            long timeoutSeconds,
+            int maxStdout,
+            String... command) {
+        var create =
+                dockerClient
+                        .execCreateCmd(containerId)
+                        .withAttachStdout(true)
+                        .withAttachStderr(true)
+                        .withCmd(command);
+        if (env != null && !env.isEmpty()) {
+            create.withEnv(
+                    env.entrySet().stream().map(e -> e.getKey() + "=" + e.getValue()).toList());
+        }
+        ExecCreateCmdResponse execCreate = create.exec();
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        java.io.ByteArrayOutputStream err = new java.io.ByteArrayOutputStream();
+        boolean finished;
+        try {
+            finished =
+                    dockerClient
+                            .execStartCmd(execCreate.getId())
+                            .exec(
+                                    new ResultCallback.Adapter<Frame>() {
+                                        @Override
+                                        public void onNext(Frame frame) {
+                                            byte[] p = frame.getPayload();
+                                            if (frame.getStreamType() == StreamType.STDERR) {
+                                                if (err.size() < 1_000_000) {
+                                                    err.write(p, 0, p.length);
+                                                }
+                                            } else {
+                                                int room = maxStdout - out.size();
+                                                if (room > 0) {
+                                                    out.write(p, 0, Math.min(room, p.length));
+                                                }
+                                            }
+                                        }
+                                    })
+                            .awaitCompletion(timeoutSeconds, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            finished = false;
+        }
+        if (!finished) {
+            return new ExecOutput(-1, out.toByteArray(), "Timed out after " + timeoutSeconds + "s");
+        }
+        Long exit = dockerClient.inspectExecCmd(execCreate.getId()).exec().getExitCodeLong();
+        return new ExecOutput(
+                exit == null ? -1 : exit.intValue(),
+                out.toByteArray(),
+                err.toString(java.nio.charset.StandardCharsets.UTF_8));
+    }
+
     /**
      * Writes files into a container (running or stopped) through the archive API, so contents never
      * pass through a shell command line. Keys are absolute paths inside the container. Missing
@@ -334,6 +415,83 @@ public class DockerAPI {
                 .withRemotePath("/")
                 .withTarInputStream(new java.io.ByteArrayInputStream(buffer.toByteArray()))
                 .exec();
+    }
+
+    /**
+     * Copies a local file into a container without holding it in memory (the tar stream is built on
+     * the fly). Parent directories must exist in the container.
+     */
+    public void putLargeFile(String containerId, String containerPath, java.nio.file.Path source) {
+        String rel = containerPath.replaceFirst("^/+", "");
+        try {
+            long size = java.nio.file.Files.size(source);
+            var in = new java.io.PipedInputStream(1 << 16);
+            var pipeOut = new java.io.PipedOutputStream(in);
+            Thread writer =
+                    Thread.ofVirtual()
+                            .start(
+                                    () -> {
+                                        try (var tar =
+                                                        new org.apache.commons.compress.archivers
+                                                                .tar.TarArchiveOutputStream(
+                                                                pipeOut);
+                                                var file =
+                                                        java.nio.file.Files.newInputStream(
+                                                                source)) {
+                                            tar.setLongFileMode(
+                                                    org.apache.commons.compress.archivers.tar
+                                                            .TarArchiveOutputStream.LONGFILE_POSIX);
+                                            tar.setBigNumberMode(
+                                                    org.apache.commons.compress.archivers.tar
+                                                            .TarArchiveOutputStream
+                                                            .BIGNUMBER_POSIX);
+                                            var entry =
+                                                    new org.apache.commons.compress.archivers.tar
+                                                            .TarArchiveEntry(rel);
+                                            entry.setSize(size);
+                                            entry.setMode(0100644);
+                                            tar.putArchiveEntry(entry);
+                                            file.transferTo(tar);
+                                            tar.closeArchiveEntry();
+                                            tar.finish();
+                                        } catch (IOException e) {
+                                            try {
+                                                pipeOut.close();
+                                            } catch (IOException ignored) {
+                                            }
+                                        }
+                                    });
+            try (in) {
+                dockerClient
+                        .copyArchiveToContainerCmd(containerId)
+                        .withRemotePath("/")
+                        .withTarInputStream(in)
+                        .exec();
+            }
+            writer.join(java.time.Duration.ofSeconds(30));
+        } catch (IOException e) {
+            throw new IllegalStateException("Could not copy the file: " + e.getMessage(), e);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Interrupted while copying the file", e);
+        }
+    }
+
+    /** Copies one file out of a container to a local path, streaming. Returns its size. */
+    public long getLargeFile(String containerId, String containerPath, java.nio.file.Path target) {
+        try (var raw = dockerClient.copyArchiveFromContainerCmd(containerId, containerPath).exec();
+                var tar =
+                        new org.apache.commons.compress.archivers.tar.TarArchiveInputStream(raw)) {
+            var entry = tar.getNextEntry();
+            while (entry != null && entry.isDirectory()) entry = tar.getNextEntry();
+            if (entry == null) throw new IllegalStateException(containerPath + " was empty");
+            java.nio.file.Files.copy(
+                    tar, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            return java.nio.file.Files.size(target);
+        } catch (IOException e) {
+            throw new IllegalStateException(
+                    "Could not copy " + containerPath + ": " + e.getMessage(), e);
+        }
     }
 
     public long pruneBuildCache() {

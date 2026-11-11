@@ -195,8 +195,31 @@ public class RollbackService {
                 var before = inspectFrom(beforeSnapshot);
                 var spec = specService.specFrom(before);
                 pointTagAtPreviousImage(api, before.getImageId(), spec.getImage());
-                // Restores the container's own recorded settings.
-                yield specService.recreate(api, operation.getResourceId(), spec, false, true);
+                // Restores the container's own recorded settings. The spec doesn't cover the
+                // hardening settings (security fixes change them), so those come from the snapshot
+                // too instead of being carried over from the current container.
+                var was = before.getHostConfig();
+                java.util.function.Consumer<com.github.dockerjava.api.model.HostConfig> restore =
+                        was == null
+                                ? null
+                                : hc -> {
+                                    hc.withSecurityOpts(was.getSecurityOpts());
+                                    hc.withPidsLimit(
+                                            was.getPidsLimit() == null ? 0L : was.getPidsLimit());
+                                    hc.withMemorySwap(
+                                            was.getMemorySwap() == null ? 0L : was.getMemorySwap());
+                                };
+                // Later changes replaced the container this operation recorded; then the current
+                // one of the same name is put back to how it was before this change.
+                String target = operation.getResourceId();
+                try {
+                    api.inspectContainer(target);
+                } catch (com.github.dockerjava.api.exception.NotFoundException gone) {
+                    if (operation.getResourceName() == null) throw gone;
+                    target = operation.getResourceName();
+                    api.inspectContainer(target);
+                }
+                yield specService.recreate(api, target, spec, false, true, restore);
             }
             case CONTAINER_STOP -> {
                 api.startContainer(operation.getResourceId());

@@ -188,6 +188,8 @@ export const api = {
   patch: <T>(path: string, body?: unknown) => request<T>("PATCH", path, body),
   del: <T>(path: string) => request<T>("DELETE", path),
   upload: async <T>(path: string, form: FormData) => (await (await authed("POST", path, form)).json()) as T,
+  /** Sends a file as the raw request body (no multipart), for files too large for a form upload. */
+  uploadFile: async <T>(path: string, file: Blob) => (await (await authed("POST", path, file)).json()) as T,
   download,
 };
 

@@ -9,6 +9,7 @@ import {
   Brush,
   ChevronsUpDown,
   Container as ContainerIcon,
+  Database,
   GitBranch,
   Globe,
   HardDrive,
@@ -24,6 +25,7 @@ import {
   Network,
   Server,
   Settings,
+  Shield,
   ShieldCheck,
   Sun,
   Users,
@@ -46,6 +48,7 @@ const NAV: { title: string; items: Item[] }[] = [
       { href: "/containers/", label: "Containers", icon: ContainerIcon },
       { href: "/stacks/", label: "Stacks", icon: Layers },
       { href: "/templates/", label: "Templates", icon: LayoutTemplate },
+      { href: "/databases/", label: "Databases", icon: Database, admin: true },
     ],
   },
   {
@@ -70,6 +73,7 @@ const NAV: { title: string; items: Item[] }[] = [
     title: "Watch",
     items: [
       { href: "/health/", label: "Health", icon: HeartPulse },
+      { href: "/security/", label: "Security", icon: Shield, admin: true },
       { href: "/activity/", label: "Activity", icon: Activity, admin: true },
     ],
   },

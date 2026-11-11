@@ -1,7 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { Badge, Button, Empty, Field, Menu, Modal, Notice, PageHeader, Select, Spinner, Toggle, inputClass, useConfirm, useToast } from "@/components/ui";
+import { useSession } from "@/components/app";
+import { HostedRegistry } from "@/components/HostedRegistry";
+import { Badge, Button, Empty, Field, Menu, Modal, Notice, PageHeader, Select, Spinner, Tabs, Toggle, inputClass, useConfirm, useToast } from "@/components/ui";
 import { api } from "@/lib/api";
 import { usePoll } from "@/lib/hooks";
 import type { Registry } from "@/lib/types";
@@ -15,15 +17,43 @@ const TYPES: Record<Registry["registryType"], { label: string; url: string; user
 };
 
 export default function RegistriesPage() {
+  const { session } = useSession();
+  const [tab, setTab] = useState<"signins" | "own">("signins");
+  return (
+    <>
+      <PageHeader
+        title="Registries"
+        intro={
+          tab === "signins"
+            ? "Sign-ins for private images. They are used automatically when an image comes from that registry, and only for it."
+            : "Host a private registry for your own images on this server."
+        }
+      />
+      {session?.admin && (
+        <Tabs
+          value={tab}
+          onChange={setTab}
+          tabs={[
+            { value: "signins", label: "Sign-ins" },
+            { value: "own", label: "Your own registry" },
+          ]}
+        />
+      )}
+      {tab === "signins" ? <SignIns /> : <HostedRegistry />}
+    </>
+  );
+}
+
+function SignIns() {
   const { data, error, refresh } = usePoll<Registry[]>("/api/registries");
   const [editing, setEditing] = useState<Registry | "new" | null>(null);
   const toast = useToast();
   const confirm = useConfirm();
   return (
     <>
-      <PageHeader title="Registries" intro="Sign-ins for private images. They are used automatically when an image comes from that registry, and only for it.">
+      <div className="flex justify-end mb-4">
         <Button onClick={() => setEditing("new")}>Add registry</Button>
-      </PageHeader>
+      </div>
       {error && <Notice tone="error">{error}</Notice>}
       {!data && !error && <Spinner />}
       {data && data.length === 0 && <Empty title="No registries">Public images need none. Add one to pull private images.</Empty>}

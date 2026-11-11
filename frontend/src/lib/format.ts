@@ -82,13 +82,14 @@ export function splitImage(ref: string): { repo: string; tag: string } {
   return { repo: ref, tag: "latest" };
 }
 
-/** Published ports as "8080 → 80/tcp", unique and sorted. */
+/** Published ports as "8080 → 80/tcp" (with the address when only one is used, like 127.0.0.1), unique and sorted. */
 export function portList(ports: Container["Ports"]): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
   for (const p of [...(ports ?? [])].sort((a, b) => (a.PublicPort ?? 0) - (b.PublicPort ?? 0))) {
     if (!p.PublicPort) continue;
-    const s = `${p.PublicPort} → ${p.PrivatePort}${p.Type === "tcp" ? "" : "/" + p.Type}`;
+    const ip = p.IP && p.IP !== "0.0.0.0" && p.IP !== "::" ? (p.IP.includes(":") ? `[${p.IP}]:` : `${p.IP}:`) : "";
+    const s = `${ip}${p.PublicPort} → ${p.PrivatePort}${p.Type === "tcp" ? "" : "/" + p.Type}`;
     if (!seen.has(s)) {
       seen.add(s);
       out.push(s);

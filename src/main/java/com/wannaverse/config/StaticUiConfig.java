@@ -52,7 +52,7 @@ public class StaticUiConfig implements WebMvcConfigurer {
                                 Resource direct = location.createRelative(path);
                                 if (path.isEmpty() || path.endsWith("/")) {
                                     Resource index = location.createRelative(path + "index.html");
-                                    return readable(index) ? index : notFound(location);
+                                    return readable(index) ? index : null;
                                 }
                                 if (readable(direct) && !path.endsWith("/")) {
                                     // A folder exists as a directory resource; prefer its index.
@@ -66,7 +66,9 @@ public class StaticUiConfig implements WebMvcConfigurer {
                                 if (readable(html)) return html;
                                 Resource segment = segmentFile(path, location);
                                 if (segment != null) return segment;
-                                return path.contains(".") ? null : notFound(location);
+                                // Unknown: GlobalExceptionHandler answers with the 404 page and a
+                                // 404 status.
+                                return null;
                             }
                         });
     }
@@ -97,11 +99,6 @@ public class StaticUiConfig implements WebMvcConfigurer {
                         + ".txt";
         Resource r = location.createRelative(mapped);
         return readable(r) ? r : null;
-    }
-
-    private static Resource notFound(Resource location) throws IOException {
-        Resource page = location.createRelative("404.html");
-        return readable(page) ? page : null;
     }
 
     private static boolean readable(Resource r) {

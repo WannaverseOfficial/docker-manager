@@ -361,6 +361,12 @@ public class NginxConfigGenerator {
         sb.append("            proxy_set_header X-Forwarded-Host $host;\n");
         sb.append("            proxy_read_timeout 3600s;\n");
         sb.append("            proxy_send_timeout 3600s;\n");
+        if (Boolean.TRUE.equals(route.getUnlimitedUploads())) {
+            // Image layers can be several GB; stream them straight through.
+            sb.append("            client_max_body_size 0;\n");
+            sb.append("            proxy_request_buffering off;\n");
+            sb.append("            proxy_buffering off;\n");
+        }
         if (scheme.equals("https")) {
             sb.append("            proxy_ssl_server_name on;\n");
         }
