@@ -147,6 +147,9 @@ function Enabled({ hostId, config, onChange }: { hostId: string; config: Ingress
           </div>
           <div className="text-[12.5px] text-slate mt-1">
             Ports {config.httpPort} and {config.httpsPort}
+            <button className="ml-2 underline underline-offset-2 hover:text-ink" onClick={() => setSettings(true)}>
+              Change
+            </button>
           </div>
         </Panel>
         <Panel>
@@ -182,11 +185,13 @@ function Enabled({ hostId, config, onChange }: { hostId: string; config: Ingress
           <div className="flex justify-between items-center gap-3 mb-4">
             <p className="text-[14px] text-slate">Each route sends one hostname (and optional path) to a container.</p>
             <div className="flex items-center gap-2">
+              <Button tone="quiet" onClick={() => setSettings(true)}>
+                Settings
+              </Button>
               <Button onClick={() => setEditing("new")}>Add route</Button>
               <Menu
                 items={[
                   { label: "Re-apply configuration", onClick: reapply },
-                  { label: "Let's Encrypt settings", onClick: () => setSettings(true) },
                   {
                     label: "Turn ingress off",
                     danger: true,
@@ -687,15 +692,21 @@ function UploadDialog({ cert, onClose, onSaved }: { cert: Certificate; onClose: 
 }
 
 function SettingsDialog({ hostId, config, onClose, onSaved }: { hostId: string; config: IngressConfig; onClose: () => void; onSaved: () => void }) {
+  const [httpPort, setHttpPort] = useState(String(config.httpPort || 80));
+  const [httpsPort, setHttpsPort] = useState(String(config.httpsPort || 443));
   const [email, setEmail] = useState(config.acmeEmail ?? "");
   const [staging, setStaging] = useState(config.staging);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const http = Number(httpPort);
+  const https = Number(httpsPort);
+  const portsChanged = http !== config.httpPort || https !== config.httpsPort;
+  const portsValid = http >= 1 && http <= 65535 && https >= 1 && https <= 65535 && http !== https;
   return (
     <Modal
       open
       onClose={onClose}
-      title="Let's Encrypt settings"
+      title="Ingress settings"
       footer={
         <>
           <Button tone="quiet" onClick={onClose}>
@@ -703,11 +714,12 @@ function SettingsDialog({ hostId, config, onClose, onSaved }: { hostId: string; 
           </Button>
           <Button
             busy={busy}
+            disabled={!portsValid}
             onClick={async () => {
               setBusy(true);
               setError(null);
               try {
-                await api.patch(`/api/ingress/hosts/${hostId}/settings`, { acmeEmail: email, useStaging: staging });
+                await api.patch(`/api/ingress/hosts/${hostId}/settings`, { acmeEmail: email, useStaging: staging, httpPort: http, httpsPort: https });
                 onSaved();
               } catch (e) {
                 setError((e as Error).message);
@@ -715,13 +727,30 @@ function SettingsDialog({ hostId, config, onClose, onSaved }: { hostId: string; 
               }
             }}
           >
-            Save
+            {busy && portsChanged ? "Moving the proxy" : "Save"}
           </Button>
         </>
       }
     >
       <div className="flex flex-col gap-4">
-        <Field label="Email" optional>
+        <div className="text-[13px] font-medium">Ports on this host</div>
+        <div className="grid grid-cols-2 gap-4 -mt-2">
+          <Field label="HTTP">
+            <input className={inputClass} inputMode="numeric" value={httpPort} onChange={(e) => setHttpPort(e.target.value.replace(/\D/g, ""))} />
+          </Field>
+          <Field label="HTTPS">
+            <input className={inputClass} inputMode="numeric" value={httpsPort} onChange={(e) => setHttpsPort(e.target.value.replace(/\D/g, ""))} />
+          </Field>
+        </div>
+        {!portsValid && <Notice tone="error">Use two different ports from 1 to 65535.</Notice>}
+        {portsValid && portsChanged && (
+          <Notice tone="warn">
+            The proxy is restarted on the new ports, so routes are down for a few seconds. If a port is already in use, the proxy stays on the current ones.
+            {http !== 80 && " Let's Encrypt checks domains on port 80: forward port 80 to the new HTTP port (on your router, for example), or certificates can't be issued or renewed."}
+          </Notice>
+        )}
+        <div className="text-[13px] font-medium pt-2 border-t border-line">Let&apos;s Encrypt</div>
+        <Field label="Email" optional hint="Let's Encrypt writes here about certificates that are about to expire.">
           <input className={inputClass} type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
         </Field>
         <Toggle checked={staging} onChange={setStaging} label="Use the test environment" hint="Certificates requested from now on come from Let's Encrypt's staging service." />

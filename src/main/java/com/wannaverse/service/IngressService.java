@@ -258,8 +258,20 @@ public class IngressService {
 
     /** Changes the Let's Encrypt email or environment of an enabled ingress. */
     public IngressConfig updateSettings(
-            String hostId, String acmeEmail, Boolean useStaging, String userId, String username) {
+            String hostId,
+            String acmeEmail,
+            Boolean useStaging,
+            Integer httpPort,
+            Integer httpsPort,
+            String userId,
+            String username) {
         IngressConfig config = requireConfig(hostId);
+        int http = httpPort == null ? config.getHttpPort() : httpPort;
+        int https = httpsPort == null ? config.getHttpsPort() : httpsPort;
+        if (http < 1 || http > 65535 || https < 1 || https > 65535) {
+            throw bad("Ports are numbers from 1 to 65535");
+        }
+        if (http == https) throw bad("HTTP and HTTPS need different ports");
         if (acmeEmail != null) {
             if (!acmeEmail.isBlank() && !EMAIL.matcher(acmeEmail.trim()).matches()) {
                 throw bad("Enter a valid email address");
@@ -274,6 +286,23 @@ public class IngressService {
             config.setAcmeAccountKeyPem(null); // accounts are per directory
         }
         config = configRepository.save(config);
+        if (http != config.getHttpPort() || https != config.getHttpsPort()) {
+            String before = config.getHttpPort() + "/" + config.getHttpsPort();
+            if (config.getStatus() == IngressStatus.ENABLED) {
+                // Replaces the proxy container; the old one comes back if this fails.
+                applier.changePorts(config, http, https);
+            } else {
+                config.setHttpPort(http);
+                config.setHttpsPort(https);
+            }
+            config = configRepository.save(config);
+            audit(
+                    config,
+                    IngressAction.NGINX_CONFIG_UPDATED,
+                    "Proxy ports changed from " + before + " to " + http + "/" + https,
+                    userId,
+                    username);
+        }
         audit(
                 config,
                 IngressAction.NGINX_CONFIG_UPDATED,

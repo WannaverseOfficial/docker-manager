@@ -170,7 +170,8 @@ public class IngressController {
         return ResponseEntity.ok(IngressRouteResponse.fromEntity(route));
     }
 
-    public record SettingsRequest(String acmeEmail, Boolean useStaging) {}
+    public record SettingsRequest(
+            String acmeEmail, Boolean useStaging, Integer httpPort, Integer httpsPort) {}
 
     @PatchMapping("/hosts/{hostId}/settings")
     @RequirePermission(resource = Resource.INGRESS, action = "configure", hostIdParam = "hostId")
@@ -181,6 +182,8 @@ public class IngressController {
                         hostId,
                         request.acmeEmail(),
                         request.useStaging(),
+                        request.httpPort(),
+                        request.httpsPort(),
                         SecurityContextHolder.getCurrentUserId(),
                         SecurityContextHolder.getCurrentUsername());
         return ResponseEntity.ok(IngressConfigResponse.fromEntity(config));

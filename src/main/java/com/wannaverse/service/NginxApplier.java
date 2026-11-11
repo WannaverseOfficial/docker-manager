@@ -158,6 +158,85 @@ public class NginxApplier {
         return created;
     }
 
+    /**
+     * Moves the proxy to other host ports. Docker can't change a container's ports, so a new proxy
+     * is started with the same configuration; the old one is kept aside and put back if the new one
+     * can't start (a port already in use, for example). Routes are down for a few seconds.
+     */
+    public void changePorts(IngressConfig config, int httpPort, int httpsPort) {
+        ReentrantLock lock = lock(config);
+        lock.lock();
+        try {
+            DockerAPI api = api(config);
+            int oldHttp = config.getHttpPort();
+            int oldHttps = config.getHttpsPort();
+            String oldContainerId = config.getNginxContainerId();
+            String oldId = findContainer(api, config.getNginxContainerName());
+            if (oldId != null && !isOurProxy(api, oldId, config)) {
+                throw new ApplyException(
+                        "A container named '"
+                                + config.getNginxContainerName()
+                                + "' already exists and was not created by Docker Manager.");
+            }
+            String backupName =
+                    config.getNginxContainerName() + "-old-" + System.currentTimeMillis();
+            boolean wasRunning = false;
+            if (oldId != null) {
+                wasRunning =
+                        Boolean.TRUE.equals(api.inspectContainer(oldId).getState().getRunning());
+                // Stopped first: the new proxy may keep one of the same ports.
+                if (wasRunning) api.client().stopContainerCmd(oldId).withTimeout(10).exec();
+                api.client().renameContainerCmd(oldId).withName(backupName).exec();
+            }
+            config.setHttpPort(httpPort);
+            config.setHttpsPort(httpsPort);
+            config.setNginxContainerId(null);
+            try {
+                apply(config); // creates and starts the new proxy, then writes its files
+            } catch (RuntimeException e) {
+                log.warn(
+                        "The proxy didn't start on the new ports, restoring the old one: {}",
+                        e.getMessage());
+                String newId = findContainer(api, config.getNginxContainerName());
+                if (newId != null && !newId.equals(oldId)) {
+                    try {
+                        api.client().removeContainerCmd(newId).withForce(true).exec();
+                    } catch (Exception ignored) {
+                    }
+                }
+                config.setHttpPort(oldHttp);
+                config.setHttpsPort(oldHttps);
+                config.setNginxContainerId(oldContainerId);
+                configRepository.save(config);
+                if (oldId != null) {
+                    try {
+                        api.client()
+                                .renameContainerCmd(oldId)
+                                .withName(config.getNginxContainerName())
+                                .exec();
+                        if (wasRunning) api.startContainer(oldId);
+                    } catch (Exception restore) {
+                        log.error("Could not restore the previous proxy: {}", restore.getMessage());
+                    }
+                }
+                throw e;
+            }
+            configRepository.save(config);
+            if (oldId != null) {
+                try {
+                    api.client().removeContainerCmd(oldId).withForce(true).exec();
+                } catch (Exception e) {
+                    log.warn(
+                            "The old proxy {} could not be removed: {}",
+                            backupName,
+                            e.getMessage());
+                }
+            }
+        } finally {
+            lock.unlock();
+        }
+    }
+
     private String ensureNetwork(DockerAPI api, IngressConfig config) {
         String name = config.getIngressNetworkName();
         for (Network n : api.listNetworks()) {
