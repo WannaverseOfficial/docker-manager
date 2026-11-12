@@ -121,6 +121,8 @@ public class NginxConfigGenerator {
             # Sign-in pages for password-protected routes.
             js_path %s;
             js_import dmauth from %s;
+            # Grafana routes: the Docker Manager sign-in token from the visitor's cookie, while valid.
+            js_set $dm_grafana_token dmauth.grafanaToken;
             absolute_redirect off;
             limit_req_zone $binary_remote_addr zone=dm_login:1m rate=10r/m;
             limit_req_status 429;
@@ -265,11 +267,23 @@ public class NginxConfigGenerator {
     private String locations(List<IngressRoute> routes) {
         StringBuilder sb = new StringBuilder();
         boolean anyAuth = false;
+        boolean anySso = false;
         for (IngressRoute r : routes) {
             if (protectedRoute(r)) {
                 sb.append(authLocations(r));
                 anyAuth = true;
+            } else if (r.grafanaSso()) {
+                sb.append(ssoLocations(r));
+                anySso = true;
             }
+        }
+        if (anySso) {
+            sb.append(
+                    """
+                            location ^~ /.dm-sso/ {
+                                return 404;
+                            }
+                    """);
         }
         if (anyAuth) {
             sb.append(
@@ -308,6 +322,59 @@ public class NginxConfigGenerator {
                 }
         """
                 .formatted(id, route.getHostname(), path(route), loginLocation(id));
+    }
+
+    /**
+     * Docker Manager sign-in for a Grafana route. Docker Manager sends the browser to the callback
+     * with a signed token, which is kept in a cookie; every request then carries it to Grafana in a
+     * header and Grafana checks the signature itself. Grafana's sign-in page sends visitors without
+     * a valid token to Docker Manager for a new one ({@code ?local} shows Grafana's own form).
+     */
+    private static String ssoLocations(IngressRoute route) {
+        String id = route.getId();
+        return """
+                # Docker Manager sign-in for Grafana on %2$s%3$s
+                location = /.dm-sso/%1$s/callback {
+                    set $dm_route %1$s;
+                    limit_req zone=dm_login burst=10 nodelay;
+                    js_content dmauth.ssoCallback;
+                }
+                location = /.dm-sso/signed-out {
+                    set $dm_route %1$s;
+                    js_content dmauth.ssoSignedOut;
+                }
+                location = /.dm-sso/%1$s/check {
+                    internal;
+                    set $dm_route %1$s;
+                    js_content dmauth.ssoCheck;
+                }
+                location @%4$s {
+                    set $dm_route %1$s;
+                    set $dm_sso_url "%5$s";
+                    js_content dmauth.ssoChallenge;
+                }
+                location = %3$slogin {
+                    set $dm_route %1$s;
+                    auth_request /.dm-sso/%1$s/check;
+                    error_page 401 = @%4$s;
+                    set $%6$s http://%7$s:%8$d;
+                    proxy_pass $%6$s;
+                    proxy_set_header Host $host;
+                    proxy_set_header X-Real-IP $remote_addr;
+                    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                    proxy_set_header X-Forwarded-Proto $scheme;
+                    proxy_set_header X-DM-Grafana-Token $dm_grafana_token;
+                }
+        """
+                .formatted(
+                        id,
+                        route.getHostname(),
+                        path(route).endsWith("/") ? path(route) : path(route) + "/",
+                        "dm_sso_" + id.replaceAll("[^A-Za-z0-9_]", "_"),
+                        route.getAuthConfig(),
+                        sanitizeVar(id),
+                        route.getTargetContainerName(),
+                        route.getTargetPort());
     }
 
     private static String loginLocation(String id) {
@@ -367,6 +434,12 @@ public class NginxConfigGenerator {
                     .append(";\n");
             sb.append("            limit_req zone=dm_basic burst=40 nodelay;\n");
             sb.append("            proxy_set_header Authorization $dm_upstream_authorization;\n");
+        }
+        if (route.grafanaSso()) {
+            // Only the token from the sign-in cookie reaches Grafana; one sent by the visitor is
+            // replaced (an empty value drops the header).
+            sb.append("            set $dm_route ").append(route.getId()).append(";\n");
+            sb.append("            proxy_set_header X-DM-Grafana-Token $dm_grafana_token;\n");
         }
         if (logsTraffic(route)) {
             sb.append("            set $dm_variant ").append(upstreamHost).append(";\n");

@@ -1,0 +1,56 @@
+{
+  "uid": "dm-logs",
+  "title": "Container logs",
+  "description": "Logs of every container, collected by Grafana Alloy into Loki. Managed by Docker Manager.",
+  "tags": ["docker-manager", "logs"],
+  "editable": false,
+  "schemaVersion": 39,
+  "refresh": "",
+  "time": { "from": "now-1h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "container",
+        "label": "Container",
+        "type": "query",
+        "datasource": { "type": "loki", "uid": "dm-loki" },
+        "query": { "label": "container", "stream": "", "type": 1, "refId": "q" },
+        "definition": "label_values(container)",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".+",
+        "current": { "text": "All", "value": "$__all" },
+        "sort": 1
+      },
+      {
+        "name": "search",
+        "label": "Contains",
+        "type": "textbox",
+        "query": "",
+        "current": { "text": "", "value": "" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Log lines",
+      "gridPos": { "x": 0, "y": 0, "w": 24, "h": 7 },
+      "datasource": { "type": "loki", "uid": "dm-loki" },
+      "targets": [{ "refId": "A", "expr": "sum by (container) (count_over_time({container=~\"$container\"} |~ \"(?i)$search\" [$__auto]))", "legendFormat": "{{container}}", "queryType": "range" }],
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "bars", "fillOpacity": 60, "stacking": { "mode": "normal" } } } },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "desc" } }
+    },
+    {
+      "id": 2,
+      "type": "logs",
+      "title": "Logs",
+      "gridPos": { "x": 0, "y": 7, "w": 24, "h": 20 },
+      "datasource": { "type": "loki", "uid": "dm-loki" },
+      "targets": [{ "refId": "A", "expr": "{container=~\"$container\"} |~ \"(?i)$search\"", "queryType": "range" }],
+      "options": { "showTime": true, "wrapLogMessage": true, "sortOrder": "Descending", "enableLogDetails": true, "dedupStrategy": "none" }
+    }
+  ]
+}

@@ -3,7 +3,8 @@
 # Wannaverse Docker Manager
 
 A free, open-source, self-hosted web interface for running Docker servers: containers, Compose stacks, HTTPS
-ingress, PostgreSQL databases, a private image registry and security scanning, in one container.
+ingress, PostgreSQL databases, a Grafana observability stack, a private image registry and security scanning, in
+one container.
 
 Built for developers, homelab owners and small teams who want a complete tool without subscriptions, licence
 fees or feature gates.
@@ -19,6 +20,7 @@ fees or feature gates.
 - [Configuration](#configuration)
 - [Rollouts: blue/green and canary](#rollouts-bluegreen-and-canary)
 - [Databases](#databases)
+- [Observability](#observability)
 - [Private registry](#private-registry)
 - [Security scanning](#security-scanning)
 - [Remote hosts](#remote-hosts)
@@ -54,6 +56,8 @@ fees or feature gates.
 **Watch and secure**
 
 - Health monitoring with email alerts, and a live view of CPU and memory per container.
+- An observability stack: Grafana with Prometheus, Mimir, Loki and Tempo, already connected, collecting every
+  container's logs, container and host metrics, and OpenTelemetry from your apps.
 - Vulnerability scans of images with Trivy or Docker Scout, and host checks with Docker Bench for Security
   (the CIS Docker Benchmark), with one-click fixes you confirm first.
 - Image rules that allow or block images, users with roles and per-host permissions, and an audit log.
@@ -245,6 +249,42 @@ or `pg_dump` custom format.
 container on the same host (signing in with that container's own `POSTGRES_USER` and `POSTGRES_PASSWORD`) and
 restores it under a new owner. The source container is only read, so you can switch the app over and remove the old
 container when you're ready.
+
+## Observability
+
+**Observability** (administrators only) runs a pre-wired stack on the selected host, one per host:
+
+| Component | Image | Role |
+|---|---|---|
+| Grafana | `grafana/grafana:13.3.1` | Dashboards and Explore, with every data source set up |
+| Prometheus | `prom/prometheus:v3.16.0` | Scrapes metrics every 15 seconds |
+| Mimir | `grafana/mimir:3.2.4` | Long-term metrics: Prometheus writes everything into it (optional) |
+| Loki | `grafana/loki:3.7.9` | Logs (optional) |
+| Tempo | `grafana/tempo:3.1.1` | Traces, service graphs and span metrics (optional) |
+| Grafana Alloy | `grafana/alloy:v1.21.3` | Collects container logs, and receives OpenTelemetry from apps |
+| cAdvisor | `ghcr.io/google/cadvisor:0.60.6` | Per-container CPU, memory, network and disk |
+| node-exporter | `prom/node-exporter:v1.12.1` | The host's CPU, memory, load and disks |
+
+Each piece runs in single-server mode with its data in a `dm-obs-*` volume, which suits one host rather than a fleet.
+Retention is set per signal (metrics 30 days, logs 14, traces 7 by default). Grafana comes with three dashboards in
+a **Docker Manager** folder (Containers, Host and Container logs), trace ids in logs link to Tempo, and traces link
+back to their logs.
+
+**Reaching Grafana.** On a hostname through ingress, with a Let's Encrypt certificate, or on a port on `127.0.0.1`.
+With a hostname, Docker Manager administrators sign in to Grafana with their own account: Docker Manager signs a
+short-lived RS256 token, the ingress proxy keeps it in a cookie and passes it to Grafana, and Grafana checks it with
+the public key Docker Manager gave it, so nothing else can sign anyone in. Other users can't open Grafana, since it
+shows every container's logs and metrics. Grafana's own administrator account (its password is shown on the page)
+works on the port, or on the hostname at `/login?local`.
+
+**Sending data from apps.** Connect a container to the stack on the page, or add the `dm-obs-otlp` network to a
+compose file, and point the OpenTelemetry SDK at `http://dm-obs-alloy:4318` (or `dm-obs-alloy:4317` for gRPC).
+Alloy sends traces to Tempo, logs to Loki and metrics to Mimir. Apps on that network can reach Alloy and nothing
+else of the stack.
+
+**Changing it.** Components and collectors can be switched on and off and retention changed at any time; only the
+containers whose settings change are recreated. Turning a component off, or removing the stack, keeps its data
+unless you ask for it to be deleted. Images take about 4 GB of disk once unpacked.
 
 ## Private registry
 

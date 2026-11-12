@@ -29,6 +29,7 @@ import {
   Split,
   ShieldCheck,
   Sun,
+  Telescope,
   Users,
   Workflow,
   X,
@@ -75,6 +76,7 @@ const NAV: { title: string; items: Item[] }[] = [
     title: "Watch",
     items: [
       { href: "/health/", label: "Health", icon: HeartPulse },
+      { href: "/observability/", label: "Observability", icon: Telescope, admin: true },
       { href: "/security/", label: "Security", icon: Shield, admin: true },
       { href: "/activity/", label: "Activity", icon: Activity, admin: true },
     ],

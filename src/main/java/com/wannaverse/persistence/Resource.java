@@ -28,5 +28,6 @@ public enum Resource {
     STACKS,
     DATABASES,
     ROLLOUTS,
-    SECURITY
+    SECURITY,
+    OBSERVABILITY
 }

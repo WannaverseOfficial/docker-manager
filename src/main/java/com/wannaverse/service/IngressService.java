@@ -533,11 +533,17 @@ public class IngressService {
             if (updated.getUnlimitedUploads() != null) {
                 route.setUnlimitedUploads(updated.getUnlimitedUploads());
             }
-            route.setAuthEnabled(updated.isAuthEnabled());
-            route.setAuthType(updated.getAuthType());
-            // Keep the existing password when the form leaves it empty.
-            if (updated.getAuthConfig() != null) route.setAuthConfig(updated.getAuthConfig());
-            if (!route.isAuthEnabled()) route.setAuthConfig(null);
+            if (route.getAuthType() == IngressRoute.AuthType.GRAFANA_SSO
+                    && !updated.isAuthEnabled()) {
+                // An observability stack's Grafana: Docker Manager sign-in stays on. It goes away
+                // with the stack, or when a password is set here instead.
+            } else {
+                route.setAuthEnabled(updated.isAuthEnabled());
+                route.setAuthType(updated.getAuthType());
+                // Keep the existing password when the form leaves it empty.
+                if (updated.getAuthConfig() != null) route.setAuthConfig(updated.getAuthConfig());
+                if (!route.isAuthEnabled()) route.setAuthConfig(null);
+            }
         }
         if (enabled != null) route.setEnabled(enabled);
         if (route.isAuthEnabled()
@@ -725,6 +731,41 @@ public class IngressService {
             requestCertificateIfNeeded(cert, route, null, username);
         } catch (Exception e) {
             log.warn("Could not request a certificate for {}: {}", hostname, e.getMessage());
+        }
+        return route;
+    }
+
+    /** http(s)://host[:port]/path?query, with nothing nginx would read as syntax. */
+    static final java.util.regex.Pattern SIGN_IN_URL =
+            java.util.regex.Pattern.compile(
+                    "^https?://[A-Za-z0-9.-]+(:\\d{1,5})?(/[A-Za-z0-9._~/-]*)?(\\?[A-Za-z0-9._~=&-]*)?$");
+
+    /**
+     * Turns Docker Manager sign-in on for an observability stack's Grafana route ({@code signInUrl}
+     * is the Docker Manager page that hands out tokens), or off with null. Reloads nginx.
+     */
+    public IngressRoute setGrafanaSignIn(String routeId, String signInUrl) {
+        IngressRoute route =
+                routeRepository
+                        .findById(routeId)
+                        .orElseThrow(() -> new IllegalStateException("The route was deleted"));
+        if (signInUrl != null
+                && (signInUrl.length() > 500 || !SIGN_IN_URL.matcher(signInUrl).matches())) {
+            throw bad("Docker Manager's address is not a plain http(s) URL");
+        }
+        IngressRoute before = copy(route);
+        route.setAuthEnabled(false);
+        route.setAuthType(signInUrl == null ? null : IngressRoute.AuthType.GRAFANA_SSO);
+        route.setAuthConfig(signInUrl);
+        route = routeRepository.save(route);
+        IngressConfig config = configRepository.findById(route.getIngressConfigId()).orElse(null);
+        if (config != null && config.getStatus() == IngressStatus.ENABLED) {
+            try {
+                applier.apply(config);
+            } catch (RuntimeException e) {
+                routeRepository.save(before);
+                throw e;
+            }
         }
         return route;
     }

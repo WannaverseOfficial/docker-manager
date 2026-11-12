@@ -161,7 +161,17 @@ public class IngressRoute {
 
     public enum AuthType {
         BASIC,
-        FORWARD_AUTH
+        FORWARD_AUTH,
+        /**
+         * Grafana of an observability stack: visitors sign in with their Docker Manager account.
+         * {@link #authConfig} holds the Docker Manager page that hands out sign-in tokens.
+         */
+        GRAFANA_SSO
+    }
+
+    /** True for the Grafana route of an observability stack (Docker Manager sign-in). */
+    public boolean grafanaSso() {
+        return authType == AuthType.GRAFANA_SSO && authConfig != null && id != null;
     }
 
     @PrePersist
