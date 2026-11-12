@@ -286,22 +286,37 @@ public class NginxApplier {
         for (IngressRoute route :
                 routeRepository.findByIngressConfigIdAndEnabled(config.getId(), true)) {
             if (route.kind() != IngressRoute.TargetType.CONTAINER) continue;
-            String target = route.getTargetContainerName();
-            if (target == null || target.isEmpty() || connected.contains(target)) continue;
-            String id = findContainer(api, target);
-            if (id == null) continue; // not running right now; nginx answers 502 until it is
-            try {
-                api.connectContainerToNetwork(config.getIngressNetworkName(), id);
-                connected.add(target);
-            } catch (ConflictException e) {
-                connected.add(target);
-            } catch (Exception e) {
-                String msg = e.getMessage() == null ? "" : e.getMessage();
-                if (!msg.contains("already exists")) {
-                    log.warn("Could not connect {} to the ingress network: {}", target, msg);
-                }
+            connectTarget(api, config, route.getTargetContainerName(), connected);
+            if (route.splitsTraffic()) {
+                connectTarget(api, config, route.getCanaryContainerName(), connected);
             }
         }
+    }
+
+    private void connectTarget(
+            DockerAPI api, IngressConfig config, String target, Set<String> connected) {
+        if (target == null || target.isEmpty() || connected.contains(target)) return;
+        String id = findContainer(api, target);
+        if (id == null) return; // not running right now; nginx answers 502 until it is
+        try {
+            api.connectContainerToNetwork(config.getIngressNetworkName(), id);
+            connected.add(target);
+        } catch (ConflictException e) {
+            connected.add(target);
+        } catch (Exception e) {
+            String msg = e.getMessage() == null ? "" : e.getMessage();
+            if (!msg.contains("already exists")) {
+                log.warn("Could not connect {} to the ingress network: {}", target, msg);
+            }
+        }
+    }
+
+    /** Runs a command in the proxy container (HTTP checks, reading traffic logs). */
+    public DockerAPI.ExecOutput execInProxy(
+            IngressConfig config, long timeoutSeconds, String... command) {
+        return api(config)
+                .execFull(
+                        config.getNginxContainerId(), Map.of(), timeoutSeconds, 4_000_000, command);
     }
 
     // --- config ------------------------------------------------------------------------------

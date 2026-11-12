@@ -99,6 +99,35 @@ public class IngressRoute {
     /** REDIRECT routes: append the visitor's path and query to {@link #redirectUrl}. */
     private Boolean redirectKeepPath;
 
+    /** Set when a rollout manages this route: it decides which container gets the traffic. */
+    private String rolloutId;
+
+    /**
+     * A second container that gets {@link #canaryWeight} percent of visitors (a canary release).
+     * Null or empty when all traffic goes to the target container.
+     */
+    private String canaryContainerName;
+
+    /** The canary's share of visitors, 0-100. */
+    private Integer canaryWeight;
+
+    /** Keep visitors on the version they first got (by address and browser). Null means yes. */
+    private Boolean canarySticky;
+
+    /**
+     * Log each request's container, status and time to a file the rollout reads, to measure the new
+     * version's error rate. Only on while a rollout watches it, so the file stays small.
+     */
+    private Boolean trafficLog;
+
+    /** True when part of the traffic goes to a canary container. */
+    public boolean splitsTraffic() {
+        return canaryContainerName != null
+                && !canaryContainerName.isBlank()
+                && canaryWeight != null
+                && canaryWeight > 0;
+    }
+
     public TargetType kind() {
         return targetType == null ? TargetType.CONTAINER : targetType;
     }

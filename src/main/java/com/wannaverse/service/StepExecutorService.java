@@ -50,6 +50,7 @@ public class StepExecutorService {
     private final GitService gitService;
     private final ComposeRunner composeRunner;
     private final DockerRegistryService registryService;
+    private final RolloutService rolloutService;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Value("${app.pipeline.workspace-dir:#{systemProperties['java.io.tmpdir']}/pipelines}")
@@ -59,7 +60,9 @@ public class StepExecutorService {
             DockerService dockerService,
             GitService gitService,
             ComposeRunner composeRunner,
-            DockerRegistryService registryService) {
+            DockerRegistryService registryService,
+            @org.springframework.context.annotation.Lazy RolloutService rolloutService) {
+        this.rolloutService = rolloutService;
         this.dockerService = dockerService;
         this.gitService = gitService;
         this.composeRunner = composeRunner;
@@ -76,6 +79,9 @@ public class StepExecutorService {
 
         /** True when the volume may have changes the local folder does not have. */
         boolean volumeAhead;
+
+        /** A network step containers join, e.g. so a rollout's tests reach the new version. */
+        String network;
 
         Workspace(Path local, String volume, DockerClient client) {
             this.local = local;
@@ -193,7 +199,58 @@ public class StepExecutorService {
                 pullFromVolume(ws);
                 yield runCompose(ws, config, workingDirectory, out);
             }
+            case ROLLOUT -> releaseStep(ws, config, stepEnv, timeout, out, cancelled);
         };
+    }
+
+    // --- rollout steps -----------------------------------------------------------------------
+
+    /**
+     * Releases an image (usually one an earlier step built) through a rollout. ${NAME} in the image
+     * is replaced with the step's environment, e.g. my-app:${GIT_COMMIT_SHORT}. Waits for the
+     * release to finish unless "wait" is false.
+     */
+    private StepResult releaseStep(
+            Workspace ws,
+            JsonNode config,
+            Map<String, String> env,
+            int timeoutSeconds,
+            Consumer<String> out,
+            BooleanSupplier cancelled) {
+        String rolloutId = text(config, "rolloutId", null);
+        String image = text(config, "image", null);
+        if (rolloutId == null) return new StepResult(false, 1, "", "Choose a rollout");
+        if (image == null) return new StepResult(false, 1, "", "Set the image to release");
+        image = substitute(image, env);
+        boolean wait = !"false".equalsIgnoreCase(text(config, "wait", "true"));
+        String by =
+                "pipeline "
+                        + env.getOrDefault("PIPELINE_NAME", "")
+                        + " #"
+                        + env.getOrDefault("BUILD_NUMBER", "");
+        return rolloutService.releaseFromPipeline(
+                rolloutId,
+                image,
+                dockerService.urlOf(ws.client),
+                by.trim(),
+                env.get("GIT_COMMIT"),
+                wait,
+                timeoutSeconds,
+                out,
+                cancelled);
+    }
+
+    /** Replaces ${NAME} with environment values; unknown names are left as they are. */
+    static String substitute(String text, Map<String, String> env) {
+        var m = java.util.regex.Pattern.compile("\\$\\{([A-Za-z_][A-Za-z0-9_]*)}").matcher(text);
+        StringBuilder sb = new StringBuilder();
+        while (m.find()) {
+            String v = env.get(m.group(1));
+            m.appendReplacement(
+                    sb, java.util.regex.Matcher.quoteReplacement(v == null ? m.group() : v));
+        }
+        m.appendTail(sb);
+        return sb.toString();
     }
 
     // --- container steps ---------------------------------------------------------------------
@@ -221,8 +278,18 @@ public class StepExecutorService {
                         .withEnv(envList)
                         .withLabels(Map.of("com.wannaverse.pipeline-step", "true"))
                         .withHostConfig(
-                                HostConfig.newHostConfig()
-                                        .withBinds(new Bind(ws.volume, new Volume("/workspace"))));
+                                ws.network == null
+                                        ? HostConfig.newHostConfig()
+                                                .withBinds(
+                                                        new Bind(
+                                                                ws.volume,
+                                                                new Volume("/workspace")))
+                                        : HostConfig.newHostConfig()
+                                                .withNetworkMode(ws.network)
+                                                .withBinds(
+                                                        new Bind(
+                                                                ws.volume,
+                                                                new Volume("/workspace"))));
         if (!cmd.isEmpty()) create.withCmd(cmd);
         CreateContainerResponse container = create.exec();
         String id = container.getId();

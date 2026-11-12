@@ -150,6 +150,18 @@ public final class ResourceActions {
                                     "artifacts",
                                     "trigger")),
                     entry(
+                            Resource.ROLLOUTS,
+                            Set.of(
+                                    "list",
+                                    "read",
+                                    "create",
+                                    "update",
+                                    "delete",
+                                    "release",
+                                    "approve",
+                                    "promote",
+                                    "rollback")),
+                    entry(
                             Resource.DEPLOYMENT_ENVIRONMENTS,
                             Set.of(
                                     "list",

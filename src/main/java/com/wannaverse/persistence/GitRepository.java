@@ -48,6 +48,12 @@ public class GitRepository {
     @Column(columnDefinition = "TEXT")
     private String containerSpecJson;
 
+    /**
+     * For Dockerfile repositories: release each new image through this rollout (blue/green or
+     * canary) instead of replacing a container. Null replaces the container as before.
+     */
+    private String rolloutId;
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     private DeploymentType deploymentType;

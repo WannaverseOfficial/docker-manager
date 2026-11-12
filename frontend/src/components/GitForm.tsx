@@ -4,7 +4,8 @@ import { useState } from "react";
 import { X } from "lucide-react";
 import { useHost } from "./app";
 import { Button, Field, IconButton, ListEditor, Notice, Panel, Segmented, Select, Toggle, inputClass } from "./ui";
-import type { ContainerSpec, GitRepo, PortMapping } from "@/lib/types";
+import { usePoll } from "@/lib/hooks";
+import type { ContainerSpec, GitRepo, PortMapping, Rollout } from "@/lib/types";
 
 export interface GitFormValue {
   name: string;
@@ -19,6 +20,7 @@ export interface GitFormValue {
   composePath: string;
   imageName: string;
   runContainer: boolean;
+  rolloutId: string;
   containerSpec: Partial<ContainerSpec>;
   dockerHostId: string;
   pollingEnabled: boolean;
@@ -40,6 +42,7 @@ export function gitFormFrom(repo: GitRepo | null, hostId: string): GitFormValue 
     composePath: repo?.composePath ?? "",
     imageName: repo?.imageName ?? "",
     runContainer: repo?.runContainer ?? true,
+    rolloutId: repo?.rolloutId ?? "",
     containerSpec: repo?.containerSpec ?? { ports: [], env: [], volumes: [], restartPolicy: "unless-stopped" },
     dockerHostId: repo?.dockerHostId ?? hostId,
     pollingEnabled: repo?.pollingEnabled ?? false,
@@ -70,6 +73,11 @@ export function GitForm({
   const setSpec = <K extends keyof ContainerSpec>(k: K, val: ContainerSpec[K]) => setV((x) => ({ ...x, containerSpec: { ...x.containerSpec, [k]: val } }));
   const ports = (spec.ports ?? []) as PortMapping[];
   const ssh = /^(ssh:\/\/|[\w.-]+@[\w.-]+:)/.test(v.repositoryUrl.trim());
+  const { data: allRollouts } = usePoll<Rollout[]>(v.deploymentType === "DOCKERFILE" ? "/api/rollouts" : null);
+  const rollouts = (allRollouts ?? []).filter((r) => r.dockerHostId === v.dockerHostId);
+  const runMode: "replace" | "rollout" | "build" = !v.runContainer ? "build" : v.rolloutId ? "rollout" : "replace";
+  const [wantsRollout, setWantsRollout] = useState(runMode === "rollout");
+  const mode = runMode === "build" ? "build" : wantsRollout ? "rollout" : "replace";
 
   return (
     <form
@@ -168,8 +176,43 @@ export function GitForm({
                   <input className={inputClass} value={v.imageName} onChange={(e) => set("imageName", e.target.value)} placeholder="my-app" spellCheck={false} />
                 </Field>
               </div>
-              <Toggle checked={v.runContainer} onChange={(x) => set("runContainer", x)} label="Run a container from the new image" hint="The previous container is replaced; if the new one fails to start, it keeps running." />
-              {v.runContainer && (
+              <div>
+                <div className="text-[13px] font-medium mb-1.5">How to run it</div>
+                <Segmented<"replace" | "rollout" | "build">
+                  label="How to run it"
+                  value={mode}
+                  onChange={(x) => {
+                    setWantsRollout(x === "rollout");
+                    setV((s) => ({ ...s, runContainer: x !== "build", rolloutId: x === "rollout" ? s.rolloutId : "" }));
+                  }}
+                  options={[
+                    { value: "replace", label: "Replace the container" },
+                    { value: "rollout", label: "Release with a rollout" },
+                    { value: "build", label: "Only build the image" },
+                  ]}
+                />
+                <p className="text-[13px] text-slate mt-2">
+                  {mode === "replace"
+                    ? "The previous container is replaced; if the new one fails to start, it keeps running."
+                    : mode === "rollout"
+                      ? "Each new image goes through a rollout: it starts next to the current version, is tested, and gets visitors with blue/green or canary. The rollout's container settings are used."
+                      : "The image is built and tagged; nothing is started."}
+                </p>
+              </div>
+              {mode === "rollout" && (
+                <Field label="Rollout" hint={rollouts.length === 0 && allRollouts ? "No rollouts on this host yet. Create one on the Rollouts page first." : undefined}>
+                  <Select value={v.rolloutId} onChange={(x) => set("rolloutId", x)}>
+                    <option value="">Choose a rollout</option>
+                    {rollouts.map((r) => (
+                      <option key={r.id} value={r.id}>
+                        {r.name}
+                        {r.hostname ? ` (${r.hostname})` : ""}
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
+              )}
+              {mode === "replace" && (
                 <div className="flex flex-col gap-4 rounded-xl bg-well/50 p-4">
                   <div className="grid gap-4 sm:grid-cols-2">
                     <Field label="Container name" optional>
@@ -259,6 +302,7 @@ export function gitBody(v: GitFormValue) {
     ...v,
     token: v.token || undefined,
     sshKey: v.sshKey || undefined,
+    rolloutId: v.deploymentType === "DOCKERFILE" && v.runContainer ? v.rolloutId : "",
     containerSpec: v.deploymentType === "DOCKERFILE" && v.runContainer
       ? {
           ...spec,

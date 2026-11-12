@@ -395,7 +395,10 @@ public class IngressController {
             String targetHost,
             String redirectUrl,
             boolean redirectPermanent,
-            boolean redirectKeepPath) {
+            boolean redirectKeepPath,
+            String rolloutId,
+            String canaryContainerName,
+            int canaryWeight) {
         public static IngressRouteResponse fromEntity(IngressRoute r) {
             List<String> users = IngressService.authUsernames(r.getAuthConfig());
             String authUser = users.isEmpty() ? null : users.get(0);
@@ -420,7 +423,10 @@ public class IngressController {
                     r.getTargetHost(),
                     r.getRedirectUrl(),
                     Boolean.TRUE.equals(r.getRedirectPermanent()),
-                    Boolean.TRUE.equals(r.getRedirectKeepPath()));
+                    Boolean.TRUE.equals(r.getRedirectKeepPath()),
+                    r.getRolloutId(),
+                    r.splitsTraffic() ? r.getCanaryContainerName() : null,
+                    r.splitsTraffic() ? r.getCanaryWeight() : 0);
         }
     }
 

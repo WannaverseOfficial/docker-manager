@@ -261,4 +261,45 @@ class NginxConfigGeneratorTest {
                                         new IngressService.AuthUser("x", "password-2")),
                                 null));
     }
+
+    @Test
+    void canarySplitsTrafficAndLogsIt() {
+        IngressRoute r = route("www.example.com", "/", IngressRoute.TlsMode.NONE);
+        r.setId("11111111-2222-3333-4444-555555555555");
+        r.setTargetContainerName("site-blue");
+        r.setCanaryContainerName("site-green");
+        r.setCanaryWeight(25);
+        r.setTrafficLog(true);
+        String conf = generator.generateFullConfig(new IngressConfig(), List.of(r), Map.of());
+        assertTrue(conf.contains("log_format dm_traffic"));
+        assertTrue(conf.contains("split_clients \"${remote_addr}${http_user_agent}"));
+        assertTrue(conf.contains("25% canary;"));
+        assertTrue(conf.contains("canary site-green;"));
+        assertTrue(conf.contains("default site-blue;"));
+        assertTrue(conf.contains("set $dm_variant $dm_target_"));
+        assertTrue(
+                conf.contains(
+                        "access_log"
+                            + " /var/log/nginx/dm-traffic-11111111-2222-3333-4444-555555555555.log"
+                            + " dm_traffic;"));
+        assertTrue(conf.contains("http://$dm_target_"));
+    }
+
+    @Test
+    void fullCanaryAndPlainRoutesNeedNoSplit() {
+        IngressRoute r = route("www.example.com", "/", IngressRoute.TlsMode.NONE);
+        r.setTargetContainerName("site-blue");
+        r.setCanaryContainerName("site-green");
+        r.setCanaryWeight(100);
+        r.setCanarySticky(false);
+        String conf = generator.generateFullConfig(new IngressConfig(), List.of(r), Map.of());
+        assertFalse(conf.contains("split_clients"));
+        assertFalse(conf.contains("log_format dm_traffic"), "no log unless a rollout watches");
+        assertTrue(conf.contains("http://site-green:8080"));
+
+        r.setCanaryWeight(0);
+        conf = generator.generateFullConfig(new IngressConfig(), List.of(r), Map.of());
+        assertTrue(conf.contains("http://site-blue:8080"));
+        assertFalse(conf.contains("site-green"));
+    }
 }

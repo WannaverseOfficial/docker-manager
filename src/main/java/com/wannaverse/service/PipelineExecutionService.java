@@ -54,6 +54,11 @@ public class PipelineExecutionService {
         this.transactionTemplate = transactionTemplate;
     }
 
+    /** Extra environment variables and network for runs started by a rollout's test step. */
+    private record RunExtras(Map<String, String> env, String network) {}
+
+    private final Map<String, RunExtras> runExtras = new ConcurrentHashMap<>();
+
     @Transactional
     public PipelineExecution triggerExecution(
             String pipelineId,
@@ -61,6 +66,22 @@ public class PipelineExecutionService {
             String commit,
             String branch,
             String triggeredBy) {
+        return triggerExecution(pipelineId, triggerType, commit, branch, triggeredBy, null, null);
+    }
+
+    /**
+     * Starts a run whose steps also get {@code extraEnv} and run attached to {@code network} (a
+     * rollout's tests reach the new version this way).
+     */
+    @Transactional
+    public PipelineExecution triggerExecution(
+            String pipelineId,
+            PipelineExecution.TriggerType triggerType,
+            String commit,
+            String branch,
+            String triggeredBy,
+            Map<String, String> extraEnv,
+            String network) {
 
         Pipeline pipeline =
                 pipelineRepository
@@ -104,6 +125,11 @@ public class PipelineExecutionService {
         }
 
         final String executionId = execution.getId();
+        if ((extraEnv != null && !extraEnv.isEmpty()) || network != null) {
+            runExtras.put(
+                    executionId,
+                    new RunExtras(extraEnv == null ? Map.of() : Map.copyOf(extraEnv), network));
+        }
         TransactionSynchronizationManager.registerSynchronization(
                 new TransactionSynchronization() {
                     @Override
@@ -200,6 +226,8 @@ public class PipelineExecutionService {
             workspace =
                     stepExecutorService.prepareWorkspace(
                             ctx.dockerHostUrl, ctx.pipelineId, executionId);
+            RunExtras extras = runExtras.remove(executionId);
+            if (extras != null) workspace.network = extras.network();
 
             if (ctx.hasGitRepo) {
                 String branch =
@@ -214,6 +242,7 @@ public class PipelineExecutionService {
                                 ctx.triggerCommit,
                                 workspace,
                                 line -> logAndBroadcast(executionId, line));
+                ctx.triggerCommit = commitSha;
                 transactionTemplate.executeWithoutResult(
                         status -> {
                             PipelineExecution exec =
@@ -224,6 +253,7 @@ public class PipelineExecutionService {
             }
 
             Map<String, String> env = buildEnvironmentVariables(ctx);
+            if (extras != null) env.putAll(extras.env());
 
             boolean allSuccess = executeDependencyGraph(executionId, ctx, workspace, env);
             boolean wasCancelled = isCancelled(executionId);
@@ -265,6 +295,7 @@ public class PipelineExecutionService {
                         executionRepository.save(exec);
                     });
         } finally {
+            runExtras.remove(executionId);
             completeEmitters(executionId);
             cancelledExecutions.remove(executionId);
             logBuffers.remove(executionId);
@@ -833,6 +864,11 @@ public class PipelineExecutionService {
         if (ctx.hasGitRepo) {
             env.put("GIT_REPO_URL", ctx.gitRepoUrl);
             env.put("GIT_BRANCH", ctx.triggerBranch);
+        }
+
+        if (ctx.triggerCommit != null && ctx.triggerCommit.matches("^[0-9a-fA-F]{7,64}$")) {
+            env.put("GIT_COMMIT", ctx.triggerCommit);
+            env.put("GIT_COMMIT_SHORT", ctx.triggerCommit.substring(0, 7));
         }
 
         if (ctx.triggerType != null) {

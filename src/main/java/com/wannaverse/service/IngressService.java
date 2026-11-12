@@ -517,9 +517,16 @@ public class IngressService {
             route.setRedirectUrl(updated.getRedirectUrl());
             route.setRedirectPermanent(updated.getRedirectPermanent());
             route.setRedirectKeepPath(updated.getRedirectKeepPath());
-            route.setTargetContainerName(updated.getTargetContainerName());
-            resolveTarget(config, route);
-            route.setTargetPort(updated.getTargetPort());
+            if (route.getRolloutId() != null) {
+                // The rollout decides where traffic goes; keep its container and port.
+                route.setTargetType(IngressRoute.TargetType.CONTAINER);
+                route.setTargetHost(null);
+                route.setRedirectUrl(null);
+            } else {
+                route.setTargetContainerName(updated.getTargetContainerName());
+                resolveTarget(config, route);
+                route.setTargetPort(updated.getTargetPort());
+            }
             route.setProtocol(updated.getProtocol());
             route.setTlsMode(updated.getTlsMode());
             route.setForceHttpsRedirect(updated.isForceHttpsRedirect());
@@ -576,6 +583,12 @@ public class IngressService {
                                 () ->
                                         new ResponseStatusException(
                                                 HttpStatus.NOT_FOUND, "Route not found"));
+        if (route.getRolloutId() != null) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "A rollout sends this route's traffic. Delete the rollout first (its route is"
+                            + " kept and then works like any other).");
+        }
         IngressConfig config =
                 configRepository
                         .findById(route.getIngressConfigId())
@@ -614,6 +627,193 @@ public class IngressService {
                 "Route " + route.getHostname() + route.getPathPrefix() + " removed",
                 userId,
                 username);
+    }
+
+    // --- rollouts ---------------------------------------------------------------------------
+
+    /** The enabled ingress of a host, or a clear error for the rollout's log. */
+    public IngressConfig requireEnabledForRollout(String hostId) {
+        IngressConfig config =
+                configRepository
+                        .findByDockerHostId(hostId)
+                        .orElseThrow(
+                                () ->
+                                        new IllegalStateException(
+                                                "Ingress is not set up on this host. Turn it on"
+                                                        + " on the Ingress page first."));
+        if (config.getStatus() != IngressStatus.ENABLED) {
+            throw new IllegalStateException("Ingress is off on this host. Turn it on first.");
+        }
+        return config;
+    }
+
+    /**
+     * Creates the route a rollout sends visitors through, pointing at {@code container}. Checked
+     * like a route made on the Ingress page, then marked as managed by the rollout.
+     */
+    public IngressRoute createRolloutRoute(
+            String hostId,
+            String rolloutId,
+            String hostname,
+            String pathPrefix,
+            String tlsMode,
+            String container,
+            int port,
+            String username) {
+        IngressConfig config = requireEnabledForRollout(hostId);
+        boolean https = tlsMode != null && !tlsMode.isBlank() && !"NONE".equals(tlsMode);
+        ExposeAppRequest request =
+                new ExposeAppRequest(
+                        null,
+                        container,
+                        hostname,
+                        pathPrefix,
+                        port,
+                        "HTTP",
+                        https ? tlsMode : "NONE",
+                        null,
+                        false,
+                        null,
+                        null,
+                        https,
+                        null,
+                        null,
+                        "CONTAINER",
+                        null,
+                        null,
+                        null,
+                        null);
+        IngressRoute route = toRoute(request, config, null);
+        Optional<IngressRoute> existing =
+                routeRepository.findByIngressConfigIdAndHostnameAndPathPrefix(
+                        config.getId(), route.getHostname(), route.getPathPrefix());
+        if (existing.isPresent()) {
+            throw new IllegalStateException(
+                    "A route for "
+                            + route.getHostname()
+                            + route.getPathPrefix()
+                            + " already exists. Choose it as the rollout's address instead.");
+        }
+        resolveTarget(config, route);
+        route.setIngressConfigId(config.getId());
+        route.setEnabled(true);
+        route.setRolloutId(rolloutId);
+        route.setCreatedByUsername(username);
+        route = routeRepository.save(route);
+        IngressCertificate cert = ensureCertificateRow(config, route);
+        if (cert != null) {
+            route.setCertificateId(cert.getId());
+            route = routeRepository.save(route);
+        }
+        try {
+            applier.apply(config);
+        } catch (RuntimeException e) {
+            routeRepository.delete(route);
+            try {
+                applier.apply(config);
+            } catch (Exception ignored) {
+            }
+            throw e;
+        }
+        audit(
+                config,
+                IngressAction.ROUTE_CREATED,
+                "Route " + route.getHostname() + route.getPathPrefix() + " created by a rollout",
+                null,
+                username);
+        try {
+            requestCertificateIfNeeded(cert, route, null, username);
+        } catch (Exception e) {
+            log.warn("Could not request a certificate for {}: {}", hostname, e.getMessage());
+        }
+        return route;
+    }
+
+    /** Marks an existing container route as managed by a rollout (or frees it with null). */
+    public IngressRoute setRolloutOwner(String routeId, String rolloutId) {
+        IngressRoute route =
+                routeRepository
+                        .findById(routeId)
+                        .orElseThrow(() -> new IllegalStateException("The route was deleted"));
+        if (rolloutId != null && route.kind() != IngressRoute.TargetType.CONTAINER) {
+            throw bad("Choose a route that sends traffic to a container");
+        }
+        if (rolloutId != null
+                && route.getRolloutId() != null
+                && !route.getRolloutId().equals(rolloutId)) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT, "Another rollout already manages that route");
+        }
+        route.setRolloutId(rolloutId);
+        if (rolloutId == null) {
+            route.setCanaryContainerName(null);
+            route.setCanaryWeight(null);
+            route.setTrafficLog(null);
+        }
+        route = routeRepository.save(route);
+        IngressConfig config = configRepository.findById(route.getIngressConfigId()).orElse(null);
+        if (rolloutId == null && config != null && config.getStatus() == IngressStatus.ENABLED) {
+            applier.apply(config);
+        }
+        return route;
+    }
+
+    /**
+     * Sends a rollout route's traffic: {@code canaryWeight} percent to {@code canary} (0 or null
+     * for none), the rest to {@code stable}. Reloads nginx; on failure the route is put back and
+     * the error thrown, so visitors keep the previous split.
+     */
+    public IngressRoute setTraffic(
+            String routeId,
+            String stable,
+            int port,
+            String canary,
+            int canaryWeight,
+            boolean sticky,
+            boolean logTraffic) {
+        IngressRoute route =
+                routeRepository
+                        .findById(routeId)
+                        .orElseThrow(
+                                () -> new IllegalStateException("The rollout's route was deleted"));
+        for (String name : new String[] {stable, canary}) {
+            if (name != null && !name.isEmpty() && !InputValidator.isValidContainerName(name)) {
+                throw new IllegalArgumentException("Invalid container name " + name);
+            }
+        }
+        if (canaryWeight < 0 || canaryWeight > 100) {
+            throw new IllegalArgumentException("The canary share must be 0-100%");
+        }
+        IngressConfig config =
+                configRepository
+                        .findById(route.getIngressConfigId())
+                        .orElseThrow(() -> new IllegalStateException("Ingress not found"));
+        IngressRoute before = copy(route);
+        route.setTargetType(IngressRoute.TargetType.CONTAINER);
+        route.setTargetContainerName(stable);
+        route.setTargetPort(port);
+        boolean split = canary != null && !canary.isEmpty() && canaryWeight > 0;
+        route.setCanaryContainerName(split ? canary : null);
+        route.setCanaryWeight(split ? canaryWeight : null);
+        route.setCanarySticky(sticky);
+        route.setTrafficLog(logTraffic ? Boolean.TRUE : null);
+        DockerAPI api = applier.api(config);
+        String id = NginxApplier.findContainer(api, stable);
+        route.setTargetContainerId(id == null ? "" : id);
+        route = routeRepository.save(route);
+        if (config.getStatus() == IngressStatus.ENABLED) {
+            try {
+                applier.apply(config);
+            } catch (RuntimeException e) {
+                routeRepository.save(before);
+                try {
+                    applier.apply(config);
+                } catch (Exception ignored) {
+                }
+                throw e;
+            }
+        }
+        return route;
     }
 
     public void regenerateNginxConfig(String hostId, String userId, String username) {
@@ -1031,6 +1231,11 @@ public class IngressService {
         c.setRedirectUrl(r.getRedirectUrl());
         c.setRedirectPermanent(r.getRedirectPermanent());
         c.setRedirectKeepPath(r.getRedirectKeepPath());
+        c.setRolloutId(r.getRolloutId());
+        c.setCanaryContainerName(r.getCanaryContainerName());
+        c.setCanaryWeight(r.getCanaryWeight());
+        c.setCanarySticky(r.getCanarySticky());
+        c.setTrafficLog(r.getTrafficLog());
         return c;
     }
 

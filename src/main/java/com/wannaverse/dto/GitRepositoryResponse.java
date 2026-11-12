@@ -26,6 +26,7 @@ public class GitRepositoryResponse {
     private boolean hasToken;
     private boolean hasSshKey;
     private boolean runContainer;
+    private String rolloutId;
     private com.wannaverse.dto.ContainerSpec containerSpec;
     private String dockerHostName;
     private String dockerHostId;
@@ -84,6 +85,7 @@ public class GitRepositoryResponse {
         response.setHasToken(entity.getEncryptedToken() != null);
         response.setHasSshKey(entity.getEncryptedSshKey() != null);
         response.setRunContainer(!Boolean.FALSE.equals(entity.getRunContainer()));
+        response.setRolloutId(entity.getRolloutId());
         response.setContainerSpec(readSpec(entity.getContainerSpecJson()));
         response.setPollingEnabled(entity.isPollingEnabled());
         response.setPollingIntervalSeconds(entity.getPollingIntervalSeconds());

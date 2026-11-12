@@ -27,5 +27,6 @@ public enum Resource {
     DEPLOYMENT_ENVIRONMENTS,
     STACKS,
     DATABASES,
+    ROLLOUTS,
     SECURITY
 }

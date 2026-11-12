@@ -279,6 +279,8 @@ export interface GitRepo {
   composePath: string | null;
   imageName: string | null;
   runContainer: boolean;
+  /** Release new images through this rollout instead of replacing the container. */
+  rolloutId: string | null;
   containerSpec: Partial<ContainerSpec> | null;
   dockerHostId: string;
   dockerHostName: string | null;
@@ -355,6 +357,10 @@ export interface IngressRoute {
   redirectUrl: string | null;
   redirectPermanent: boolean;
   redirectKeepPath: boolean;
+  /** Set when a rollout decides where this route's visitors go. */
+  rolloutId: string | null;
+  canaryContainerName: string | null;
+  canaryWeight: number;
 }
 
 export interface Certificate {
@@ -517,7 +523,7 @@ export interface PipelineStage {
   steps: PipelineStep[];
 }
 
-export type StepType = "SHELL" | "JAR" | "DOCKERFILE" | "DOCKER_COMPOSE" | "CUSTOM_IMAGE";
+export type StepType = "SHELL" | "JAR" | "DOCKERFILE" | "DOCKER_COMPOSE" | "CUSTOM_IMAGE" | "ROLLOUT";
 
 export interface PipelineStep {
   id?: string;
@@ -553,4 +559,119 @@ export interface PipelineRun {
     durationMs: number;
     stepExecutions: { id: string; stepName: string; status: string; exitCode: number; durationMs: number; errorMessage: string | null }[];
   }[];
+}
+
+// --- rollouts ----------------------------------------------------------------------------------
+
+export type RolloutTestKind = "HTTP" | "COMMAND" | "PIPELINE" | "APPROVAL";
+
+export interface RolloutTest {
+  name?: string | null;
+  kind: RolloutTestKind;
+  path?: string | null;
+  expectStatus?: string | null;
+  bodyContains?: string | null;
+  retries?: number | null;
+  image?: string | null;
+  script?: string | null;
+  pipelineId?: string | null;
+  timeoutSeconds?: number | null;
+}
+
+export interface RolloutSlot {
+  name: string;
+  role: "active" | "previous" | "new" | "idle";
+  exists: boolean;
+  state: string | null;
+  image: string | null;
+  traffic: number | null;
+}
+
+export type RolloutRunStatus = "PENDING" | "RUNNING" | "WAITING_APPROVAL" | "SUCCEEDED" | "FAILED" | "ROLLED_BACK" | "CANCELLED";
+
+export interface RolloutStep {
+  name: string;
+  kind: string;
+  status: "PENDING" | "RUNNING" | "WAITING" | "PASSED" | "FAILED" | "SKIPPED";
+  message: string | null;
+  startedAt: number;
+  finishedAt: number;
+}
+
+export interface RolloutSample {
+  at: number;
+  percent: number;
+  newRequests: number;
+  newErrors: number;
+  newAvgMs: number;
+  oldRequests: number;
+  oldErrors: number;
+  oldAvgMs: number;
+  healthy: boolean;
+}
+
+export interface RolloutRun {
+  id: string;
+  number: number;
+  kind: "RELEASE" | "ROLLBACK";
+  image: string;
+  targetContainer: string | null;
+  stableContainer: string | null;
+  stableImage: string | null;
+  status: RolloutRunStatus;
+  phase: string | null;
+  trafficPercent: number;
+  triggerType: "MANUAL" | "GIT" | "PIPELINE" | "ROLLBACK";
+  triggeredBy: string | null;
+  commitSha: string | null;
+  steps: RolloutStep[];
+  metrics: RolloutSample[];
+  logs: string | null;
+  errorMessage: string | null;
+  approvalStep: string | null;
+  approvedBy: string | null;
+  createdAt: number;
+  startedAt: number;
+  finishedAt: number;
+}
+
+export interface Rollout {
+  id: string;
+  name: string;
+  description: string | null;
+  dockerHostId: string;
+  dockerHostName: string | null;
+  strategy: "BLUE_GREEN" | "CANARY";
+  containerName: string;
+  containerSpec: Partial<ContainerSpec> | null;
+  containerPort: number;
+  routeId: string | null;
+  hostname: string | null;
+  pathPrefix: string | null;
+  tlsMode: string | null;
+  url: string | null;
+  routeEnabled: boolean;
+  previewHostname: string | null;
+  healthPath: string;
+  startTimeoutSeconds: number;
+  tests: RolloutTest[];
+  canarySteps: string;
+  stepSeconds: number;
+  stickySessions: boolean;
+  autoRollback: boolean;
+  maxErrorRate: number;
+  maxAvgResponseMs: number;
+  minRequests: number;
+  bakeSeconds: number;
+  keepPreviousRunning: boolean;
+  activeContainer: string | null;
+  activeImage: string | null;
+  previousContainer: string | null;
+  previousImage: string | null;
+  slots: RolloutSlot[];
+  currentRun: RolloutRun | null;
+  lastRun: RolloutRun | null;
+  gitRepositories: { id: string; name: string }[];
+  createdAt: number;
+  createdBy: string | null;
 }

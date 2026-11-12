@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useMemo, useState } from "react";
 import { Plus, X } from "lucide-react";
 import { useHost, useSession } from "@/components/app";
@@ -265,6 +266,11 @@ function Routes({ routes, certs, onEdit, onChange }: { routes: IngressRoute[] | 
                   {!r.enabled && <span>paused</span>}
                   {r.authEnabled && <span>sign-in required</span>}
                   {r.forceHttpsRedirect && <span>HTTPS only</span>}
+                  {r.rolloutId && (
+                    <Link href={`/rollouts/view/?id=${r.rolloutId}`} className="underline underline-offset-2">
+                      managed by a rollout
+                    </Link>
+                  )}
                 </div>
               </div>
               <div className="text-[13px] truncate" title={routeTarget(r)}>
@@ -304,7 +310,7 @@ function Routes({ routes, certs, onEdit, onChange }: { routes: IngressRoute[] | 
                     }
                   },
                 },
-                {
+                !r.rolloutId && {
                   label: "Delete",
                   danger: true,
                   onClick: async () => {
@@ -336,6 +342,11 @@ const OTHER = "other";
 function routeTarget(r: IngressRoute) {
   if (r.targetType === "REDIRECT") return r.redirectUrl ?? "";
   if (r.targetType === "ADDRESS") return `${r.targetHost}:${r.targetPort}`;
+  if (r.canaryContainerName && r.canaryWeight > 0) {
+    return r.canaryWeight >= 100
+      ? `${r.canaryContainerName}:${r.targetPort}`
+      : `${r.targetContainerName} (${100 - r.canaryWeight}%) + ${r.canaryContainerName} (${r.canaryWeight}%) :${r.targetPort}`;
+  }
   return `${r.targetContainerName}:${r.targetPort}`;
 }
 
@@ -468,10 +479,20 @@ function RouteDialog({ hostId, route, onClose, onSaved }: { hostId: string; rout
       }
     >
       <div className="flex flex-col gap-4">
-        <div>
-          <div className="text-[13px] font-medium mb-1.5">Send visitors to</div>
-          <Segmented<Kind> label="Send visitors to" value={kind} onChange={setKind} options={kinds} />
-        </div>
+        {route?.rolloutId ? (
+          <Notice>
+            A rollout decides which container gets this route&apos;s visitors (now {routeTarget(route)}). Change the hostname, HTTPS and sign-in here; release new versions on the{" "}
+            <Link href={`/rollouts/view/?id=${route.rolloutId}`} className="underline underline-offset-2">
+              rollout&apos;s page
+            </Link>
+            .
+          </Notice>
+        ) : (
+          <div>
+            <div className="text-[13px] font-medium mb-1.5">Send visitors to</div>
+            <Segmented<Kind> label="Send visitors to" value={kind} onChange={setKind} options={kinds} />
+          </div>
+        )}
         <div className="grid gap-4 sm:grid-cols-[1fr_10rem]">
           <Field label="Hostname" hint="Its DNS record must point at this server.">
             <input className={inputClass} value={hostname} onChange={(e) => setHostname(e.target.value)} placeholder="app.example.com" autoCapitalize="off" spellCheck={false} />
@@ -480,7 +501,7 @@ function RouteDialog({ hostId, route, onClose, onSaved }: { hostId: string; rout
             <input className={inputClass} value={path} onChange={(e) => setPath(e.target.value)} placeholder="/" spellCheck={false} />
           </Field>
         </div>
-        {kind === "CONTAINER" && (
+        {kind === "CONTAINER" && !route?.rolloutId && (
           <div className="grid gap-4 sm:grid-cols-[1fr_12rem] items-start">
             <Field label="Container" hint={`Type to search${candidates.length ? ` ${candidates.length} containers` : ""}. Routes follow the container's name, so redeploys keep working.`}>
               <Combobox

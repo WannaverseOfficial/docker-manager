@@ -62,6 +62,7 @@ public class BuildService {
     private final StackService stackService;
     private final ContainerSpecService specService;
     private final SelfContainer selfContainer;
+    private final RolloutService rolloutService;
 
     private final Map<String, Set<SseEmitter>> jobEmitters = new ConcurrentHashMap<>();
     private final Map<String, ReentrantLock> repoLocks = new ConcurrentHashMap<>();
@@ -75,7 +76,9 @@ public class BuildService {
             NotificationService notificationService,
             StackService stackService,
             ContainerSpecService specService,
-            SelfContainer selfContainer) {
+            SelfContainer selfContainer,
+            @org.springframework.context.annotation.Lazy RolloutService rolloutService) {
+        this.rolloutService = rolloutService;
         this.selfContainer = selfContainer;
         this.gitService = gitService;
         this.dockerService = dockerService;
@@ -149,7 +152,16 @@ public class BuildService {
             if (repo.getDeploymentType() == DeploymentType.DOCKERFILE) {
                 String image = buildImage(jobLog, repo, repoPath, commitSha, jobId);
                 checkCancelled(jobId);
-                if (!Boolean.FALSE.equals(repo.getRunContainer())) {
+                if (repo.getRolloutId() != null) {
+                    var run =
+                            rolloutService.releaseFromGit(
+                                    repo.getRolloutId(), image, repo.getName(), commitSha);
+                    jobLog.line(
+                            "Handed the image to the rollout: release #"
+                                    + run.getNumber()
+                                    + " tests it and moves visitors over. Follow it on the"
+                                    + " Rollouts page.");
+                } else if (!Boolean.FALSE.equals(repo.getRunContainer())) {
                     runContainer(jobLog, repo, image);
                 } else {
                     jobLog.line("Running a container is turned off for this repository");

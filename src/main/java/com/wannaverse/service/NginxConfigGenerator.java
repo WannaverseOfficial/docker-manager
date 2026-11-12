@@ -37,6 +37,9 @@ public class NginxConfigGenerator {
     public static final String NJS_DIR = "/etc/nginx/njs";
     public static final String AUTH_SCRIPT = "dm_auth.js";
 
+    /** Where routes watched by a rollout log their requests (see {@link #trafficLogFile}). */
+    public static final String TRAFFIC_LOG_DIR = "/var/log/nginx";
+
     /** Loopback-only port where the sign-in page has nginx check a password. */
     static final int AUTH_CHECK_PORT = 8088;
 
@@ -64,6 +67,7 @@ public class NginxConfigGenerator {
                 byHost.computeIfAbsent(route.getHostname(), k -> new ArrayList<>()).add(route);
             }
         }
+        sb.append(trafficBlocks(routes));
         for (var entry : byHost.entrySet()) {
             List<IngressRoute> hostRoutes = new ArrayList<>(entry.getValue());
             // Longest path first, so /api wins over /.
@@ -338,9 +342,9 @@ public class NginxConfigGenerator {
         String upstreamHost =
                 route.kind() == IngressRoute.TargetType.ADDRESS
                         ? route.getTargetHost()
-                        : route.getTargetContainerName();
+                        : upstreamContainer(route);
         sb.append("        # ")
-                .append(upstreamHost)
+                .append(describeUpstream(route))
                 .append(':')
                 .append(route.getTargetPort())
                 .append('\n');
@@ -363,6 +367,13 @@ public class NginxConfigGenerator {
                     .append(";\n");
             sb.append("            limit_req zone=dm_basic burst=40 nodelay;\n");
             sb.append("            proxy_set_header Authorization $dm_upstream_authorization;\n");
+        }
+        if (logsTraffic(route)) {
+            sb.append("            set $dm_variant ").append(upstreamHost).append(";\n");
+            sb.append("            access_log /var/log/nginx/access.log main;\n");
+            sb.append("            access_log ")
+                    .append(trafficLogFile(route.getId()))
+                    .append(" dm_traffic;\n");
         }
         // A variable makes nginx resolve the container at request time.
         sb.append("            set $")
@@ -400,6 +411,108 @@ public class NginxConfigGenerator {
 
     private static String sanitizeVar(String id) {
         return "upstream_" + id.replaceAll("[^A-Za-z0-9_]", "_");
+    }
+
+    // --- traffic splitting (canary releases) -------------------------------------------------
+
+    /** The file a watched route logs to. Route ids are UUIDs; anything else is replaced. */
+    public static String trafficLogFile(String routeId) {
+        return TRAFFIC_LOG_DIR + "/dm-traffic-" + routeId.replaceAll("[^A-Za-z0-9-]", "_") + ".log";
+    }
+
+    private static String suffix(IngressRoute route) {
+        return (route.getId() == null ? "new" : route.getId()).replaceAll("[^A-Za-z0-9_]", "_");
+    }
+
+    /** Traffic split between two containers with a share for the canary below 100%. */
+    private static boolean partialSplit(IngressRoute route) {
+        return route.kind() == IngressRoute.TargetType.CONTAINER
+                && route.splitsTraffic()
+                && route.getCanaryWeight() < 100;
+    }
+
+    private static boolean logsTraffic(IngressRoute route) {
+        return route.kind() == IngressRoute.TargetType.CONTAINER
+                && Boolean.TRUE.equals(route.getTrafficLog())
+                && route.getId() != null;
+    }
+
+    /** The container name, or the variable holding it when traffic is split. */
+    private static String upstreamContainer(IngressRoute route) {
+        if (partialSplit(route)) return "$dm_target_" + suffix(route);
+        if (route.splitsTraffic()) return route.getCanaryContainerName(); // 100%
+        return route.getTargetContainerName();
+    }
+
+    private static String describeUpstream(IngressRoute route) {
+        if (route.kind() == IngressRoute.TargetType.ADDRESS) return route.getTargetHost();
+        if (partialSplit(route)) {
+            return route.getTargetContainerName()
+                    + " ("
+                    + (100 - route.getCanaryWeight())
+                    + "%) and "
+                    + route.getCanaryContainerName()
+                    + " ("
+                    + route.getCanaryWeight()
+                    + "%)";
+        }
+        return upstreamContainer(route);
+    }
+
+    /**
+     * http-level blocks for split routes: {@code split_clients} picks the canary for its share of
+     * visitors (the same visitor keeps their version when sticky), a {@code dm_variant} cookie set
+     * to "canary" or "stable" overrides the choice for testing, and a map turns the choice into a
+     * container name.
+     */
+    String trafficBlocks(List<IngressRoute> routes) {
+        StringBuilder sb = new StringBuilder();
+        boolean anyLog = false;
+        for (IngressRoute r : routes) {
+            if (!r.isEnabled()) continue;
+            if (logsTraffic(r)) anyLog = true;
+            if (!partialSplit(r)) continue;
+            String s = suffix(r);
+            String key =
+                    Boolean.FALSE.equals(r.getCanarySticky())
+                            ? "${request_id}"
+                            : "${remote_addr}${http_user_agent}" + s;
+            sb.append("\n    # Canary for ")
+                    .append(r.getHostname())
+                    .append(path(r))
+                    .append(": ")
+                    .append(r.getCanaryWeight())
+                    .append("% to ")
+                    .append(r.getCanaryContainerName())
+                    .append('\n');
+            sb.append("    split_clients \"").append(key).append("\" $dm_split_").append(s);
+            sb.append(" {\n");
+            sb.append("        ").append(r.getCanaryWeight()).append("% canary;\n");
+            sb.append("        * stable;\n");
+            sb.append("    }\n");
+            sb.append("    map $cookie_dm_variant $dm_pick_").append(s).append(" {\n");
+            sb.append("        canary canary;\n");
+            sb.append("        stable stable;\n");
+            sb.append("        default $dm_split_").append(s).append(";\n");
+            sb.append("    }\n");
+            sb.append("    map $dm_pick_")
+                    .append(s)
+                    .append(" $dm_target_")
+                    .append(s)
+                    .append(" {\n");
+            sb.append("        canary ").append(r.getCanaryContainerName()).append(";\n");
+            sb.append("        default ").append(r.getTargetContainerName()).append(";\n");
+            sb.append("    }\n");
+        }
+        if (anyLog) {
+            sb.insert(
+                    0,
+                    "\n    # Requests of routes a rollout is watching: time, container, status,"
+                            + " seconds.\n"
+                            + "    log_format dm_traffic '$msec $dm_variant $status"
+                            + " $request_time';\n");
+        }
+        return sb.toString();
     }
 
     /** A readable preview of the blocks a new route would add. */

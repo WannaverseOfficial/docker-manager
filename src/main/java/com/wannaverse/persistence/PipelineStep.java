@@ -54,6 +54,8 @@ public class PipelineStep {
         JAR,
         DOCKERFILE,
         DOCKER_COMPOSE,
-        CUSTOM_IMAGE
+        CUSTOM_IMAGE,
+        /** Releases an image through a rollout (blue/green or canary). */
+        ROLLOUT
     }
 }

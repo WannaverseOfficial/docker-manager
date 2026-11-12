@@ -14,6 +14,8 @@ public interface GitRepositoryRepository extends JpaRepository<GitRepository, St
 
     Optional<GitRepository> findByName(String name);
 
+    List<GitRepository> findByRolloutId(String rolloutId);
+
     /** Loads the repository with its host, for use outside a web request (no lazy loading). */
     @org.springframework.data.jpa.repository.EntityGraph(attributePaths = "dockerHost")
     @org.springframework.data.jpa.repository.Query("SELECT r FROM GitRepository r WHERE r.id = :id")

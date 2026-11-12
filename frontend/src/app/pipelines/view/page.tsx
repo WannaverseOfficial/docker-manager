@@ -29,7 +29,7 @@ import {
 import { API_BASE, api } from "@/lib/api";
 import { ago, dateTime, duration } from "@/lib/format";
 import { usePoll } from "@/lib/hooks";
-import type { GitRepo, Pipeline, PipelineRun, PipelineStage, PipelineStep, StepType } from "@/lib/types";
+import type { GitRepo, Pipeline, PipelineRun, PipelineStage, PipelineStep, Rollout, StepType } from "@/lib/types";
 
 export default function PipelinePage() {
   return (
@@ -262,6 +262,7 @@ const STEP_TYPES: { value: StepType; label: string; hint: string }[] = [
   { value: "DOCKER_COMPOSE", label: "Compose", hint: "Runs docker compose with a file from the workspace." },
   { value: "CUSTOM_IMAGE", label: "Any image", hint: "Runs a command in an image of your choice, e.g. node:22 for npm test." },
   { value: "JAR", label: "Java JAR", hint: "Runs a JAR with Java 21." },
+  { value: "ROLLOUT", label: "Release with a rollout", hint: "Releases an image through a blue/green or canary rollout on the same host." },
 ];
 
 type Cfg = Record<string, string>;
@@ -285,6 +286,7 @@ function blankStep(): PipelineStep {
 function Editor({ pipeline, onSaved }: { pipeline: Pipeline | null; onSaved?: () => void }) {
   const { hosts, hostId } = useHost();
   const { data: repos } = usePoll<GitRepo[]>("/api/git/repositories");
+  const { data: rollouts } = usePoll<Rollout[]>("/api/rollouts");
   const router = useRouter();
   const toast = useToast();
   const [name, setName] = useState(pipeline?.name ?? "");
@@ -514,6 +516,33 @@ function Editor({ pipeline, onSaved }: { pipeline: Pipeline | null; onSaved?: ()
                           <Field label="Project name" optional>
                             <input className={inputClass} value={c.projectName ?? ""} onChange={(e) => setCfg(i, k, "projectName", e.target.value)} />
                           </Field>
+                        </>
+                      )}
+                      {step.stepType === "ROLLOUT" && (
+                        <>
+                          <Field label="Rollout">
+                            <Select value={c.rolloutId ?? ""} onChange={(v) => setCfg(i, k, "rolloutId", v)}>
+                              <option value="">Choose a rollout</option>
+                              {(rollouts ?? [])
+                                .filter((r) => r.dockerHostId === host)
+                                .map((r) => (
+                                  <option key={r.id} value={r.id}>
+                                    {r.name}
+                                  </option>
+                                ))}
+                            </Select>
+                          </Field>
+                          <Field label="Image" hint="${NAME} uses a variable, e.g. my-app:${GIT_COMMIT_SHORT}.">
+                            <input className={`${inputClass} font-mono text-[13px]`} value={c.image ?? ""} onChange={(e) => setCfg(i, k, "image", e.target.value)} placeholder="my-app:${GIT_COMMIT_SHORT}" />
+                          </Field>
+                          <div className="sm:col-span-2">
+                            <Toggle
+                              checked={c.wait !== "false"}
+                              onChange={(v) => setCfg(i, k, "wait", v ? "true" : "false")}
+                              label="Wait for the release to finish"
+                              hint="The step then fails if the release fails or is rolled back. Approval steps count against the time limit."
+                            />
+                          </div>
                         </>
                       )}
                       {step.stepType === "JAR" && (

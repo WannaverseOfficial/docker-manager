@@ -26,6 +26,7 @@ import {
   Server,
   Settings,
   Shield,
+  Split,
   ShieldCheck,
   Sun,
   Users,
@@ -65,6 +66,7 @@ const NAV: { title: string; items: Item[] }[] = [
     items: [
       { href: "/git/", label: "Git", icon: GitBranch },
       { href: "/pipelines/", label: "Pipelines", icon: Workflow },
+      { href: "/rollouts/", label: "Rollouts", icon: Split },
       { href: "/ingress/", label: "Ingress", icon: Globe },
       { href: "/history/", label: "History", icon: History },
     ],

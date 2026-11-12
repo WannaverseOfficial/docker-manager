@@ -17,6 +17,7 @@ fees or feature gates.
 - [Quick start](#quick-start)
 - [Signing in](#signing-in)
 - [Configuration](#configuration)
+- [Rollouts: blue/green and canary](#rollouts-bluegreen-and-canary)
 - [Databases](#databases)
 - [Private registry](#private-registry)
 - [Security scanning](#security-scanning)
@@ -38,6 +39,8 @@ fees or feature gates.
 **Deploy and publish**
 
 - Git repositories and pipelines that build and deploy on push.
+- Rollouts: blue/green and canary releases with tests before visitors see a new version, live error-rate
+  checks, and automatic rollback.
 - Ingress: publish containers on your own domains through a built-in nginx proxy, with Let's Encrypt certificates
   that renew themselves, optional sign-in pages and per-route users.
 - History of every change, with one-click undo.
@@ -67,6 +70,8 @@ fees or feature gates.
 | Containers on a host | Compose stacks, including ones started elsewhere |
 | ![Ingress](https://raw.githubusercontent.com/WannaverseOfficial/docker-manager/main/docs/images/ingress.png) | ![Databases on a PostgreSQL server](https://raw.githubusercontent.com/WannaverseOfficial/docker-manager/main/docs/images/database-tables.png) |
 | Ingress routes with HTTPS and sign-in | Databases, owners and who can access them |
+| ![A canary release in progress](https://raw.githubusercontent.com/WannaverseOfficial/docker-manager/main/docs/images/rollout-canary.png) | ![Release history of a rollout](https://raw.githubusercontent.com/WannaverseOfficial/docker-manager/main/docs/images/rollout-releases.png) |
+| A canary release with half the visitors on the new version | Each release with its tests, traffic steps and results |
 | ![SQL console](https://raw.githubusercontent.com/WannaverseOfficial/docker-manager/main/docs/images/database-query.png) | ![Database backups](https://raw.githubusercontent.com/WannaverseOfficial/docker-manager/main/docs/images/database-backups.png) |
 | The SQL console, read-only by default | Scheduled backups with copies to S3 |
 | ![Private registry](https://raw.githubusercontent.com/WannaverseOfficial/docker-manager/main/docs/images/registry.png) | ![Image vulnerability scans](https://raw.githubusercontent.com/WannaverseOfficial/docker-manager/main/docs/images/security-images.png) |
@@ -172,6 +177,39 @@ Stacks you import keep running from their original folder, so their relative pat
 Docker Manager won't stop, remove, replace or disconnect its own container, and won't deploy or stop its own
 compose project: compose runs inside it, so it would go offline halfway with nothing to bring it back. Update it on
 the server with `docker compose pull && docker compose up -d`.
+
+## Rollouts: blue/green and canary
+
+**Rollouts** release new versions of an app without downtime. A rollout owns an ingress address and two containers,
+`NAME-blue` and `NAME-green`. One serves visitors; each new version starts in the other one, next to it.
+
+**A release** goes like this:
+
+1. The new version starts and must answer on its health path (200-399) within the start time.
+2. Test steps run against it while visitors still use the current version: **HTTP checks** (status and page text),
+   a **command** in any image (with `TARGET_URL` pointing at the new version), one of your **pipelines** (its steps
+   get `TARGET_URL` and join the same network), and **approval** by a person. An optional preview address always
+   shows the version being released, so people can look before approving. If a test fails, the new version is
+   stopped and nothing changes for visitors.
+3. Visitors move over:
+   - **Blue/green**: all at once, then the new version is watched for a while with the old one still running.
+   - **Canary**: a growing share at each step (for example 10%, 25%, 50%), then everyone. Each visitor keeps one
+     version (chosen by address and browser); testers can set the cookie `dm_variant=canary` or `stable`.
+4. While the new version has visitors, the proxy logs which container answered each request. Its share of 5xx
+   answers, its average response time and its health path are checked every 10 seconds. When a limit is crossed,
+   visitors go back to the previous version straight away (if automatic rollback is on).
+
+**After a release** the previous version is stopped (or kept running, if you prefer instant roll backs), and
+**Roll back** starts it again and moves visitors back. Promote, stop and roll back are also available while a
+release runs. If Docker Manager restarts during a release, visitors are sent back to the previous version.
+
+**Where new versions come from**: by hand (an image name), from a Dockerfile Git repository (choose **Release with
+a rollout** under "How to run it"; each push builds the image and releases it), or from a pipeline step **Release
+with a rollout**, which can use variables such as `my-app:${GIT_COMMIT_SHORT}` and waits for the result.
+
+Rollouts need ingress on the host. You can create a new address, or take over an existing route: its container
+becomes the current version and is stopped (not removed) once a released version serves everyone. Deleting a
+rollout keeps its address working as an ordinary route.
 
 ## Databases
 

@@ -19,6 +19,10 @@ public class CreateGitRepositoryRequest {
     private String sshKey;
     private String tokenUsername;
     private Boolean runContainer;
+
+    /** Release new images through this rollout. Empty (on update) stops using one. */
+    private String rolloutId;
+
     private com.wannaverse.dto.ContainerSpec containerSpec;
     private DeploymentType deploymentType;
     private String dockerfilePath;

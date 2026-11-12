@@ -71,7 +71,9 @@ public class PipelineExecution {
         MANUAL,
         WEBHOOK,
         POLLING,
-        SCHEDULED
+        SCHEDULED,
+        /** Started by a rollout as a test of a new version. */
+        ROLLOUT
     }
 
     @PrePersist

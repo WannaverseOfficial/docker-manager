@@ -21,6 +21,8 @@
   --danger: #f08a8a;
   --ok: #7fcf9f;
   --caution: #e6b566;
+  --slot-blue: #7ea6e0;
+  --slot-green: #7fcf9f;
   color-scheme: dark;
 }
 
@@ -38,6 +40,8 @@
   --danger: #b4233c;
   --ok: #1d7a4f;
   --caution: #9a5a06;
+  --slot-blue: #2f5fa8;
+  --slot-green: #1d7a4f;
   color-scheme: light;
 }
 
@@ -55,6 +59,8 @@
   --color-danger: var(--danger);
   --color-ok: var(--ok);
   --color-caution: var(--caution);
+  --color-slot-blue: var(--slot-blue);
+  --color-slot-green: var(--slot-green);
   --font-sans: var(--font-body);
   --font-display: var(--font-body);
   --font-mono: var(--font-code);

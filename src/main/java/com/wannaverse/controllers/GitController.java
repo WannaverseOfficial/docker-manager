@@ -31,6 +31,7 @@ public class GitController {
     private final PollingService pollingService;
     private final DriftDetectionService driftDetectionService;
     private final ContainerSpecService specService;
+    private final RolloutRepository rolloutRepository;
     private final String baseUrl;
 
     public GitController(
@@ -43,7 +44,9 @@ public class GitController {
             PollingService pollingService,
             DriftDetectionService driftDetectionService,
             ContainerSpecService specService,
+            RolloutRepository rolloutRepository,
             @Value("${app.base-url}") String baseUrl) {
+        this.rolloutRepository = rolloutRepository;
         this.specService = specService;
         this.gitRepoRepository = gitRepoRepository;
         this.jobRepository = jobRepository;
@@ -132,6 +135,7 @@ public class GitController {
         repo.setRunContainer(request.getRunContainer() == null || request.getRunContainer());
         repo.setContainerSpecJson(GitRepositoryResponse.writeSpec(request.getContainerSpec()));
         repo.setDockerHost(host);
+        repo.setRolloutId(rolloutFor(request.getRolloutId(), host.getId()));
         repo.setPollingEnabled(request.isPollingEnabled());
         repo.setPollingIntervalSeconds(
                 request.getPollingIntervalSeconds() >= 60
@@ -186,6 +190,9 @@ public class GitController {
             repo.setComposePath(blankToNull(request.getComposePath()));
         if (request.getImageName() != null) repo.setImageName(blankToNull(request.getImageName()));
         if (request.getRunContainer() != null) repo.setRunContainer(request.getRunContainer());
+        if (request.getRolloutId() != null) {
+            repo.setRolloutId(rolloutFor(request.getRolloutId(), repo.getDockerHost().getId()));
+        }
         if (request.getContainerSpec() != null) {
             validateSpec(request.getContainerSpec());
             repo.setContainerSpecJson(GitRepositoryResponse.writeSpec(request.getContainerSpec()));
@@ -605,6 +612,25 @@ public class GitController {
         } finally {
             spec.setImage(image);
         }
+    }
+
+    /** Checks that the rollout exists and runs on the repository's host. */
+    private String rolloutFor(String rolloutId, String hostId) {
+        if (isBlank(rolloutId)) return null;
+        Rollout rollout =
+                rolloutRepository
+                        .findById(rolloutId.trim())
+                        .orElseThrow(
+                                () ->
+                                        new ResponseStatusException(
+                                                HttpStatus.BAD_REQUEST, "Rollout not found"));
+        if (!rollout.getDockerHost().getId().equals(hostId)) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "The rollout runs on another Docker host; images are built on the"
+                            + " repository's host");
+        }
+        return rollout.getId();
     }
 
     private static boolean isBlank(String s) {
