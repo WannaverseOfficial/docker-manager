@@ -202,7 +202,7 @@ hosts:
 users:
   alice:
     email: alice@example.com
-    password: ${env:ALICE_PASSWORD}
+    password: ${file:/run/secrets/alice_password}
 ingress:
   local:
     routes:
@@ -216,7 +216,7 @@ ingress:
 What the file creates, it also removes when you take the entry out; things made by hand are left alone, and an entry
 that matches something existing takes it over. Data (databases, volumes) is kept unless an entry asks otherwise.
 Managed items are marked **Config file** in the UI and can only be changed through the file. Secrets come from
-`${env:NAME}` or `${file:/run/secrets/name}`, and **Download current setup** turns an existing installation into a
+files (`${file:/run/secrets/name}`) or environment variables (see the guide), and **Download current setup** turns an existing installation into a
 file. See [docs/configuration.md](docs/configuration.md) for the full guide and reference.
 
 ## Rollouts: blue/green and canary
