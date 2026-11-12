@@ -7,6 +7,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
+import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Service;
 
 import java.nio.file.Files;
@@ -34,6 +35,7 @@ public class LocalHostBootstrap {
     private static final String OLD_DEFAULT_NAME = "This server";
 
     @EventListener(ApplicationReadyEvent.class)
+    @Order(0)
     public void registerLocalSocket() {
         if (!Files.exists(Path.of(SOCKET))) return;
         if (hostRepository.count() > 0) {

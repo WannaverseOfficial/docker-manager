@@ -27,6 +27,8 @@ import {
 } from "@/components/ui";
 import { api, enc } from "@/lib/api";
 import { usePoll } from "@/lib/hooks";
+import { useManaged } from "@/lib/managed";
+import { ManagedBadge, ManagedNote } from "@/components/managed";
 import { ALLOY, type Settings, type StackView } from "@/lib/observability";
 import type { Container } from "@/lib/types";
 
@@ -37,6 +39,8 @@ export default function ObservabilityPage() {
   const { session } = useSession();
   const base = hostId ? `/api/observability/hosts/${hostId}` : null;
   const { data, error, refresh } = usePoll<{ view: StackView | null }>(session?.admin ? base : null, 5000);
+  // The stack is managed per host: the record's hostId is this host.
+  const managedEntry = useManaged().items.find((i) => i.section === "observability" && i.hostId === hostId);
 
   if (!session?.admin) {
     return (
@@ -52,11 +56,13 @@ export default function ObservabilityPage() {
       <PageHeader
         title="Observability"
         intro="Grafana with Prometheus, Mimir, Loki and Tempo, already connected to each other. Container logs, container and host metrics, and OpenTelemetry from your apps flow in by themselves."
-      />
+      >
+        {managedEntry && data?.view && <ManagedBadge entry={managedEntry.key} />}
+      </PageHeader>
       {error && <Notice tone="error">{error}</Notice>}
       {!data && !error && <Spinner />}
       {data && base && !data.view && <Create base={base} onCreated={refresh} />}
-      {data?.view && base && <Stack base={base} view={data.view} onChange={refresh} />}
+      {data?.view && base && <Stack base={base} view={data.view} managed={!!managedEntry} onChange={refresh} />}
     </>
   );
 }
@@ -290,7 +296,7 @@ function Create({ base, onCreated }: { base: string; onCreated: () => void }) {
 
 // --- a running stack -------------------------------------------------------------------------
 
-function Stack({ base, view, onChange }: { base: string; view: StackView; onChange: () => void }) {
+function Stack({ base, view, managed, onChange }: { base: string; view: StackView; managed: boolean; onChange: () => void }) {
   const s = view.stack;
   const toast = useToast();
   const confirm = useConfirm();
@@ -368,14 +374,22 @@ function Stack({ base, view, onChange }: { base: string; view: StackView; onChan
 
       {s.otlpEnabled && <Telemetry base={base} view={view} />}
 
-      <SettingsPanel base={base} view={view} onChange={onChange} disabled={working} />
+      {managed ? (
+        <Panel title="Settings">
+          <ManagedNote what="This stack's settings and removal" />
+        </Panel>
+      ) : (
+        <>
+          <SettingsPanel base={base} view={view} onChange={onChange} disabled={working} />
 
-      <Panel title="Remove">
-        <p className="text-[14px] text-slate mb-4">
-          Stops and removes the dm-obs-* containers, Grafana&apos;s ingress route and the stack&apos;s networks. You choose whether the collected data is kept.
-        </p>
-        <RemoveButton base={base} onRemoved={onChange} disabled={working} confirm={confirm} toast={toast} />
-      </Panel>
+          <Panel title="Remove">
+            <p className="text-[14px] text-slate mb-4">
+              Stops and removes the dm-obs-* containers, Grafana&apos;s ingress route and the stack&apos;s networks. You choose whether the collected data is kept.
+            </p>
+            <RemoveButton base={base} onRemoved={onChange} disabled={working} confirm={confirm} toast={toast} />
+          </Panel>
+        </>
+      )}
     </div>
   );
 }

@@ -1,5 +1,6 @@
 package com.wannaverse.controllers;
 
+import com.wannaverse.iac.ConfigLocked;
 import com.wannaverse.persistence.HostedRegistry;
 import com.wannaverse.persistence.Resource;
 import com.wannaverse.security.AdminOnly;
@@ -41,6 +42,7 @@ public class HostedRegistryController {
     public record CreateRequest(
             String mode, String hostname, Integer port, String username, String password) {}
 
+    @ConfigLocked(section = "hostedRegistries", id = "hostId", host = "hostId")
     @PostMapping
     @Auditable(resource = Resource.REGISTRIES, action = "create_hosted_registry")
     public HostedRegistry create(@PathVariable String hostId, @RequestBody CreateRequest request) {
@@ -55,6 +57,7 @@ public class HostedRegistryController {
                 SecurityContextHolder.getCurrentUsername());
     }
 
+    @ConfigLocked(section = "hostedRegistries", id = "hostId", host = "hostId")
     @DeleteMapping
     @Auditable(resource = Resource.REGISTRIES, action = "remove_hosted_registry")
     public ResponseEntity<Void> remove(
@@ -70,6 +73,7 @@ public class HostedRegistryController {
 
     public record UserRequest(String username, String password) {}
 
+    @ConfigLocked(section = "hostedRegistries", id = "hostId", host = "hostId")
     @PutMapping("/users")
     @Auditable(resource = Resource.REGISTRIES, action = "set_hosted_registry_user")
     public ResponseEntity<Void> setUser(
@@ -78,6 +82,7 @@ public class HostedRegistryController {
         return ResponseEntity.noContent().build();
     }
 
+    @ConfigLocked(section = "hostedRegistries", id = "hostId", host = "hostId")
     @DeleteMapping("/users/{username}")
     @Auditable(resource = Resource.REGISTRIES, action = "remove_hosted_registry_user")
     public ResponseEntity<Void> removeUser(

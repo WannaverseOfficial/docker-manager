@@ -7,6 +7,8 @@ import { Badge, Button, Empty, LinkButton, Modal, Notice, PageHeader, Search, Se
 import { api } from "@/lib/api";
 import { ago } from "@/lib/format";
 import { usePoll, useStored } from "@/lib/hooks";
+import { useManaged } from "@/lib/managed";
+import { ManagedBadge } from "@/components/managed";
 import type { StackSummary } from "@/lib/types";
 
 const SOURCE: Record<StackSummary["source"], string> = {
@@ -34,6 +36,7 @@ export default function StacksPage() {
   const admin = !!session?.admin;
   const { data, error, refresh } = usePoll<StackSummary[]>(hostId ? `/api/docker/hosts/${hostId}/stacks` : null, 8000);
   const confirm = useConfirm();
+  const managed = useManaged();
   const [importing, setImporting] = useState(false);
   const [results, setResults] = useState<ImportResult[] | null>(null);
   const unmanaged = (data ?? []).filter((s) => !s.managed);
@@ -121,7 +124,11 @@ export default function StacksPage() {
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <div className="font-display text-[1.05rem] truncate">{s.name}</div>
-                    <div className="text-[13px] text-slate">{s.templateName ? `From ${s.templateName}` : SOURCE[s.source]}</div>
+                    <div className="text-[13px] text-slate flex items-center gap-2">
+                      {s.templateName ? `From ${s.templateName}` : SOURCE[s.source]}
+                      {/* The card is a link already, so a plain badge (ManagedBadge links to the config page). */}
+                      {managed.isManaged("stacks", s.name, hostId) && <ManagedBadge link={false} />}
+                    </div>
                   </div>
                   <span className="flex items-center gap-1.5 text-[13px] shrink-0">
                     <span

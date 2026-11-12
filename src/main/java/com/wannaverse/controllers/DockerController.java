@@ -7,6 +7,7 @@ import com.wannaverse.dto.ContainerSpec;
 import com.wannaverse.dto.ContainerStatsResponse;
 import com.wannaverse.dto.ExecCommandRequest;
 import com.wannaverse.dto.HostInfoResponse;
+import com.wannaverse.iac.ConfigLocked;
 import com.wannaverse.persistence.ContainerDriftStatus;
 import com.wannaverse.persistence.DockerHost;
 import com.wannaverse.persistence.DockerHostRepository;
@@ -130,8 +131,11 @@ public class DockerController {
             String tlsKeyPem,
             String sshPrivateKey) {}
 
-    /** Applies the connection details of a request to a host, encrypted. */
-    private void applyCredentials(DockerHost host, HostRequest request) {
+    /**
+     * Applies the connection details of a request to a host, encrypted. Also used by the
+     * configuration file.
+     */
+    public void applyCredentials(DockerHost host, HostRequest request) {
         String url = host.getDockerHostUrl();
         if (HostConnections.isSsh(url)) {
             if (notBlank(request.sshPrivateKey())) {
@@ -185,7 +189,7 @@ public class DockerController {
     }
 
     /** Pings the host with these details before they are saved. */
-    private void testConnection(DockerHost host) {
+    public void testConnection(DockerHost host) {
         com.github.dockerjava.api.DockerClient client;
         try {
             client = dockerService.createClient(host);
@@ -249,6 +253,7 @@ public class DockerController {
     }
 
     @PutMapping("/hosts/{hostId}")
+    @ConfigLocked(section = "hosts", id = "hostId")
     @RequirePermission(resource = Resource.DOCKER_HOSTS, action = "update", hostIdParam = "hostId")
     @Auditable(resource = Resource.DOCKER_HOSTS, action = "update", resourceIdParam = "hostId")
     public ResponseEntity<DockerHost> updateHost(
@@ -279,6 +284,7 @@ public class DockerController {
     }
 
     @DeleteMapping("/hosts/{hostId}")
+    @ConfigLocked(section = "hosts", id = "hostId")
     @RequirePermission(resource = Resource.DOCKER_HOSTS, action = "delete", hostIdParam = "hostId")
     @Auditable(resource = Resource.DOCKER_HOSTS, action = "delete", resourceIdParam = "hostId")
     public ResponseEntity<Void> removeHost(@PathVariable String hostId) {
@@ -485,6 +491,7 @@ public class DockerController {
             action = "update",
             hostIdParam = "hostId",
             resourceIdParam = "containerId")
+    @ConfigLocked(section = "containers", id = "containerId", host = "hostId")
     @Auditable(resource = Resource.CONTAINERS, action = "update", resourceIdParam = "containerId")
     public ResponseEntity<Map<String, String>> updateContainer(
             @PathVariable String hostId,
@@ -734,6 +741,7 @@ public class DockerController {
             action = "delete",
             hostIdParam = "hostId",
             resourceIdParam = "containerId")
+    @ConfigLocked(section = "containers", id = "containerId", host = "hostId")
     @Auditable(resource = Resource.CONTAINERS, action = "delete", resourceIdParam = "containerId")
     public ResponseEntity<Void> removeContainer(
             @PathVariable String hostId,
@@ -770,6 +778,7 @@ public class DockerController {
             action = "rename",
             hostIdParam = "hostId",
             resourceIdParam = "containerId")
+    @ConfigLocked(section = "containers", id = "containerId", host = "hostId")
     @Auditable(resource = Resource.CONTAINERS, action = "rename", resourceIdParam = "containerId")
     public ResponseEntity<Void> renameContainer(
             @PathVariable String hostId,
@@ -981,6 +990,7 @@ public class DockerController {
             action = "delete",
             hostIdParam = "hostId",
             resourceIdParam = "volumeName")
+    @ConfigLocked(section = "volumes", id = "volumeName", host = "hostId")
     @Auditable(resource = Resource.VOLUMES, action = "delete", resourceIdParam = "volumeName")
     public ResponseEntity<Void> removeVolume(
             @PathVariable String hostId, @PathVariable String volumeName) {
@@ -1045,6 +1055,7 @@ public class DockerController {
             action = "delete",
             hostIdParam = "hostId",
             resourceIdParam = "networkId")
+    @ConfigLocked(section = "networks", id = "networkId", host = "hostId")
     @Auditable(resource = Resource.NETWORKS, action = "delete", resourceIdParam = "networkId")
     public ResponseEntity<Void> removeNetwork(
             @PathVariable String hostId, @PathVariable String networkId) {

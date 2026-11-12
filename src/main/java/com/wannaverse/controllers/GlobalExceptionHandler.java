@@ -99,6 +99,10 @@ public class GlobalExceptionHandler {
         Map<String, Object> response = new HashMap<>();
         response.put("error", ex.getReason());
         response.put("message", ex.getReason());
+        // Refusals checked inside a handler say the same as ConfigLockInterceptor's.
+        if (com.wannaverse.iac.ConfigLockInterceptor.MESSAGE.equals(ex.getReason())) {
+            response.put("code", "MANAGED_BY_CONFIG");
+        }
         return ResponseEntity.status(ex.getStatusCode()).body(response);
     }
 

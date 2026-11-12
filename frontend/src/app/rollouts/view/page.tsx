@@ -7,11 +7,13 @@ import { Check, Circle, Loader2, Minus, Pause, X } from "lucide-react";
 import { useSession } from "@/components/app";
 import { RolloutBadge } from "@/components/badges";
 import { LineChart } from "@/components/LineChart";
+import { ManagedBadge, ManagedNote } from "@/components/managed";
 import { RolloutForm, rolloutBody, rolloutFormFrom } from "@/components/RolloutForm";
 import { Badge, Button, Copyable, Empty, Field, KeyValues, LogView, Menu, Modal, Notice, PageHeader, Panel, Spinner, Tabs, inputClass, useConfirm, useToast } from "@/components/ui";
 import { api } from "@/lib/api";
 import { ago, dateTime, duration } from "@/lib/format";
 import { usePoll } from "@/lib/hooks";
+import { useManaged } from "@/lib/managed";
 import type { Rollout, RolloutRun, RolloutSample, RolloutSlot, RolloutStep } from "@/lib/types";
 
 type Tab = "overview" | "releases" | "settings";
@@ -38,6 +40,7 @@ function RolloutView() {
   const [selected, setSelected] = useState<string | null>(null);
   const [saveBusy, setSaveBusy] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const managed = useManaged().find("rollouts", id);
 
   if (!id) return null;
   if (error && !r) return <Notice tone="error">{error}</Notice>;
@@ -75,13 +78,15 @@ function RolloutView() {
           </>
         }
       >
+        {managed && <ManagedBadge entry={managed.key} />}
         <Button disabled={running} onClick={() => setReleaseOpen(true)}>
           Release a version
         </Button>
         <Menu
           items={[
             !!r.previousContainer && !running && { label: `Roll back to ${r.previousImage ?? r.previousContainer}`, onClick: rollback },
-            session?.admin && {
+            session?.admin &&
+              !managed && {
               label: "Delete rollout",
               danger: true,
               onClick: async () => {
@@ -142,7 +147,9 @@ function RolloutView() {
 
       {tab === "releases" && <Releases rollout={r} selected={selected} onSelect={setSelected} onChange={refresh} />}
 
-      {tab === "settings" && (
+      {tab === "settings" && managed && <ManagedNote what="This rollout" />}
+
+      {tab === "settings" && !managed && (
         <RolloutForm
           key={r.id + r.routeId}
           initial={rolloutFormFrom(r, r.dockerHostId)}

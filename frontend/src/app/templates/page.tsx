@@ -4,8 +4,10 @@ import { Suspense, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Badge, Button, CodeEditor, Empty, Field, Menu, Modal, Notice, PageHeader, Search, Segmented, Select, Spinner, inputClass, useConfirm, useToast } from "@/components/ui";
 import { useSession } from "@/components/app";
+import { ManagedBadge } from "@/components/managed";
 import { api } from "@/lib/api";
 import { usePoll } from "@/lib/hooks";
+import { useManaged } from "@/lib/managed";
 import type { Template } from "@/lib/types";
 
 export default function TemplatesPage() {
@@ -25,6 +27,7 @@ function Templates() {
   const toast = useToast();
   const confirm = useConfirm();
   const { data, error, refresh } = usePoll<Template[]>("/api/templates");
+  const managed = useManaged();
   const [q, setQ] = useState("");
   const [kind, setKind] = useState<Kind>((params.get("type") as Kind) || "all");
   const [category, setCategory] = useState("");
@@ -77,60 +80,64 @@ function Templates() {
       {!data && !error && <Spinner />}
       {data && list.length === 0 && <Empty title="Nothing matches">Try another search or category.</Empty>}
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-        {list.map((t) => (
-          <div key={t.id} className="rounded-2xl bg-paper border border-line p-5 flex flex-col gap-3 min-w-0">
-            <div className="flex items-start gap-3">
-              <Logo src={t.logo} name={t.name} />
-              <div className="min-w-0 flex-1">
-                <div className="font-medium truncate">{t.name}</div>
-                <div className="flex flex-wrap gap-1.5 mt-0.5">
-                  <Badge>{t.category}</Badge>
-                  <Badge>{t.type === "COMPOSE" ? "stack" : "container"}</Badge>
-                  {!t.system && <Badge tone="live">yours</Badge>}
+        {list.map((t) => {
+          const fromFile = managed.find("templates", t.id);
+          return (
+            <div key={t.id} className="rounded-2xl bg-paper border border-line p-5 flex flex-col gap-3 min-w-0">
+              <div className="flex items-start gap-3">
+                <Logo src={t.logo} name={t.name} />
+                <div className="min-w-0 flex-1">
+                  <div className="font-medium truncate">{t.name}</div>
+                  <div className="flex flex-wrap gap-1.5 mt-0.5">
+                    <Badge>{t.category}</Badge>
+                    <Badge>{t.type === "COMPOSE" ? "stack" : "container"}</Badge>
+                    {!t.system && <Badge tone="live">yours</Badge>}
+                    {fromFile && <ManagedBadge entry={fromFile.key} />}
+                  </div>
                 </div>
-              </div>
-              <Menu
-                items={[
-                  { label: "Duplicate", onClick: async () => {
-                      try {
-                        await api.post(`/api/templates/${t.id}/duplicate?name=${encodeURIComponent(t.name + " copy")}`);
-                        toast("Template duplicated");
-                        refresh();
-                      } catch (e) {
-                        toast((e as Error).message, "error");
-                      }
-                    } },
-                  !t.system && { label: "Edit", onClick: () => setEditing(t) },
-                  !t.system && {
-                    label: "Delete",
-                    danger: true,
-                    onClick: async () => {
-                      if (!(await confirm({ title: `Delete ${t.name}?`, confirm: "Delete", danger: true }))) return;
-                      try {
-                        await api.del(`/api/templates/${t.id}`);
-                        refresh();
-                      } catch (e) {
-                        toast((e as Error).message, "error");
-                      }
+                <Menu
+                  items={[
+                    { label: "Duplicate", onClick: async () => {
+                        try {
+                          await api.post(`/api/templates/${t.id}/duplicate?name=${encodeURIComponent(t.name + " copy")}`);
+                          toast("Template duplicated");
+                          refresh();
+                        } catch (e) {
+                          toast((e as Error).message, "error");
+                        }
+                      } },
+                    !t.system && !fromFile && { label: "Edit", onClick: () => setEditing(t) },
+                    !t.system && !fromFile && {
+                      label: "Delete",
+                      danger: true,
+                      onClick: async () => {
+                        if (!(await confirm({ title: `Delete ${t.name}?`, confirm: "Delete", danger: true }))) return;
+                        try {
+                          await api.del(`/api/templates/${t.id}`);
+                          refresh();
+                        } catch (e) {
+                          toast((e as Error).message, "error");
+                        }
+                      },
                     },
-                  },
-                  !!t.documentation && { label: "Documentation", onClick: () => void window.open(t.documentation!, "_blank", "noopener") },
-                ]}
-              />
+                    !!t.documentation && { label: "Documentation", onClick: () => void window.open(t.documentation!, "_blank", "noopener") },
+                  ]}
+                />
+              </div>
+              <p className="text-[14px] text-slate line-clamp-3 flex-1">{t.description}</p>
+              <div className="text-[12.5px] text-slate font-mono truncate">{t.type === "COMPOSE" ? "docker-compose" : t.imageName}</div>
+              <div>
+                {t.type === "COMPOSE" && !session?.admin ? (
+                  <span className="text-[12.5px] text-slate">Stacks are created by administrators.</span>
+                ) : (
+                  <Button size="sm" onClick={() => use(t)}>
+                    Use template
+                  </Button>
+                )}
+              </div>
             </div>
-            <p className="text-[14px] text-slate line-clamp-3 flex-1">{t.description}</p>
-            <div className="text-[12.5px] text-slate font-mono truncate">{t.type === "COMPOSE" ? "docker-compose" : t.imageName}</div>
-            <div>
-              {t.type === "COMPOSE" && !session?.admin ? (
-                <span className="text-[12.5px] text-slate">Stacks are created by administrators.</span>
-              ) : (
-                <Button size="sm" onClick={() => use(t)}>
-                  Use template
-                </Button>
-              )}
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
       {editing && <TemplateEditor template={editing} onClose={() => setEditing(null)} onSaved={() => (setEditing(null), refresh())} />}
     </>

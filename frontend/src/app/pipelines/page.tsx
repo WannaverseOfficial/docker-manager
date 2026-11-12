@@ -6,11 +6,14 @@ import { JobBadge } from "@/components/badges";
 import { Badge, Empty, LinkButton, Notice, PageHeader, Spinner } from "@/components/ui";
 import { ago } from "@/lib/format";
 import { usePoll } from "@/lib/hooks";
+import { useManaged } from "@/lib/managed";
+import { ManagedBadge } from "@/components/managed";
 import type { Pipeline } from "@/lib/types";
 
 export default function PipelinesPage() {
   const { session } = useSession();
   const { data, error } = usePoll<Pipeline[]>("/api/pipelines", 10000);
+  const { isManaged } = useManaged();
   return (
     <>
       <PageHeader title="Pipelines" intro="Build, test and deploy in stages. Each step runs in its own container with the repository checked out in /workspace.">
@@ -32,6 +35,7 @@ export default function PipelinesPage() {
                   <span className="flex items-center gap-2">
                     <span className="truncate font-medium group-hover:underline underline-offset-2">{p.name}</span>
                     {!p.enabled && <Badge>off</Badge>}
+                    {isManaged("pipelines", p.id) && <ManagedBadge link={false} />}
                   </span>
                   <span className="block text-[13px] text-slate truncate">{p.gitRepositoryName ?? "No repository"}</span>
                 </span>

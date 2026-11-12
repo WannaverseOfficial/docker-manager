@@ -4,6 +4,8 @@ import Link from "next/link";
 import { Badge, Empty, LinkButton, Notice, PageHeader, Spinner } from "@/components/ui";
 import { ago, shortId } from "@/lib/format";
 import { usePoll } from "@/lib/hooks";
+import { useManaged } from "@/lib/managed";
+import { ManagedBadge } from "@/components/managed";
 import { useSession } from "@/components/app";
 import { JobBadge } from "@/components/badges";
 import type { DeploymentJob, GitRepo } from "@/lib/types";
@@ -12,6 +14,7 @@ export default function GitPage() {
   const { session } = useSession();
   const { data: repos, error } = usePoll<GitRepo[]>("/api/git/repositories", 15000);
   const { data: jobs } = usePoll<DeploymentJob[]>("/api/git/jobs", 5000);
+  const { isManaged } = useManaged();
   const latest = new Map<string, DeploymentJob>();
   for (const j of jobs ?? []) if (!latest.has(j.gitRepositoryId)) latest.set(j.gitRepositoryId, j);
 
@@ -45,6 +48,7 @@ export default function GitPage() {
                     {r.webhookEnabled && <Badge>on push</Badge>}
                     {r.pollingEnabled && <Badge>polling</Badge>}
                     {r.driftStatus === "BEHIND" && <Badge tone="warn">new commits</Badge>}
+                    {isManaged("gitRepositories", r.id) && <ManagedBadge link={false} />}
                   </span>
                   <span className="text-[13px]">
                     {j ? <JobBadge status={j.status} /> : <span className="text-slate">Never deployed</span>}

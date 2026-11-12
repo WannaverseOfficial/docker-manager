@@ -6,6 +6,7 @@ import com.wannaverse.dto.PasswordResetResponse;
 import com.wannaverse.dto.PermissionResponse;
 import com.wannaverse.dto.UpdateUserRequest;
 import com.wannaverse.dto.UserResponse;
+import com.wannaverse.iac.ConfigLocked;
 import com.wannaverse.persistence.Resource;
 import com.wannaverse.security.AdminOnly;
 import com.wannaverse.security.Auditable;
@@ -68,6 +69,7 @@ public class UserController {
     }
 
     @PutMapping("/{id}")
+    @ConfigLocked(section = "users", id = "id")
     @RequirePermission(resource = Resource.USERS, action = "update")
     @Auditable(
             resource = Resource.USERS,
@@ -80,6 +82,7 @@ public class UserController {
     }
 
     @DeleteMapping("/{id}")
+    @ConfigLocked(section = "users", id = "id")
     @RequirePermission(resource = Resource.USERS, action = "delete")
     @Auditable(resource = Resource.USERS, action = "delete", resourceIdParam = "id")
     public ResponseEntity<Void> deleteUser(@PathVariable String id) {
@@ -88,6 +91,7 @@ public class UserController {
     }
 
     @PostMapping("/{id}/reset-password")
+    @ConfigLocked(section = "users", id = "id")
     @RequirePermission(resource = Resource.USERS, action = "reset_password")
     @Auditable(resource = Resource.USERS, action = "reset_password", resourceIdParam = "id")
     public ResponseEntity<PasswordResetResponse> resetPassword(@PathVariable String id) {
@@ -101,6 +105,7 @@ public class UserController {
     }
 
     @PostMapping("/{id}/permissions")
+    @ConfigLocked(section = "users", id = "id")
     @RequirePermission(resource = Resource.USERS, action = "manage_permissions")
     @Auditable(
             resource = Resource.USERS,
@@ -114,6 +119,7 @@ public class UserController {
     }
 
     @DeleteMapping("/{id}/permissions/{permissionId}")
+    @ConfigLocked(section = "users", id = "id")
     @RequirePermission(resource = Resource.USERS, action = "manage_permissions")
     @Auditable(resource = Resource.USERS, action = "revoke_permission", resourceIdParam = "id")
     public ResponseEntity<Void> revokePermission(
@@ -123,6 +129,7 @@ public class UserController {
     }
 
     @PostMapping("/{id}/groups/{groupId}")
+    @ConfigLocked(section = "users", id = "id")
     @RequirePermission(resource = Resource.USER_GROUPS, action = "manage_members")
     @Auditable(resource = Resource.USER_GROUPS, action = "add_member", resourceIdParam = "groupId")
     public ResponseEntity<Void> addToGroup(@PathVariable String id, @PathVariable String groupId) {
@@ -131,6 +138,7 @@ public class UserController {
     }
 
     @DeleteMapping("/{id}/groups/{groupId}")
+    @ConfigLocked(section = "users", id = "id")
     @RequirePermission(resource = Resource.USER_GROUPS, action = "manage_members")
     @Auditable(
             resource = Resource.USER_GROUPS,

@@ -5,6 +5,8 @@ import { X } from "lucide-react";
 import { useHost, useSession } from "@/components/app";
 import { Badge, Button, Copyable, Empty, Field, IconButton, Menu, Modal, Notice, PageHeader, Panel, Select, Spinner, Tabs, Toggle, inputClass, useConfirm, useToast } from "@/components/ui";
 import { api } from "@/lib/api";
+import { useManaged } from "@/lib/managed";
+import { ManagedBadge } from "@/components/managed";
 import { ago, hostLabel, titleCase } from "@/lib/format";
 import { usePoll } from "@/lib/hooks";
 import type { Group, Permission, User } from "@/lib/types";
@@ -38,6 +40,7 @@ function Users() {
   const [temp, setTemp] = useState<{ username: string; password: string } | null>(null);
   const toast = useToast();
   const confirm = useConfirm();
+  const managed = useManaged();
 
   const update = async (u: User, body: Partial<User>, msg: string) => {
     try {
@@ -67,6 +70,7 @@ function Users() {
                   {u.admin && <Badge tone="live">administrator</Badge>}
                   {!u.enabled && <Badge tone="danger">disabled</Badge>}
                   {u.mustChangePassword && <Badge tone="warn">temporary password</Badge>}
+                  {managed.isManaged("users", u.id) && <ManagedBadge entry={managed.find("users", u.id)?.key} />}
                   {u.groupNames.map((g) => (
                     <Badge key={g}>{g}</Badge>
                   ))}
@@ -76,6 +80,7 @@ function Users() {
                   {` · last signed in ${ago(u.lastLoginAt)}`}
                 </div>
               </div>
+              {!managed.isManaged("users", u.id) && (
               <Menu
                 items={[
                   !u.admin && { label: "Permissions", onClick: () => setPerms(u) },
@@ -122,6 +127,7 @@ function Users() {
                   },
                 ]}
               />
+              )}
             </li>
           ))}
         </ul>
@@ -205,6 +211,7 @@ function Groups() {
   const [perms, setPerms] = useState<Group | null>(null);
   const toast = useToast();
   const confirm = useConfirm();
+  const managed = useManaged();
   return (
     <>
       <Panel title="New group" className="mb-6">
@@ -234,9 +241,14 @@ function Groups() {
           {data.map((g) => (
             <li key={g.id} className="flex items-center gap-3 px-4 py-3">
               <div className="flex-1 min-w-0">
-                <div className="font-medium">{g.name}</div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-medium">{g.name}</span>
+                  {managed.isManaged("groups", g.id) && <ManagedBadge entry={managed.find("groups", g.id)?.key} />}
+                </div>
                 <div className="text-[13px] text-slate">{g.memberCount} members. Add people from the Users tab.</div>
               </div>
+              {!managed.isManaged("groups", g.id) && (
+              <>
               <Button tone="quiet" size="sm" onClick={() => setPerms(g)}>
                 Permissions
               </Button>
@@ -253,6 +265,8 @@ function Groups() {
                   },
                 ]}
               />
+              </>
+              )}
             </li>
           ))}
         </ul>

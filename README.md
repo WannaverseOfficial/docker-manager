@@ -18,6 +18,7 @@ fees or feature gates.
 - [Quick start](#quick-start)
 - [Signing in](#signing-in)
 - [Configuration](#configuration)
+- [Configuration as code](#configuration-as-code)
 - [Rollouts: blue/green and canary](#rollouts-bluegreen-and-canary)
 - [Databases](#databases)
 - [Observability](#observability)
@@ -65,6 +66,8 @@ fees or feature gates.
 **Hosts**
 
 - Manage the local Docker host and remote hosts over TLS or SSH from one place.
+- Configuration as code: describe everything in one YAML file, preview the changes, apply them, and keep it in
+  git.
 
 ## Screenshots
 
@@ -147,6 +150,8 @@ docker logs docker-manager
 | `API_DOCS_ENABLED` | `false` | Serves the OpenAPI description and Swagger UI |
 | `CORS_ALLOWED_ORIGINS` | none | Only needed to run the UI from another origin during development |
 | `LOG_LEVEL` | `INFO` | Server log level |
+| `DM_CONFIG_FILE` | none | A [configuration file](#configuration-as-code) to apply at startup and on every change |
+| `DM_CONFIG_RECONCILE_SECONDS` | `300` | How often managed things removed by other means are put back; `0` turns it off |
 
 ### Secrets
 
@@ -181,6 +186,38 @@ Stacks you import keep running from their original folder, so their relative pat
 Docker Manager won't stop, remove, replace or disconnect its own container, and won't deploy or stop its own
 compose project: compose runs inside it, so it would go offline halfway with nothing to bring it back. Update it on
 the server with `docker compose pull && docker compose up -d`.
+
+## Configuration as code
+
+The whole setup can live in one YAML file: hosts, users and groups, registries, image rules, templates, networks,
+volumes, containers, stacks, ingress routes and certificates, databases, observability, rollouts, git repositories
+and pipelines. Point `DM_CONFIG_FILE` at it and Docker Manager applies it at startup and whenever it changes, or
+paste it on the **Configuration** page (administrators) to preview the changes and apply them.
+
+```yaml
+version: 1
+hosts:
+  local:
+    url: unix:///var/run/docker.sock
+users:
+  alice:
+    email: alice@example.com
+    password: ${env:ALICE_PASSWORD}
+ingress:
+  local:
+    routes:
+      app:
+        hostname: app.example.com
+        container: web
+        port: 8080
+        tls: lets-encrypt
+```
+
+What the file creates, it also removes when you take the entry out; things made by hand are left alone, and an entry
+that matches something existing takes it over. Data (databases, volumes) is kept unless an entry asks otherwise.
+Managed items are marked **Config file** in the UI and can only be changed through the file. Secrets come from
+`${env:NAME}` or `${file:/run/secrets/name}`, and **Download current setup** turns an existing installation into a
+file. See [docs/configuration.md](docs/configuration.md) for the full guide and reference.
 
 ## Rollouts: blue/green and canary
 

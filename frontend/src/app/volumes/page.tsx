@@ -5,9 +5,11 @@ import { useMemo, useState } from "react";
 import { Trash2 } from "lucide-react";
 import { useHost, useSession } from "@/components/app";
 import { Badge, BulkBar, Button, Checkbox, Empty, Field, IconButton, Modal, Notice, PageHeader, Pagination, Search, SelectHeader, Spinner, inputClass, useConfirm, useToast } from "@/components/ui";
+import { ManagedBadge } from "@/components/managed";
 import { api } from "@/lib/api";
 import { ago, containerName, plural } from "@/lib/format";
 import { runBulk, usePaged, usePoll, useSelection } from "@/lib/hooks";
+import { useManaged } from "@/lib/managed";
 import type { Container, Volume } from "@/lib/types";
 
 const PROJECT = "com.docker.compose.project";
@@ -38,13 +40,17 @@ export default function VolumesPage() {
     [volumes, q, usedBy],
   );
 
-  // Volumes a container still mounts can't be deleted, so they can't be selected.
+  // Volumes a container still mounts can't be deleted, so they can't be selected. Neither can volumes the
+  // configuration file manages: they are removed through the file.
+  const managed = useManaged();
+  const managedEntry = (v: Volume) => managed.find("volumes", v.Name, hostId)?.key;
   const ready = containers != null;
-  const unused = useMemo(() => (ready ? list.filter((v) => !usedBy.has(v.Name)) : []), [list, usedBy, ready]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const unused = useMemo(() => (ready ? list.filter((v) => !usedBy.has(v.Name) && !managedEntry(v)) : []), [list, usedBy, ready, managed.items]);
   const unusedIds = useMemo(() => unused.map((v) => v.Name), [unused]);
   const sel = useSelection(unusedIds);
   const paged = usePaged(list, `${q}|${hostId}`);
-  const pageUnused = paged.slice.filter((v) => ready && !usedBy.has(v.Name)).map((v) => v.Name);
+  const pageUnused = paged.slice.filter((v) => ready && !usedBy.has(v.Name) && !managedEntry(v)).map((v) => v.Name);
   const pageAll = pageUnused.length > 0 && pageUnused.every(sel.isSelected);
   const pageSome = pageUnused.some(sel.isSelected);
 
@@ -125,9 +131,9 @@ export default function VolumesPage() {
                 <li key={v.Name} className={`flex items-center gap-3 px-4 py-3 ${sel.isSelected(v.Name) ? "bg-well/50" : ""}`}>
                   <Checkbox
                     label={`Select ${short(v.Name)}`}
-                    title={users.length ? "In use by a container" : undefined}
+                    title={managedEntry(v) ? "Managed by the configuration file" : users.length ? "In use by a container" : undefined}
                     checked={sel.isSelected(v.Name)}
-                    disabled={!ready || users.length > 0}
+                    disabled={!ready || users.length > 0 || !!managedEntry(v)}
                     onChange={(on) => sel.toggle(v.Name, on)}
                   />
                   <div className="flex-1 min-w-0 grid gap-x-6 gap-y-1 sm:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)_7rem] items-center">
@@ -143,6 +149,7 @@ export default function VolumesPage() {
                         {anonymous && <span>anonymous</span>}
                         {project && <span>stack {project}</span>}
                         <span>{v.Driver}</span>
+                        {managedEntry(v) && <ManagedBadge entry={`volumes.${managedEntry(v)}`} />}
                       </div>
                     </div>
                     <div className="text-[13px]">
@@ -160,9 +167,11 @@ export default function VolumesPage() {
                     </div>
                     <div className="text-[12.5px] text-slate">{v.CreatedAt ? ago(v.CreatedAt) : ""}</div>
                   </div>
-                  <IconButton label="Delete volume" onClick={() => remove(v)} disabled={users.length > 0} title={users.length ? "In use" : "Delete volume"}>
-                    <Trash2 size={16} />
-                  </IconButton>
+                  {!managedEntry(v) && (
+                    <IconButton label="Delete volume" onClick={() => remove(v)} disabled={users.length > 0} title={users.length ? "In use" : "Delete volume"}>
+                      <Trash2 size={16} />
+                    </IconButton>
+                  )}
                 </li>
               );
             })}

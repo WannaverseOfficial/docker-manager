@@ -3,6 +3,7 @@ package com.wannaverse.controllers;
 import com.wannaverse.dto.SmtpConfigurationRequest;
 import com.wannaverse.dto.SmtpConfigurationResponse;
 import com.wannaverse.dto.TestEmailRequest;
+import com.wannaverse.iac.ConfigLocked;
 import com.wannaverse.persistence.Resource;
 import com.wannaverse.persistence.SmtpConfiguration;
 import com.wannaverse.persistence.SmtpConfigurationRepository;
@@ -73,6 +74,7 @@ public class SmtpController {
     }
 
     @PutMapping
+    @ConfigLocked(section = "smtp")
     @RequirePermission(resource = Resource.NOTIFICATIONS, action = "manage")
     @Auditable(resource = Resource.NOTIFICATIONS, action = "update_smtp")
     public ResponseEntity<SmtpConfigurationResponse> updateSmtpConfiguration(
@@ -144,6 +146,7 @@ public class SmtpController {
     }
 
     @DeleteMapping
+    @ConfigLocked(section = "smtp")
     @RequirePermission(resource = Resource.NOTIFICATIONS, action = "manage")
     @Auditable(resource = Resource.NOTIFICATIONS, action = "delete_smtp")
     public ResponseEntity<Void> deleteSmtpConfiguration() {

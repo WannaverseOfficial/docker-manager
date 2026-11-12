@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.wannaverse.dto.PipelineExecutionResponse;
 import com.wannaverse.dto.PipelineRequest;
 import com.wannaverse.dto.PipelineResponse;
+import com.wannaverse.iac.ConfigLocked;
 import com.wannaverse.persistence.Pipeline;
 import com.wannaverse.persistence.PipelineExecution;
 import com.wannaverse.persistence.PipelineExecutionRepository;
@@ -78,6 +79,7 @@ public class PipelineController {
 
     @PutMapping("/{id}")
     @com.wannaverse.security.AdminOnly
+    @ConfigLocked(section = "pipelines", id = "id")
     @RequirePermission(resource = Resource.PIPELINES, action = "update")
     public ResponseEntity<PipelineResponse> updatePipeline(
             @PathVariable String id, @RequestBody PipelineRequest request) {
@@ -86,6 +88,7 @@ public class PipelineController {
 
     @DeleteMapping("/{id}")
     @com.wannaverse.security.AdminOnly
+    @ConfigLocked(section = "pipelines", id = "id")
     @RequirePermission(resource = Resource.PIPELINES, action = "delete")
     public ResponseEntity<Void> deletePipeline(@PathVariable String id) {
         pipelineService.deletePipeline(id);
@@ -110,6 +113,7 @@ public class PipelineController {
 
     @PatchMapping("/{id}/enabled")
     @com.wannaverse.security.AdminOnly
+    @ConfigLocked(section = "pipelines", id = "id")
     @RequirePermission(resource = Resource.PIPELINES, action = "update")
     public ResponseEntity<PipelineResponse> togglePipelineEnabled(
             @PathVariable String id, @RequestBody Map<String, Boolean> body) {

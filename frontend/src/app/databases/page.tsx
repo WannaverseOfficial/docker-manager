@@ -9,6 +9,8 @@ import { ReachPicker, validPort, type Reach } from "@/components/databases";
 import { Badge, Button, Empty, Field, Modal, Notice, PageHeader, Select, Spinner, StateBadge, inputClass } from "@/components/ui";
 import { api } from "@/lib/api";
 import { usePoll } from "@/lib/hooks";
+import { useManaged } from "@/lib/managed";
+import { ManagedBadge } from "@/components/managed";
 import { backupSchedule, type ServerView } from "@/lib/databases";
 
 export default function DatabasesPage() {
@@ -16,6 +18,7 @@ export default function DatabasesPage() {
   const { session } = useSession();
   const { data, error, refresh } = usePoll<ServerView[]>(hostId && session?.admin ? `/api/databases/hosts/${hostId}/servers` : null, 10000);
   const [creating, setCreating] = useState(false);
+  const { isManaged } = useManaged();
 
   if (!session?.admin) {
     return (
@@ -57,6 +60,12 @@ export default function DatabasesPage() {
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="font-medium truncate">{v.server.name}</span>
                       {v.version && <Badge>PostgreSQL {v.version}</Badge>}
+                      {/* A plain badge: the card is a link already. */}
+                      {isManaged("databases", v.server.id) && (
+                        <span title="Managed by the configuration file">
+                          <ManagedBadge link={false} />
+                        </span>
+                      )}
                     </div>
                     <div className="font-mono text-[12.5px] text-slate truncate mt-0.5">{v.server.containerName}:5432</div>
                   </div>

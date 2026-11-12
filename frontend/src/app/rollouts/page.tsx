@@ -6,11 +6,14 @@ import { RolloutBadge } from "@/components/badges";
 import { Badge, Empty, LinkButton, Notice, PageHeader, Spinner } from "@/components/ui";
 import { ago } from "@/lib/format";
 import { usePoll } from "@/lib/hooks";
+import { useManaged } from "@/lib/managed";
+import { ManagedBadge } from "@/components/managed";
 import type { Rollout } from "@/lib/types";
 
 export default function RolloutsPage() {
   const { session } = useSession();
   const { data, error } = usePoll<Rollout[]>("/api/rollouts", 5000);
+  const { isManaged } = useManaged();
   return (
     <>
       <PageHeader
@@ -39,6 +42,8 @@ export default function RolloutsPage() {
                   </span>
                   <span className="text-[13px] text-slate flex flex-wrap gap-1.5 items-center min-w-0">
                     <Badge>{r.strategy === "CANARY" ? "Canary" : "Blue/green"}</Badge>
+                    {/* A plain badge: the row is a link already. */}
+                    {isManaged("rollouts", r.id) && <ManagedBadge link={false} />}
                     <span className="truncate">{r.activeImage ?? "Nothing released yet"}</span>
                   </span>
                   <span className="text-[13px]">

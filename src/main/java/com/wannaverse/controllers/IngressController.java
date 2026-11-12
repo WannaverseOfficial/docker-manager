@@ -1,5 +1,6 @@
 package com.wannaverse.controllers;
 
+import com.wannaverse.iac.ConfigLocked;
 import com.wannaverse.persistence.*;
 import com.wannaverse.security.RequirePermission;
 import com.wannaverse.security.SecurityContextHolder;
@@ -85,6 +86,7 @@ public class IngressController {
         return ResponseEntity.ok(preview);
     }
 
+    @ConfigLocked(section = "ingress", id = "hostId")
     @PostMapping("/hosts/{hostId}/enable")
     @RequirePermission(resource = Resource.INGRESS, action = "enable", hostIdParam = "hostId")
     public ResponseEntity<EnableIngressResult> enableIngress(
@@ -102,6 +104,7 @@ public class IngressController {
         return ResponseEntity.ok(preview);
     }
 
+    @ConfigLocked(section = "ingress", id = "hostId")
     @PostMapping("/hosts/{hostId}/disable")
     @RequirePermission(resource = Resource.INGRESS, action = "disable", hostIdParam = "hostId")
     public ResponseEntity<DisableIngressResult> disableIngress(@PathVariable String hostId) {
@@ -156,6 +159,7 @@ public class IngressController {
 
     public record UpdateRouteRequest(IngressService.ExposeAppRequest route, Boolean enabled) {}
 
+    @ConfigLocked(section = "ingress.routes", id = "routeId")
     @PutMapping("/routes/{routeId}")
     @RequirePermission(resource = Resource.INGRESS_ROUTES, action = "update")
     public ResponseEntity<IngressRouteResponse> updateRoute(
@@ -173,6 +177,7 @@ public class IngressController {
     public record SettingsRequest(
             String acmeEmail, Boolean useStaging, Integer httpPort, Integer httpsPort) {}
 
+    @ConfigLocked(section = "ingress", id = "hostId")
     @PatchMapping("/hosts/{hostId}/settings")
     @RequirePermission(resource = Resource.INGRESS, action = "configure", hostIdParam = "hostId")
     public ResponseEntity<IngressConfigResponse> updateSettings(
@@ -189,6 +194,7 @@ public class IngressController {
         return ResponseEntity.ok(IngressConfigResponse.fromEntity(config));
     }
 
+    @ConfigLocked(section = "ingress.routes", id = "routeId")
     @DeleteMapping("/routes/{routeId}")
     @RequirePermission(resource = Resource.INGRESS_ROUTES, action = "delete")
     public ResponseEntity<Void> deleteRoute(
@@ -278,6 +284,7 @@ public class IngressController {
         return ResponseEntity.accepted().build();
     }
 
+    @ConfigLocked(section = "ingress.certificates", id = "certId")
     @PostMapping("/certificates/{certId}/upload")
     @RequirePermission(resource = Resource.INGRESS_CERTIFICATES, action = "manage")
     public ResponseEntity<CertificateResponse> uploadCertificate(
@@ -295,6 +302,7 @@ public class IngressController {
         return ResponseEntity.ok(CertificateResponse.fromEntity(cert));
     }
 
+    @ConfigLocked(section = "ingress.certificates", id = "certId")
     @DeleteMapping("/certificates/{certId}")
     @RequirePermission(resource = Resource.INGRESS_CERTIFICATES, action = "delete")
     public ResponseEntity<Void> deleteCertificate(@PathVariable String certId) {
@@ -304,6 +312,7 @@ public class IngressController {
         return ResponseEntity.noContent().build();
     }
 
+    @ConfigLocked(section = "ingress.certificates", id = "certId")
     @PatchMapping("/certificates/{certId}/auto-renew")
     @RequirePermission(resource = Resource.INGRESS_CERTIFICATES, action = "manage")
     public ResponseEntity<CertificateResponse> setAutoRenew(

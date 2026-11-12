@@ -29,6 +29,8 @@ import {
 import { API_BASE, api } from "@/lib/api";
 import { ago, dateTime, duration } from "@/lib/format";
 import { usePoll } from "@/lib/hooks";
+import { useManaged } from "@/lib/managed";
+import { ManagedBadge } from "@/components/managed";
 import type { GitRepo, Pipeline, PipelineRun, PipelineStage, PipelineStep, Rollout, StepType } from "@/lib/types";
 
 export default function PipelinePage() {
@@ -46,6 +48,8 @@ function PipelineView() {
   const { session } = useSession();
   const [tab, setTab] = useState<"runs" | "edit">(isNew ? "edit" : "runs");
   const { data: pipeline, error, refresh } = usePoll<Pipeline>(id ? `/api/pipelines/${id}` : null);
+  // Managed by the configuration file: changed there, so no editor.
+  const managed = !!useManaged().find("pipelines", id);
 
   if (isNew) return <Editor pipeline={null} />;
   if (!id) return null;
@@ -57,9 +61,9 @@ function PipelineView() {
       <Tabs
         value={tab}
         onChange={setTab}
-        tabs={[{ value: "runs", label: "Runs" }, ...(session?.admin ? [{ value: "edit" as const, label: "Edit" }] : [])]}
+        tabs={[{ value: "runs", label: "Runs" }, ...(session?.admin && !managed ? [{ value: "edit" as const, label: "Edit" }] : [])]}
       />
-      {tab === "runs" ? <Runs pipeline={pipeline} onChanged={refresh} /> : <Editor pipeline={pipeline} onSaved={refresh} />}
+      {tab === "runs" || managed ? <Runs pipeline={pipeline} onChanged={refresh} /> : <Editor pipeline={pipeline} onSaved={refresh} />}
     </>
   );
 }
@@ -74,6 +78,7 @@ function Runs({ pipeline, onChanged }: { pipeline: Pipeline; onChanged: () => vo
   const router = useRouter();
   const confirm = useConfirm();
   const { session } = useSession();
+  const managed = useManaged().find("pipelines", pipeline.id);
   const shown = selected ?? runs?.[0]?.id ?? null;
 
   const run = async () => {
@@ -91,13 +96,14 @@ function Runs({ pipeline, onChanged }: { pipeline: Pipeline; onChanged: () => vo
   return (
     <>
       <PageHeader title={pipeline.name} back={{ href: "/pipelines/", label: "Pipelines" }} intro={pipeline.description ?? `${pipeline.gitRepositoryName ?? "No repository"} · ${pipeline.dockerHostName ?? ""}`}>
+        {managed && <ManagedBadge entry={managed.key} />}
         <Button disabled={!pipeline.enabled} onClick={() => setTrigger(true)}>
           Run
         </Button>
         {session?.admin && (
           <Menu
             items={[
-              {
+              !managed && {
                 label: pipeline.enabled ? "Turn off" : "Turn on",
                 onClick: async () => {
                   await api.patch(`/api/pipelines/${pipeline.id}/enabled`, { enabled: !pipeline.enabled });
@@ -111,7 +117,7 @@ function Runs({ pipeline, onChanged }: { pipeline: Pipeline; onChanged: () => vo
                   router.push(`/pipelines/view/?id=${p.id}`);
                 },
               },
-              {
+              !managed && {
                 label: "Delete",
                 danger: true,
                 onClick: async () => {

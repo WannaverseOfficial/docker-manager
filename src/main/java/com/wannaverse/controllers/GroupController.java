@@ -5,6 +5,7 @@ import com.wannaverse.dto.GrantPermissionRequest;
 import com.wannaverse.dto.PermissionResponse;
 import com.wannaverse.dto.UpdateGroupRequest;
 import com.wannaverse.dto.UserGroupResponse;
+import com.wannaverse.iac.ConfigLocked;
 import com.wannaverse.persistence.GroupPermissionRepository;
 import com.wannaverse.persistence.Resource;
 import com.wannaverse.security.AdminOnly;
@@ -55,6 +56,7 @@ public class GroupController {
     }
 
     @PutMapping("/{id}")
+    @ConfigLocked(section = "groups", id = "id")
     @RequirePermission(resource = Resource.USER_GROUPS, action = "update")
     @Auditable(
             resource = Resource.USER_GROUPS,
@@ -67,6 +69,7 @@ public class GroupController {
     }
 
     @DeleteMapping("/{id}")
+    @ConfigLocked(section = "groups", id = "id")
     @RequirePermission(resource = Resource.USER_GROUPS, action = "delete")
     @Auditable(resource = Resource.USER_GROUPS, action = "delete", resourceIdParam = "id")
     public ResponseEntity<Void> deleteGroup(@PathVariable String id) {
@@ -84,6 +87,7 @@ public class GroupController {
     }
 
     @PostMapping("/{id}/permissions")
+    @ConfigLocked(section = "groups", id = "id")
     @RequirePermission(resource = Resource.USER_GROUPS, action = "manage_permissions")
     @Auditable(
             resource = Resource.USER_GROUPS,
@@ -97,6 +101,7 @@ public class GroupController {
     }
 
     @DeleteMapping("/{id}/permissions/{permissionId}")
+    @ConfigLocked(section = "groups", id = "id")
     @RequirePermission(resource = Resource.USER_GROUPS, action = "manage_permissions")
     @Auditable(
             resource = Resource.USER_GROUPS,

@@ -1,5 +1,6 @@
 package com.wannaverse.controllers;
 
+import com.wannaverse.iac.ConfigLocked;
 import com.wannaverse.persistence.ImagePolicy;
 import com.wannaverse.persistence.ImagePolicyRule;
 import com.wannaverse.persistence.Resource;
@@ -53,6 +54,7 @@ public class ImagePolicyController {
         return ResponseEntity.ok(PolicyResponse.fromEntity(policy));
     }
 
+    @ConfigLocked(section = "imagePolicies", id = "id")
     @PutMapping("/{id}")
     @RequirePermission(resource = Resource.IMAGE_POLICIES, action = "update")
     public ResponseEntity<PolicyResponse> updatePolicy(
@@ -69,6 +71,7 @@ public class ImagePolicyController {
         return ResponseEntity.ok(PolicyResponse.fromEntity(policy));
     }
 
+    @ConfigLocked(section = "imagePolicies", id = "id")
     @DeleteMapping("/{id}")
     @RequirePermission(resource = Resource.IMAGE_POLICIES, action = "delete")
     public ResponseEntity<Void> deletePolicy(@PathVariable String id) {
@@ -76,6 +79,7 @@ public class ImagePolicyController {
         return ResponseEntity.noContent().build();
     }
 
+    @ConfigLocked(section = "imagePolicies", id = "id")
     @PostMapping("/{id}/rules")
     @RequirePermission(resource = Resource.IMAGE_POLICIES, action = "update")
     public ResponseEntity<RuleResponse> addRule(
@@ -85,6 +89,7 @@ public class ImagePolicyController {
         return ResponseEntity.ok(RuleResponse.fromEntity(rule));
     }
 
+    @ConfigLocked(section = "imagePolicies", id = "id")
     @DeleteMapping("/{id}/rules/{ruleId}")
     @RequirePermission(resource = Resource.IMAGE_POLICIES, action = "update")
     public ResponseEntity<Void> removeRule(@PathVariable String id, @PathVariable String ruleId) {

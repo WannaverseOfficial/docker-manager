@@ -91,6 +91,12 @@ public class RegistryHostingService {
         return repository.findByDockerHostId(hostId);
     }
 
+    /** Whether the host's registry container is still there (for the configuration file). */
+    public boolean containerExists(HostedRegistry r) {
+        DockerAPI api = dockerHostService.getDockerAPI(r.getDockerHostId());
+        return NginxApplier.findContainer(api, r.getContainerName()) != null;
+    }
+
     /** HTTPS state of a public registry: its certificate's status and message, or null. */
     public Map<String, String> certificate(HostedRegistry r) {
         if (r.getIngressRouteId() == null) return null;
@@ -591,7 +597,7 @@ public class RegistryHostingService {
                                         HttpStatus.NOT_FOUND, "No registry on this host"));
     }
 
-    private static void checkUser(String user, String password) {
+    public static void checkUser(String user, String password) {
         if (user == null || !USER.matcher(user).matches()) {
             throw bad("Usernames use lowercase letters, digits and . _ -");
         }

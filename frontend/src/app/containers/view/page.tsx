@@ -7,6 +7,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useHost } from "@/components/app";
 import { COMPOSE_PROJECT, COMPOSE_SERVICE, useContainerActions } from "@/components/containers";
 import { ContainerForm } from "@/components/ContainerForm";
+import { ManagedBadge, ManagedNote } from "@/components/managed";
 import { LineChart } from "@/components/LineChart";
 import {
   Badge,
@@ -32,6 +33,7 @@ import {
 import { api } from "@/lib/api";
 import { ago, bytes, dateTime, mem, percent, shortId } from "@/lib/format";
 import { usePending, usePoll } from "@/lib/hooks";
+import { useManaged } from "@/lib/managed";
 import type { ContainerInspect, ContainerSpec, ContainerStats } from "@/lib/types";
 
 type Tab = "overview" | "stats" | "logs" | "console" | "settings" | "history" | "inspect";
@@ -61,6 +63,7 @@ function ContainerView() {
   const { act, remove } = useContainerActions(hostId, refresh);
   const [busy, setBusy] = useState<string | null>(null);
   const pending = usePending(c?.Id);
+  const managed = useManaged();
 
   if (!hostId || !id) return null;
   if (error && !c) {
@@ -76,6 +79,8 @@ function ContainerView() {
   const name = c.Name.replace(/^\//, "");
   const project = c.Config.Labels?.[COMPOSE_PROJECT];
   const service = c.Config.Labels?.[COMPOSE_SERVICE];
+  // Managed by the configuration file: its settings and removal go through the file.
+  const entry = managed.find("containers", name, hostId)?.key;
   const s = c.State;
   const run = async (key: string, fn: () => Promise<unknown>) => {
     setBusy(key);
@@ -122,6 +127,7 @@ function ContainerView() {
                 <Badge>stack: {project}</Badge>
               </Link>
             )}
+            {entry && <ManagedBadge entry={`containers.${entry}`} />}
           </span>
         }
       >
@@ -153,15 +159,17 @@ function ContainerView() {
             <Layers size={15} aria-hidden /> Stack {project}
           </LinkButton>
         )}
-        <Button
-          tone="danger"
-          onClick={async () => {
-            await remove(c.Id, name, project);
-            router.push("/containers/");
-          }}
-        >
-          Remove
-        </Button>
+        {!entry && (
+          <Button
+            tone="danger"
+            onClick={async () => {
+              await remove(c.Id, name, project);
+              router.push("/containers/");
+            }}
+          >
+            Remove
+          </Button>
+        )}
       </PageHeader>
 
       {s.OOMKilled && <div className="mb-6"><Notice tone="warn">The last run was stopped because it ran out of memory. Raise its memory limit or find what uses so much.</Notice></div>}
@@ -192,6 +200,8 @@ function ContainerView() {
               Open the stack
             </Link>
           </Notice>
+        ) : entry ? (
+          <ManagedNote what="This container" />
         ) : (
           <Settings hostId={hostId} id={c.Id} name={name} />
         ))}

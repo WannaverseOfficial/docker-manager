@@ -25,6 +25,7 @@ import {
   Network,
   Server,
   Settings,
+  FileCode2,
   Shield,
   Split,
   ShieldCheck,
@@ -89,6 +90,7 @@ const NAV: { title: string; items: Item[] }[] = [
       { href: "/policies/", label: "Image rules", icon: ShieldCheck },
       { href: "/users/", label: "Users", icon: Users, admin: true },
       { href: "/settings/", label: "Settings", icon: Settings },
+      { href: "/config/", label: "Configuration", icon: FileCode2, admin: true },
     ],
   },
 ];

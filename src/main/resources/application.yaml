@@ -69,6 +69,12 @@ app:
     allowed-origins: ${CORS_ALLOWED_ORIGINS:}
   git:
     clone-dir: ${GIT_CLONE_DIR:git-repos}
+  # Configuration as code: a YAML file describing the whole setup, applied at startup and
+  # whenever it changes. Without it, the file can still be applied from Settings, Configuration.
+  config:
+    file: ${DM_CONFIG_FILE:}
+    # How often to put back managed things that were removed by other means. 0 turns it off.
+    reconcile-seconds: ${DM_CONFIG_RECONCILE_SECONDS:300}
   jwt:
     access-secret: ${JWT_ACCESS_SECRET:change-this-access-secret-32chars}
     refresh-secret: ${JWT_REFRESH_SECRET:change-this-refresh-secret-32chars}

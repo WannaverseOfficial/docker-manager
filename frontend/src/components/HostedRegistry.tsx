@@ -7,6 +7,8 @@ import { Badge, Button, Empty, Field, KeyValues, Modal, Notice, Panel, Segmented
 import { api, enc, qs } from "@/lib/api";
 import { bytes, dateTime, plural } from "@/lib/format";
 import { usePoll } from "@/lib/hooks";
+import { useManaged } from "@/lib/managed";
+import { ManagedBadge, ManagedNote } from "./managed";
 
 interface Hosted {
   registry: {
@@ -66,11 +68,13 @@ export function HostedRegistry() {
   const { hostId } = useHost();
   const base = hostId ? `/api/hosted-registry/hosts/${hostId}` : null;
   const { data, error, refresh } = usePoll<Hosted>(base, 15000);
+  const managed = useManaged();
   if (!base) return null;
   if (error) return <Notice tone="error">{error}</Notice>;
   if (!data) return <Spinner />;
   if (!data.registry) return <CreateRegistry base={base} onCreated={refresh} />;
-  return <Registry base={base} data={data} onChange={refresh} />;
+  const fromFile = managed.find("hostedRegistries", data.registry.id);
+  return <Registry base={base} data={data} onChange={refresh} managedKey={fromFile?.key} />;
 }
 
 function CreateRegistry({ base, onCreated }: { base: string; onCreated: () => void }) {
@@ -157,7 +161,7 @@ function CreateRegistry({ base, onCreated }: { base: string; onCreated: () => vo
   );
 }
 
-function Registry({ base, data, onChange }: { base: string; data: Hosted; onChange: () => void }) {
+function Registry({ base, data, onChange, managedKey }: { base: string; data: Hosted; onChange: () => void; managedKey?: string }) {
   const r = data.registry!;
   const address = data.address!;
   const toast = useToast();
@@ -170,7 +174,7 @@ function Registry({ base, data, onChange }: { base: string; data: Hosted; onChan
   return (
     <div className="flex flex-col gap-5">
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-        <Panel title="Your registry">
+        <Panel title="Your registry" action={managedKey ? <ManagedBadge entry={managedKey} /> : undefined}>
           <KeyValues
             rows={[
               ["Address", <Copyable2 key="a" text={address} />],
@@ -206,10 +210,17 @@ function Registry({ base, data, onChange }: { base: string; data: Hosted; onChan
             >
               Reclaim space
             </Button>
-            <Button tone="danger" size="sm" onClick={() => setRemoving(true)}>
-              Remove registry
-            </Button>
+            {!managedKey && (
+              <Button tone="danger" size="sm" onClick={() => setRemoving(true)}>
+                Remove registry
+              </Button>
+            )}
           </div>
+          {managedKey && (
+            <div className="mt-3">
+              <ManagedNote what="This registry and its users" />
+            </div>
+          )}
         </Panel>
         <Panel title="Push an image">
           <pre className="code rounded-xl bg-well border border-line p-4 overflow-x-auto text-[12.5px]">{steps}</pre>
@@ -222,37 +233,41 @@ function Registry({ base, data, onChange }: { base: string; data: Hosted; onChan
       <Panel
         title="Users"
         action={
-          <Button size="sm" tone="quiet" onClick={() => setUserDialog("new")}>
-            Add user
-          </Button>
+          managedKey ? undefined : (
+            <Button size="sm" tone="quiet" onClick={() => setUserDialog("new")}>
+              Add user
+            </Button>
+          )
         }
       >
         <ul className="divide-y divide-line">
           {(data.users ?? []).map((u) => (
             <li key={u} className="flex items-center justify-between gap-3 py-2">
               <span className="font-mono text-[13px]">{u}</span>
-              <span className="flex gap-1">
-                <Button tone="ghost" size="sm" onClick={() => setUserDialog(u)}>
-                  New password
-                </Button>
-                <Button
-                  tone="ghost"
-                  size="sm"
-                  disabled={(data.users ?? []).length < 2}
-                  title={(data.users ?? []).length < 2 ? "Keep at least one user" : undefined}
-                  onClick={async () => {
-                    if (!(await confirm({ title: `Remove ${u}?`, body: "They can no longer push or pull.", confirm: "Remove", danger: true }))) return;
-                    try {
-                      await api.del(`${base}/users/${enc(u)}`);
-                      onChange();
-                    } catch (e) {
-                      toast((e as Error).message, "error");
-                    }
-                  }}
-                >
-                  Remove
-                </Button>
-              </span>
+              {!managedKey && (
+                <span className="flex gap-1">
+                  <Button tone="ghost" size="sm" onClick={() => setUserDialog(u)}>
+                    New password
+                  </Button>
+                  <Button
+                    tone="ghost"
+                    size="sm"
+                    disabled={(data.users ?? []).length < 2}
+                    title={(data.users ?? []).length < 2 ? "Keep at least one user" : undefined}
+                    onClick={async () => {
+                      if (!(await confirm({ title: `Remove ${u}?`, body: "They can no longer push or pull.", confirm: "Remove", danger: true }))) return;
+                      try {
+                        await api.del(`${base}/users/${enc(u)}`);
+                        onChange();
+                      } catch (e) {
+                        toast((e as Error).message, "error");
+                      }
+                    }}
+                  >
+                    Remove
+                  </Button>
+                </span>
+              )}
             </li>
           ))}
         </ul>

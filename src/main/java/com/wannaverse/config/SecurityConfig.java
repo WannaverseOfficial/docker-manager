@@ -1,5 +1,6 @@
 package com.wannaverse.config;
 
+import com.wannaverse.iac.ConfigLockInterceptor;
 import com.wannaverse.security.CurrentUserArgumentResolver;
 import com.wannaverse.security.PermissionInterceptor;
 
@@ -20,12 +21,15 @@ public class SecurityConfig implements WebMvcConfigurer {
 
     private final PermissionInterceptor permissionInterceptor;
     private final CurrentUserArgumentResolver currentUserArgumentResolver;
+    private final ConfigLockInterceptor configLockInterceptor;
 
     public SecurityConfig(
             PermissionInterceptor permissionInterceptor,
-            CurrentUserArgumentResolver currentUserArgumentResolver) {
+            CurrentUserArgumentResolver currentUserArgumentResolver,
+            ConfigLockInterceptor configLockInterceptor) {
         this.permissionInterceptor = permissionInterceptor;
         this.currentUserArgumentResolver = currentUserArgumentResolver;
+        this.configLockInterceptor = configLockInterceptor;
     }
 
     @Override
@@ -40,7 +44,11 @@ public class SecurityConfig implements WebMvcConfigurer {
                         "/api/ingress/acme/**",
                         "/api/git/webhook/**",
                         // Authenticated by the secret in the URL, like git webhooks.
-                        "/api/pipelines/webhook/**");
+                        "/api/pipelines/webhook/**",
+                        // The configuration file's JSON schema, for editors. Holds no data.
+                        "/api/config/schema");
+        // After the permission check: say "managed by the file" only to people allowed to act.
+        registry.addInterceptor(configLockInterceptor).addPathPatterns("/api/**");
     }
 
     @Override

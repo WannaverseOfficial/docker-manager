@@ -7,6 +7,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
+import org.springframework.core.annotation.Order;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -26,11 +27,19 @@ public class AdminInitService {
         this.passwordEncoder = passwordEncoder;
     }
 
+    // After the configuration file is applied (ConfigFileWatcher), which may add administrators.
     @EventListener(ApplicationReadyEvent.class)
+    @Order(20)
     @Transactional
     public void initializeAdmin() {
-        if (userRepository.count() > 0) {
-            log.debug("Users already exist, skipping admin initialization");
+        if (userRepository.countByIsAdminTrue() > 0) {
+            log.debug("An administrator exists, skipping admin initialization");
+            return;
+        }
+        if (userRepository.existsByUsername("admin")) {
+            log.warn(
+                    "There is no administrator, and the user \"admin\" exists but is not one."
+                            + " Make someone an administrator in the configuration file.");
             return;
         }
 

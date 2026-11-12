@@ -4,9 +4,11 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 import { useHost } from "@/components/app";
 import { COMPOSE_PROJECT, ContainerMenu } from "@/components/containers";
+import { ManagedBadge } from "@/components/managed";
 import { Badge, Empty, LinkButton, Notice, PageHeader, Pagination, Search, Segmented, Spinner, StateBadge } from "@/components/ui";
 import { ago, containerName, portList } from "@/lib/format";
 import { usePaged, usePending, usePoll } from "@/lib/hooks";
+import { useManaged } from "@/lib/managed";
 import type { Container } from "@/lib/types";
 
 type Filter = "all" | "running" | "stopped";
@@ -27,6 +29,7 @@ export default function ContainersPage() {
 
   const running = (data ?? []).filter((c) => c.State === "running").length;
   const paged = usePaged(list, `${q}|${filter}|${hostId}`);
+  const managed = useManaged();
 
   return (
     <>
@@ -62,7 +65,7 @@ export default function ContainersPage() {
         <>
           <ul className="rounded-2xl border border-line bg-paper divide-y divide-line">
             {paged.slice.map((c) => (
-              <Row key={c.Id} c={c} hostId={hostId} onChanged={refresh} />
+              <Row key={c.Id} c={c} hostId={hostId} onChanged={refresh} entry={managed.find("containers", containerName(c), hostId)?.key} />
             ))}
           </ul>
           <Pagination page={paged.page} pages={paged.pages} total={paged.total} size={paged.size} onPage={paged.setPage} onSize={paged.setSize} noun="container" />
@@ -72,7 +75,7 @@ export default function ContainersPage() {
   );
 }
 
-function Row({ c, hostId, onChanged }: { c: Container; hostId: string; onChanged: () => void }) {
+function Row({ c, hostId, onChanged, entry }: { c: Container; hostId: string; onChanged: () => void; entry?: string }) {
   const pending = usePending(c.Id);
   const project = c.Labels?.[COMPOSE_PROJECT];
   const ports = portList(c.Ports);
@@ -92,7 +95,8 @@ function Row({ c, hostId, onChanged }: { c: Container; hostId: string; onChanged
           {!pending && <span className="text-[12px] text-slate">{c.State === "running" ? c.Status.replace(/^Up /, "up ") : ago(c.Created)}</span>}
         </span>
       </Link>
-      <ContainerMenu c={c} hostId={hostId} onChanged={onChanged} />
+      {entry && <ManagedBadge entry={`containers.${entry}`} />}
+      <ContainerMenu c={c} hostId={hostId} onChanged={onChanged} managed={!!entry} />
     </li>
   );
 }

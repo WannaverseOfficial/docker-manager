@@ -68,6 +68,9 @@ public class AuditService {
             if (ctx != null && ctx.isAuthenticated()) {
                 auditLog.setUserId(ctx.getUserId());
                 auditLog.setUsername(ctx.getUsername());
+            } else if (ctx != null && ctx.getUsername() != null) {
+                // Not a signed-in user, such as the configuration file being applied.
+                auditLog.setUsername(ctx.getUsername());
             }
 
             auditLog.setAction(action);

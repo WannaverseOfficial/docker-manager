@@ -1,6 +1,7 @@
 package com.wannaverse.controllers;
 
 import com.wannaverse.dto.*;
+import com.wannaverse.iac.ConfigLocked;
 import com.wannaverse.persistence.*;
 import com.wannaverse.persistence.DeploymentJob.JobStatus;
 import com.wannaverse.persistence.DeploymentJob.TriggerType;
@@ -157,6 +158,7 @@ public class GitController {
 
     @PutMapping("/repositories/{id}")
     @com.wannaverse.security.AdminOnly
+    @ConfigLocked(section = "gitRepositories", id = "id")
     @RequirePermission(resource = Resource.GIT_REPOS, action = "update")
     public ResponseEntity<GitRepositoryResponse> updateRepository(
             @PathVariable String id, @RequestBody UpdateGitRepositoryRequest request) {
@@ -225,6 +227,7 @@ public class GitController {
 
     @DeleteMapping("/repositories/{id}")
     @com.wannaverse.security.AdminOnly
+    @ConfigLocked(section = "gitRepositories", id = "id")
     @RequirePermission(resource = Resource.GIT_REPOS, action = "delete")
     public ResponseEntity<Void> deleteRepository(@PathVariable String id) {
         gitRepoRepository
@@ -241,6 +244,7 @@ public class GitController {
     }
 
     @PostMapping("/repositories/{id}/regenerate-webhook")
+    @ConfigLocked(section = "gitRepositories", id = "id")
     @RequirePermission(resource = Resource.GIT_REPOS, action = "regenerate_webhook")
     public ResponseEntity<GitRepositoryResponse> regenerateWebhook(@PathVariable String id) {
         GitRepository repo =

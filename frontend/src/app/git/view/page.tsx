@@ -5,11 +5,13 @@ import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useSession } from "@/components/app";
 import { JobBadge } from "@/components/badges";
+import { ManagedBadge, ManagedNote } from "@/components/managed";
 import { GitForm, gitBody, gitFormFrom } from "@/components/GitForm";
 import { Button, Copyable, Empty, Field, KeyValues, LogView, Menu, Modal, Notice, PageHeader, Panel, Spinner, Tabs, inputClass, useConfirm, useToast } from "@/components/ui";
 import { api } from "@/lib/api";
 import { ago, dateTime, duration, shortId } from "@/lib/format";
 import { usePoll } from "@/lib/hooks";
+import { useManaged } from "@/lib/managed";
 import type { DeploymentJob, GitRepo } from "@/lib/types";
 
 type Tab = "deployments" | "settings";
@@ -38,6 +40,7 @@ function Repo() {
   const [commit, setCommit] = useState("");
   const [saveBusy, setSaveBusy] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const managed = useManaged().find("gitRepositories", id);
 
   const shown = selected ?? jobs[0]?.id ?? null;
 
@@ -73,6 +76,7 @@ function Repo() {
           </>
         }
       >
+        {managed && <ManagedBadge entry={managed.key} />}
         <Button busy={deploying} disabled={!!running} onClick={() => deploy()}>
           {running ? "Deploying" : "Deploy now"}
         </Button>
@@ -91,7 +95,8 @@ function Repo() {
                 }
               },
             },
-            session?.admin && {
+            session?.admin &&
+              !managed && {
               label: "Delete repository",
               danger: true,
               onClick: async () => {
@@ -175,7 +180,9 @@ function Repo() {
         </div>
       )}
 
-      {tab === "settings" && (
+      {tab === "settings" && managed && <ManagedNote what="This repository" />}
+
+      {tab === "settings" && !managed && (
         <GitForm
           key={repo.id + repo.lastDeployedAt}
           initial={gitFormFrom(repo, repo.dockerHostId)}

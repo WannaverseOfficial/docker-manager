@@ -4,6 +4,8 @@ import { useState } from "react";
 import { useHost, useSession } from "@/components/app";
 import { Badge, Button, Empty, Field, Menu, Modal, Notice, PageHeader, Segmented, Spinner, inputClass, useConfirm, useToast } from "@/components/ui";
 import { api } from "@/lib/api";
+import { useManaged } from "@/lib/managed";
+import { ManagedBadge } from "@/components/managed";
 import { hostLabel } from "@/lib/format";
 import { usePoll } from "@/lib/hooks";
 import type { Host } from "@/lib/types";
@@ -64,6 +66,7 @@ export default function HostsPage() {
 
 function HostRow({ host, current, onSelect, onRename, onRemove, canEdit }: { host: Host; current: boolean; onSelect: () => void; onRename: () => void; onRemove: () => void; canEdit: boolean }) {
   const { data: ping } = usePoll<{ connected: boolean }>(`/api/docker/hosts/${host.id}/ping`, 30000);
+  const managed = useManaged().find("hosts", host.id);
   const { data: info } = usePoll<{ dockerVersion: string; operatingSystem: string; containersRunning: number; containersTotal: number }>(
     ping?.connected ? `/api/docker/hosts/${host.id}/info` : null,
   );
@@ -73,6 +76,7 @@ function HostRow({ host, current, onSelect, onRename, onRemove, canEdit }: { hos
         <div className="flex flex-wrap items-center gap-2">
           <span className="font-medium">{hostLabel(host)}</span>
           {current && <Badge tone="live">selected</Badge>}
+          {managed && <ManagedBadge entry={managed.key} />}
           <Badge>{host.dockerHostUrl.startsWith("ssh://") ? "SSH" : host.tls ? "TLS" : host.dockerHostUrl.startsWith("unix://") ? "local" : "TCP"}</Badge>
           <span className="flex items-center gap-1.5 text-[13px] text-slate">
             <span className={`size-1.5 rounded-full ${ping == null ? "bg-slate/60" : ping.connected ? "bg-ok" : "bg-danger"}`} aria-hidden />
@@ -91,7 +95,7 @@ function HostRow({ host, current, onSelect, onRename, onRemove, canEdit }: { hos
           Select
         </Button>
       )}
-      {canEdit && (
+      {canEdit && !managed && (
         <Menu
           items={[
             { label: "Rename", onClick: onRename },

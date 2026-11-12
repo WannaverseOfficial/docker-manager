@@ -1113,7 +1113,8 @@ public class PostgresService {
 
     // --- psql plumbing (also used by backups) ------------------------------------------------
 
-    DatabaseServer require(String serverId) {
+    /** The server, or 404. Also used by the configuration file. */
+    public DatabaseServer require(String serverId) {
         return repository
                 .findById(serverId)
                 .orElseThrow(

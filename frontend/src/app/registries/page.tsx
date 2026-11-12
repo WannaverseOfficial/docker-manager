@@ -3,9 +3,11 @@
 import { useState } from "react";
 import { useSession } from "@/components/app";
 import { HostedRegistry } from "@/components/HostedRegistry";
+import { ManagedBadge } from "@/components/managed";
 import { Badge, Button, Empty, Field, Menu, Modal, Notice, PageHeader, Select, Spinner, Tabs, Toggle, inputClass, useConfirm, useToast } from "@/components/ui";
 import { api } from "@/lib/api";
 import { usePoll } from "@/lib/hooks";
+import { useManaged } from "@/lib/managed";
 import type { Registry } from "@/lib/types";
 
 const TYPES: Record<Registry["registryType"], { label: string; url: string; user: string; secret: string }> = {
@@ -49,6 +51,7 @@ function SignIns() {
   const [editing, setEditing] = useState<Registry | "new" | null>(null);
   const toast = useToast();
   const confirm = useConfirm();
+  const managed = useManaged();
   return (
     <>
       <div className="flex justify-end mb-4">
@@ -59,47 +62,53 @@ function SignIns() {
       {data && data.length === 0 && <Empty title="No registries">Public images need none. Add one to pull private images.</Empty>}
       {data && data.length > 0 && (
         <ul className="rounded-2xl border border-line bg-paper divide-y divide-line">
-          {data.map((r) => (
-            <li key={r.id} className={`flex items-center gap-3 px-4 py-3 ${r.enabled ? "" : "opacity-60"}`}>
-              <div className="flex-1 min-w-0">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="font-medium">{r.name}</span>
-                  <Badge>{TYPES[r.registryType]?.label.split(" (")[0]}</Badge>
-                  {!r.enabled && <Badge>off</Badge>}
-                  {!r.hasCredentials && <Badge tone="warn">no sign-in</Badge>}
+          {data.map((r) => {
+            const fromFile = managed.find("registries", r.id);
+            return (
+              <li key={r.id} className={`flex items-center gap-3 px-4 py-3 ${r.enabled ? "" : "opacity-60"}`}>
+                <div className="flex-1 min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-medium">{r.name}</span>
+                    <Badge>{TYPES[r.registryType]?.label.split(" (")[0]}</Badge>
+                    {!r.enabled && <Badge>off</Badge>}
+                    {!r.hasCredentials && <Badge tone="warn">no sign-in</Badge>}
+                    {fromFile && <ManagedBadge entry={fromFile.key} />}
+                  </div>
+                  <div className="text-[13px] text-slate truncate font-mono">{r.url}</div>
                 </div>
-                <div className="text-[13px] text-slate truncate font-mono">{r.url}</div>
-              </div>
-              <Button
-                tone="quiet"
-                size="sm"
-                onClick={async () => {
-                  try {
-                    const res = await api.post<{ success: boolean; message: string }>(`/api/registries/${r.id}/test`);
-                    toast(res.success ? `Signed in to ${r.name}` : `Sign-in failed: ${res.message}`, res.success ? "ok" : "error");
-                  } catch (e) {
-                    toast((e as Error).message, "error");
-                  }
-                }}
-              >
-                Test
-              </Button>
-              <Menu
-                items={[
-                  { label: "Edit", onClick: () => setEditing(r) },
-                  {
-                    label: "Delete",
-                    danger: true,
-                    onClick: async () => {
-                      if (!(await confirm({ title: `Delete ${r.name}?`, confirm: "Delete", danger: true }))) return;
-                      await api.del(`/api/registries/${r.id}`);
-                      refresh();
-                    },
-                  },
-                ]}
-              />
-            </li>
-          ))}
+                <Button
+                  tone="quiet"
+                  size="sm"
+                  onClick={async () => {
+                    try {
+                      const res = await api.post<{ success: boolean; message: string }>(`/api/registries/${r.id}/test`);
+                      toast(res.success ? `Signed in to ${r.name}` : `Sign-in failed: ${res.message}`, res.success ? "ok" : "error");
+                    } catch (e) {
+                      toast((e as Error).message, "error");
+                    }
+                  }}
+                >
+                  Test
+                </Button>
+                {!fromFile && (
+                  <Menu
+                    items={[
+                      { label: "Edit", onClick: () => setEditing(r) },
+                      {
+                        label: "Delete",
+                        danger: true,
+                        onClick: async () => {
+                          if (!(await confirm({ title: `Delete ${r.name}?`, confirm: "Delete", danger: true }))) return;
+                          await api.del(`/api/registries/${r.id}`);
+                          refresh();
+                        },
+                      },
+                    ]}
+                  />
+                )}
+              </li>
+            );
+          })}
         </ul>
       )}
       {editing && <RegistryDialog registry={editing === "new" ? null : editing} onClose={() => setEditing(null)} onSaved={() => (setEditing(null), refresh())} />}

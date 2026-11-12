@@ -5,9 +5,11 @@ import { useMemo, useState } from "react";
 import { Trash2 } from "lucide-react";
 import { useHost } from "@/components/app";
 import { Badge, BulkBar, Button, Checkbox, Empty, Field, IconButton, Modal, Notice, PageHeader, Pagination, Search, SelectHeader, Spinner, inputClass, useConfirm, useToast } from "@/components/ui";
+import { ManagedBadge } from "@/components/managed";
 import { api } from "@/lib/api";
 import { containerName, plural } from "@/lib/format";
 import { runBulk, usePaged, usePoll, useSelection } from "@/lib/hooks";
+import { useManaged } from "@/lib/managed";
 import type { Container, Network } from "@/lib/types";
 
 const BUILTIN = ["bridge", "host", "none"];
@@ -24,6 +26,9 @@ export default function NetworksPage() {
   const [busy, setBusy] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
+  const managed = useManaged();
+  // Networks the configuration file manages are deleted by removing them from the file.
+  const managedEntry = (n: Network) => managed.find("networks", n.Name, hostId)?.key;
 
   const members = useMemo(() => {
     const m = new Map<string, Container[]>();
@@ -39,10 +44,11 @@ export default function NetworksPage() {
     [data, q],
   );
 
-  // Built-in networks and networks with containers on them can't be deleted.
+  // Built-in networks, networks with containers on them and managed ones can't be deleted.
   const ready = containers != null;
-  const removable = (n: Network) => ready && !BUILTIN.includes(n.Name) && !members.has(n.Name);
-  const unused = useMemo(() => list.filter((n) => ready && !BUILTIN.includes(n.Name) && !members.has(n.Name)), [list, members, ready]);
+  const removable = (n: Network) => ready && !BUILTIN.includes(n.Name) && !members.has(n.Name) && !managedEntry(n);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const unused = useMemo(() => list.filter(removable), [list, members, ready, managed.items]);
   const unusedIds = useMemo(() => unused.map((n) => n.Id), [unused]);
   const sel = useSelection(unusedIds);
   const paged = usePaged(list, `${q}|${hostId}`);
@@ -107,7 +113,7 @@ export default function NetworksPage() {
                 <li key={n.Id} className={`flex items-center gap-3 px-4 py-3 ${sel.isSelected(n.Id) ? "bg-well/50" : ""}`}>
                   <Checkbox
                     label={`Select ${n.Name}`}
-                    title={builtin ? "Built into Docker" : users.length ? "Containers are connected" : undefined}
+                    title={builtin ? "Built into Docker" : managedEntry(n) ? "Managed by the configuration file" : users.length ? "Containers are connected" : undefined}
                     checked={sel.isSelected(n.Id)}
                     disabled={!removable(n)}
                     onChange={(on) => sel.toggle(n.Id, on)}
@@ -118,6 +124,7 @@ export default function NetworksPage() {
                         {n.Name}
                         {builtin && <Badge>built-in</Badge>}
                         {n.Internal && <Badge>internal</Badge>}
+                        {managedEntry(n) && <ManagedBadge entry={`networks.${managedEntry(n)}`} />}
                       </div>
                       <div className="text-[12.5px] text-slate">
                         {n.Driver}
@@ -139,7 +146,7 @@ export default function NetworksPage() {
                       )}
                     </div>
                   </div>
-                  {!builtin && (
+                  {!builtin && !managedEntry(n) && (
                     <IconButton
                       label="Delete network"
                       disabled={users.length > 0}

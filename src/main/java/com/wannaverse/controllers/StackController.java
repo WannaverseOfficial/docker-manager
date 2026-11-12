@@ -1,5 +1,8 @@
 package com.wannaverse.controllers;
 
+import com.wannaverse.iac.ConfigLockInterceptor;
+import com.wannaverse.iac.ConfigLocked;
+import com.wannaverse.persistence.ManagedResourceRepository;
 import com.wannaverse.persistence.Resource;
 import com.wannaverse.persistence.Stack;
 import com.wannaverse.security.AdminOnly;
@@ -27,9 +30,11 @@ import java.util.Map;
  */
 public class StackController {
     private final StackService stackService;
+    private final ManagedResourceRepository managed;
 
-    public StackController(StackService stackService) {
+    public StackController(StackService stackService, ManagedResourceRepository managed) {
         this.stackService = stackService;
+        this.managed = managed;
     }
 
     @GetMapping
@@ -80,6 +85,7 @@ public class StackController {
             action = "update",
             hostIdParam = "hostId",
             resourceIdParam = "name")
+    @ConfigLocked(section = "stacks", id = "name", host = "hostId")
     @Auditable(
             resource = Resource.STACKS,
             action = "update",
@@ -154,6 +160,11 @@ public class StackController {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unknown action: " + action);
         }
         requireDeleteForRemove(a, hostId, name);
+        if ((a == StackService.Action.REMOVE || a == StackService.Action.REMOVE_WITH_VOLUMES)
+                && managed.existsBySectionAndTargetIdAndHostId("stacks", name, hostId)) {
+            // Only the removal is locked: deploy, start and stop stay available.
+            throw new ResponseStatusException(HttpStatus.CONFLICT, ConfigLockInterceptor.MESSAGE);
+        }
         return result(name, stackService.start(hostId, name, a, username()).id);
     }
 
@@ -164,6 +175,7 @@ public class StackController {
             action = "deploy",
             hostIdParam = "hostId",
             resourceIdParam = "name")
+    @ConfigLocked(section = "stacks", id = "name", host = "hostId")
     @Auditable(resource = Resource.STACKS, action = "rollback", resourceIdParam = "name")
     public Map<String, Object> rollback(
             @PathVariable String hostId, @PathVariable String name, @PathVariable int version) {

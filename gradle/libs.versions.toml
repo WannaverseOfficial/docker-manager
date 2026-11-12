@@ -28,6 +28,7 @@ slf4j-bom = { group = "org.slf4j", name = "slf4j-bom", version.ref = "slf4j" }
 jackson-core = { group = "tools.jackson.core", name = "jackson-core" }
 jackson-databind = { group = "tools.jackson.core", name = "jackson-databind" }
 jackson-annotations = { group = "com.fasterxml.jackson.core", name = "jackson-annotations" }
+jackson-yaml = { group = "com.fasterxml.jackson.dataformat", name = "jackson-dataformat-yaml" }
 lombok = { group = "org.projectlombok", name = "lombok" }
 
 docker-java = { group = "com.github.docker-java", name = "docker-java", version.ref = "docker" }
@@ -48,7 +49,7 @@ spring-boot-mail = { group = "org.springframework.boot", name = "spring-boot-sta
 acme4j-client = { group = "org.shredzone.acme4j", name = "acme4j-client", version.ref = "acme4j" }
 
 [bundles]
-jackson = ["jackson-annotations", "jackson-core", "jackson-databind"]
+jackson = ["jackson-annotations", "jackson-core", "jackson-databind", "jackson-yaml"]
 docker = ["docker-java", "docker-java-httpclient"]
 jgit = ["jgit", "jgit-ssh"]
 jjwt = ["jjwt-api", "jjwt-impl", "jjwt-jackson"]

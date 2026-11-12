@@ -69,7 +69,8 @@ export function useContainerActions(hostId: string | null, onChanged: () => void
   return { act, remove };
 }
 
-export function ContainerMenu({ c, hostId, onChanged }: { c: Container; hostId: string; onChanged: () => void }) {
+/** `managed`: the configuration file manages the container, so it can't be removed here. */
+export function ContainerMenu({ c, hostId, onChanged, managed = false }: { c: Container; hostId: string; onChanged: () => void; managed?: boolean }) {
   const { act, remove } = useContainerActions(hostId, onChanged);
   const busy = !!usePending(c.Id);
   const name = containerName(c);
@@ -85,7 +86,7 @@ export function ContainerMenu({ c, hostId, onChanged }: { c: Container; hostId: 
         (running || paused) && { label: "Restart", onClick: () => act(c.Id, name, "restart", "restarted") },
         running && { label: "Pause", onClick: () => act(c.Id, name, "pause", "paused") },
         paused && { label: "Resume", onClick: () => act(c.Id, name, "unpause", "resumed") },
-        { label: "Remove", danger: true, onClick: () => remove(c.Id, name, c.Labels?.[COMPOSE_PROJECT]) },
+        !managed && { label: "Remove", danger: true, onClick: () => remove(c.Id, name, c.Labels?.[COMPOSE_PROJECT]) },
       ]}
     />
   );

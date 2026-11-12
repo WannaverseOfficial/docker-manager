@@ -29,5 +29,6 @@ public enum Resource {
     DATABASES,
     ROLLOUTS,
     SECURITY,
-    OBSERVABILITY
+    OBSERVABILITY,
+    CONFIGURATION
 }

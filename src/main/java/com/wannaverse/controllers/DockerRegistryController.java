@@ -1,5 +1,6 @@
 package com.wannaverse.controllers;
 
+import com.wannaverse.iac.ConfigLocked;
 import com.wannaverse.persistence.DockerRegistry;
 import com.wannaverse.persistence.DockerRegistry.RegistryType;
 import com.wannaverse.persistence.Resource;
@@ -67,6 +68,7 @@ public class DockerRegistryController {
         return ResponseEntity.ok(RegistryResponse.fromEntity(registry));
     }
 
+    @ConfigLocked(section = "registries", id = "id")
     @PutMapping("/{id}")
     @RequirePermission(resource = Resource.REGISTRIES, action = "update")
     public ResponseEntity<RegistryResponse> updateRegistry(
@@ -104,6 +106,7 @@ public class DockerRegistryController {
         return ResponseEntity.ok(RegistryResponse.fromEntity(registry));
     }
 
+    @ConfigLocked(section = "registries", id = "id")
     @DeleteMapping("/{id}")
     @RequirePermission(resource = Resource.REGISTRIES, action = "delete")
     public ResponseEntity<Void> deleteRegistry(@PathVariable String id) {
@@ -118,6 +121,7 @@ public class DockerRegistryController {
         return ResponseEntity.ok(Map.of("success", result.success(), "message", result.message()));
     }
 
+    @ConfigLocked(section = "registries", id = "id")
     @PostMapping("/{id}/set-default")
     @RequirePermission(resource = Resource.REGISTRIES, action = "update")
     public ResponseEntity<Void> setDefault(@PathVariable String id) {

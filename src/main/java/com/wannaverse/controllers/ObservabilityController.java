@@ -1,5 +1,6 @@
 package com.wannaverse.controllers;
 
+import com.wannaverse.iac.ConfigLocked;
 import com.wannaverse.persistence.ObservabilityStack;
 import com.wannaverse.persistence.Resource;
 import com.wannaverse.security.AdminOnly;
@@ -46,6 +47,7 @@ public class ObservabilityController {
     }
 
     @PutMapping
+    @ConfigLocked(section = "observability", id = "hostId")
     @Auditable(
             resource = Resource.OBSERVABILITY,
             action = "change_observability_stack",
@@ -66,6 +68,7 @@ public class ObservabilityController {
     }
 
     @DeleteMapping
+    @ConfigLocked(section = "observability", id = "hostId")
     @Auditable(
             resource = Resource.OBSERVABILITY,
             action = "remove_observability_stack",

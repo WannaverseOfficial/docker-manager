@@ -1,6 +1,7 @@
 package com.wannaverse.controllers;
 
 import com.wannaverse.dto.NotificationPreferencesResponse;
+import com.wannaverse.iac.handlers.UsersHandler;
 import com.wannaverse.persistence.NotificationEventType;
 import com.wannaverse.persistence.Resource;
 import com.wannaverse.persistence.UserNotificationPreference;
@@ -27,12 +28,15 @@ public class NotificationPreferencesController {
 
     private final UserNotificationPreferenceRepository preferenceRepository;
     private final UserRepository userRepository;
+    private final UsersHandler usersHandler;
 
     public NotificationPreferencesController(
             UserNotificationPreferenceRepository preferenceRepository,
-            UserRepository userRepository) {
+            UserRepository userRepository,
+            UsersHandler usersHandler) {
         this.preferenceRepository = preferenceRepository;
         this.userRepository = userRepository;
+        this.usersHandler = usersHandler;
     }
 
     private String getCurrentUserId() {
@@ -58,6 +62,11 @@ public class NotificationPreferencesController {
     public ResponseEntity<NotificationPreferencesResponse> updatePreferences(
             @RequestBody Map<String, Boolean> preferences) {
         String userId = getCurrentUserId();
+        if (usersHandler.managesNotifications(userId)) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Your notifications are set in the configuration file. Ask an administrator.");
+        }
 
         var user =
                 userRepository

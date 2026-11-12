@@ -6,6 +6,8 @@ import { Badge, Button, Empty, Field, Notice, PageHeader, Panel, Select, Spinner
 import { api, qs } from "@/lib/api";
 import { dateTime } from "@/lib/format";
 import { usePoll } from "@/lib/hooks";
+import { useManaged } from "@/lib/managed";
+import { ManagedNote } from "@/components/managed";
 
 type Tab = "notifications" | "email" | "log";
 
@@ -101,6 +103,7 @@ function EmailServer() {
   const [error, setError] = useState<string | null>(null);
   const [testTo, setTestTo] = useState("");
   const toast = useToast();
+  const locked = useManaged().sectionManaged("smtp");
 
   useEffect(() => {
     api
@@ -134,6 +137,8 @@ function EmailServer() {
             }
           }}
         >
+          {locked && <ManagedNote what="The email server" />}
+          <fieldset disabled={locked} className="contents">
           <div className="grid gap-4 sm:grid-cols-[1fr_8rem]">
             <Field label="Server">
               <input className={inputClass} value={form.host} onChange={(e) => set("host", e.target.value)} placeholder="smtp.example.com" required />
@@ -178,6 +183,7 @@ function EmailServer() {
               Save
             </Button>
           </div>
+          </fieldset>
         </form>
       </Panel>
       <Panel title="Send a test">

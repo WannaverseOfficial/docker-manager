@@ -1,6 +1,7 @@
 package com.wannaverse.controllers;
 
 import com.wannaverse.dto.RolloutRequest;
+import com.wannaverse.iac.ConfigLocked;
 import com.wannaverse.persistence.Resource;
 import com.wannaverse.persistence.Rollout;
 import com.wannaverse.persistence.RolloutRun;
@@ -54,6 +55,7 @@ public class RolloutController {
 
     @PutMapping("/{id}")
     @AdminOnly
+    @ConfigLocked(section = "rollouts", id = "id")
     @RequirePermission(resource = Resource.ROLLOUTS, action = "update")
     @Auditable(resource = Resource.ROLLOUTS, action = "update", resourceIdParam = "id")
     public RolloutView update(@PathVariable String id, @RequestBody RolloutRequest request) {
@@ -62,6 +64,7 @@ public class RolloutController {
 
     @DeleteMapping("/{id}")
     @AdminOnly
+    @ConfigLocked(section = "rollouts", id = "id")
     @RequirePermission(resource = Resource.ROLLOUTS, action = "delete")
     @Auditable(resource = Resource.ROLLOUTS, action = "delete", resourceIdParam = "id")
     public ResponseEntity<Void> delete(@PathVariable String id) {

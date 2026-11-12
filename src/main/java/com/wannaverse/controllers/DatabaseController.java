@@ -1,5 +1,6 @@
 package com.wannaverse.controllers;
 
+import com.wannaverse.iac.ConfigLocked;
 import com.wannaverse.persistence.DatabaseBackup;
 import com.wannaverse.persistence.DatabaseServer;
 import com.wannaverse.persistence.Resource;
@@ -72,6 +73,7 @@ public class DatabaseController {
     }
 
     @DeleteMapping("/servers/{id}")
+    @ConfigLocked(section = "databases", id = "id")
     @Auditable(
             resource = Resource.DATABASES,
             action = "remove_database_server",
@@ -89,6 +91,7 @@ public class DatabaseController {
 
     /** Opens, moves or closes the port on the host (recreates the container; data is kept). */
     @PutMapping("/servers/{id}/port")
+    @ConfigLocked(section = "databases", id = "id")
     @Auditable(
             resource = Resource.DATABASES,
             action = "change_database_port",
@@ -187,6 +190,7 @@ public class DatabaseController {
     public record AccessRequest(String database, String role, String level) {}
 
     @PutMapping("/servers/{id}/access")
+    @ConfigLocked(section = "databases", id = "id")
     @Auditable(
             resource = Resource.DATABASES,
             action = "set_database_access",
@@ -308,6 +312,7 @@ public class DatabaseController {
     }
 
     @PutMapping("/servers/{id}/settings")
+    @ConfigLocked(section = "databases", id = "id")
     @Auditable(
             resource = Resource.DATABASES,
             action = "update_backup_settings",

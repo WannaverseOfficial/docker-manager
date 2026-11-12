@@ -23,9 +23,11 @@ import {
   useConfirm,
   useToast,
 } from "@/components/ui";
+import { ManagedBadge, ManagedNote } from "@/components/managed";
 import { api, enc } from "@/lib/api";
 import { ago, dateTime, shortId } from "@/lib/format";
 import { usePoll, useStackJob } from "@/lib/hooks";
+import { useManaged } from "@/lib/managed";
 import type { StackDetail } from "@/lib/types";
 
 type Tab = "containers" | "compose" | "logs" | "versions";
@@ -78,6 +80,9 @@ function StackView() {
       job.follow(stack.runningJobId);
     }
   }, [stack, resumed, job]);
+  // Managed by the configuration file: its compose file, rollbacks and removal go through the file.
+  const managed = useManaged();
+  const entry = managed.find("stacks", name, hostId)?.key;
 
   if (!hostId) return null;
   if (error && !stack)
@@ -132,6 +137,7 @@ function StackView() {
               </Link>
             )}
             {!s.managed && <Badge tone="warn">not managed here</Badge>}
+            {entry && <ManagedBadge entry={`stacks.${entry}`} />}
           </span>
         }
       >
@@ -162,8 +168,8 @@ function StackView() {
             s.managed && !git && { label: "Pull newest images and redeploy", onClick: () => action("PULL_AND_DEPLOY"), disabled: job.running },
             s.running > 0 && { label: "Restart", onClick: () => action("RESTART"), disabled: job.running },
             s.total > 0 && { label: "Take down", onClick: () => action("DOWN"), disabled: job.running },
-            s.managed && session?.admin && { label: "Remove stack", danger: true, onClick: () => action("REMOVE"), disabled: job.running },
-            s.managed && session?.admin && { label: "Remove stack and its volumes", danger: true, onClick: () => action("REMOVE_WITH_VOLUMES"), disabled: job.running },
+            s.managed && !entry && session?.admin && { label: "Remove stack", danger: true, onClick: () => action("REMOVE"), disabled: job.running },
+            s.managed && !entry && session?.admin && { label: "Remove stack and its volumes", danger: true, onClick: () => action("REMOVE_WITH_VOLUMES"), disabled: job.running },
           ]}
         />
           </>
@@ -247,9 +253,9 @@ function StackView() {
             ))}
           </ul>
         ))}
-      {tab === "compose" && <ComposeTab stack={stack} base={base!} busy={job.running} onDeploy={(id) => job.follow(id)} onSaved={refresh} hostId={hostId} admin={!!session?.admin} />}
+      {tab === "compose" && <ComposeTab stack={stack} base={base!} busy={job.running} onDeploy={(id) => job.follow(id)} onSaved={refresh} hostId={hostId} admin={!!session?.admin} locked={!!entry} />}
       {tab === "logs" && <StackLogs base={base!} />}
-      {tab === "versions" && <Versions stack={stack} base={base!} onRollback={(id) => job.follow(id)} admin={!!session?.admin} />}
+      {tab === "versions" && <Versions stack={stack} base={base!} onRollback={(id) => job.follow(id)} admin={!!session?.admin} locked={!!entry} />}
     </>
   );
 }
@@ -391,6 +397,7 @@ function ComposeTab({
   onDeploy,
   onSaved,
   admin,
+  locked,
 }: {
   stack: StackDetail;
   base: string;
@@ -399,9 +406,10 @@ function ComposeTab({
   onDeploy: (jobId: string) => void;
   onSaved: () => void;
   admin: boolean;
+  locked: boolean;
 }) {
   const toast = useToast();
-  const readOnly = stack.summary.source === "GIT" || !stack.summary.managed || !admin;
+  const readOnly = stack.summary.source === "GIT" || !stack.summary.managed || !admin || locked;
   const [compose, setCompose] = useState(stack.composeContent ?? "");
   const [env, setEnv] = useState(stack.envContent ?? "");
   const [saving, setSaving] = useState<null | "save" | "deploy" | "check">(null);
@@ -428,6 +436,7 @@ function ComposeTab({
   return (
     <div className="flex flex-col gap-6">
       {stack.summary.source === "GIT" && <Notice>This file comes from the git repository. Change it there and deploy the repository.</Notice>}
+      {locked && <ManagedNote what="This stack" />}
       {!admin && stack.summary.managed && stack.summary.source !== "GIT" && (
         <Notice>Compose files can give containers access to the host, so only administrators edit them. You can deploy, start and stop the stack.</Notice>
       )}
@@ -506,11 +515,11 @@ function StackLogs({ base }: { base: string }) {
   );
 }
 
-function Versions({ stack, base, onRollback, admin }: { stack: StackDetail; base: string; onRollback: (jobId: string) => void; admin: boolean }) {
+function Versions({ stack, base, onRollback, admin, locked }: { stack: StackDetail; base: string; onRollback: (jobId: string) => void; admin: boolean; locked: boolean }) {
   const confirm = useConfirm();
   const toast = useToast();
   if (!stack.versions.length) return <Empty title="No versions yet">Each deploy is saved here, so you can go back to an earlier compose file.</Empty>;
-  const canRollback = admin && stack.summary.managed && stack.summary.source !== "GIT";
+  const canRollback = admin && !locked && stack.summary.managed && stack.summary.source !== "GIT";
   return (
     <>
       <ul className="rounded-2xl border border-line bg-paper divide-y divide-line">

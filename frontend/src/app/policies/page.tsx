@@ -3,14 +3,17 @@
 import { useState } from "react";
 import { X } from "lucide-react";
 import { useSession } from "@/components/app";
+import { ManagedBadge } from "@/components/managed";
 import { Badge, Button, Empty, Field, IconButton, Menu, Modal, Notice, PageHeader, Panel, Segmented, Spinner, Toggle, inputClass, useConfirm, useToast } from "@/components/ui";
 import { api } from "@/lib/api";
 import { usePoll } from "@/lib/hooks";
+import { useManaged } from "@/lib/managed";
 import type { Policy } from "@/lib/types";
 
 export default function PoliciesPage() {
   const { session } = useSession();
   const { data, error, refresh } = usePoll<Policy[]>("/api/image-policies");
+  const managed = useManaged();
   const [creating, setCreating] = useState(false);
   const [image, setImage] = useState("");
   const [check, setCheck] = useState<{ allowed: boolean; reason: string; policyName: string | null } | null>(null);
@@ -57,6 +60,7 @@ export default function PoliciesPage() {
             key={p.id}
             policy={p}
             admin={!!session?.admin}
+            managedKey={managed.find("imagePolicies", p.id)?.key}
             onChange={refresh}
             onDelete={async () => {
               if (!(await confirm({ title: `Delete “${p.name}”?`, confirm: "Delete", danger: true }))) return;
@@ -71,8 +75,22 @@ export default function PoliciesPage() {
   );
 }
 
-function PolicyCard({ policy, admin, onChange, onDelete }: { policy: Policy; admin: boolean; onChange: () => void; onDelete: () => void }) {
+function PolicyCard({
+  policy,
+  admin,
+  managedKey,
+  onChange,
+  onDelete,
+}: {
+  policy: Policy;
+  admin: boolean;
+  managedKey?: string;
+  onChange: () => void;
+  onDelete: () => void;
+}) {
   const { data, refresh } = usePoll<Policy>(`/api/image-policies/${policy.id}`);
+  // Policies the configuration file manages are changed there, not here.
+  const canEdit = admin && !managedKey;
   const [pattern, setPattern] = useState("");
   const toast = useToast();
   return (
@@ -82,10 +100,11 @@ function PolicyCard({ policy, admin, onChange, onDelete }: { policy: Policy; adm
           {policy.name}
           <Badge tone={policy.policyType === "ALLOW" ? "ok" : "danger"}>{policy.policyType === "ALLOW" ? "allow list" : "block list"}</Badge>
           {!policy.enabled && <Badge>off</Badge>}
+          {managedKey && <ManagedBadge entry={managedKey} />}
         </span>
       }
       action={
-        admin && (
+        canEdit && (
           <Menu
             items={[
               {
@@ -106,7 +125,7 @@ function PolicyCard({ policy, admin, onChange, onDelete }: { policy: Policy; adm
         {(data?.rules ?? []).map((r) => (
           <li key={r.id} className="inline-flex items-center gap-1 rounded-full bg-well pl-3 pr-1 h-8 font-mono text-[12.5px]">
             {r.pattern}
-            {admin && (
+            {canEdit && (
               <IconButton
                 label={`Remove ${r.pattern}`}
                 className="size-6"
@@ -123,7 +142,7 @@ function PolicyCard({ policy, admin, onChange, onDelete }: { policy: Policy; adm
         ))}
         {data && !data.rules?.length && <li className="text-[14px] text-slate">No patterns yet.</li>}
       </ul>
-      {admin && (
+      {canEdit && (
         <form
           className="flex gap-2 mt-4"
           onSubmit={async (e) => {

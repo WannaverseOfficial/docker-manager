@@ -267,6 +267,11 @@ public class ObservabilityService {
                 .orElse(Map.of("status", "PENDING", "message", ""));
     }
 
+    /** Whether the stack is being set up, changed or repaired right now. */
+    public boolean isBusy(String hostId) {
+        return busy.contains(hostId);
+    }
+
     public String adminPassword(String hostId) {
         return encryptionService.decrypt(require(hostId).getGrafanaAdminPassword());
     }

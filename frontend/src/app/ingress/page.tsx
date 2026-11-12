@@ -29,6 +29,8 @@ import {
 import { api } from "@/lib/api";
 import { ago, containerName, dateTime } from "@/lib/format";
 import { usePoll } from "@/lib/hooks";
+import { useManaged } from "@/lib/managed";
+import { ManagedBadge, ManagedNote } from "@/components/managed";
 import type { Certificate, Container, ContainerInspect, IngressConfig, IngressRoute, NginxStatus } from "@/lib/types";
 
 type Tab = "routes" | "certificates" | "config" | "activity";
@@ -59,6 +61,17 @@ function Enable({ hostId, config, onChange }: { hostId: string; config: IngressC
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(config.status === "ERROR" ? config.lastError : null);
   const toast = useToast();
+  const managed = useManaged().onHost("ingress", hostId);
+  if (managed) {
+    return (
+      <Panel title="Ingress is off">
+        <div className="flex flex-col gap-2">
+          <ManagedNote what="Ingress on this host" />
+          <p className="text-[14px] text-slate">The configuration file turns it off. Set enabled: true there to turn it on.</p>
+        </div>
+      </Panel>
+    );
+  }
   return (
     <div className="grid gap-6 lg:grid-cols-[1fr_minmax(0,22rem)]">
       <Panel title="Turn on ingress">
@@ -128,6 +141,7 @@ function Enabled({ hostId, config, onChange }: { hostId: string; config: Ingress
   const [settings, setSettings] = useState(false);
   const toast = useToast();
   const confirm = useConfirm();
+  const managedConfig = useManaged().onHost("ingress", hostId);
 
   const reapply = async () => {
     try {
@@ -150,9 +164,15 @@ function Enabled({ hostId, config, onChange }: { hostId: string; config: Ingress
           </div>
           <div className="text-[12.5px] text-slate mt-1">
             Ports {config.httpPort} and {config.httpsPort}
-            <button className="ml-2 underline underline-offset-2 hover:text-ink" onClick={() => setSettings(true)}>
-              Change
-            </button>
+            {managedConfig ? (
+              <span className="ml-2 align-middle">
+                <ManagedBadge entry={`ingress`} />
+              </span>
+            ) : (
+              <button className="ml-2 underline underline-offset-2 hover:text-ink" onClick={() => setSettings(true)}>
+                Change
+              </button>
+            )}
           </div>
         </Panel>
         <Panel>
@@ -188,14 +208,16 @@ function Enabled({ hostId, config, onChange }: { hostId: string; config: Ingress
           <div className="flex justify-between items-center gap-3 mb-4">
             <p className="text-[14px] text-slate">Each route sends one hostname (and optional path) to a container, an address, or another website.</p>
             <div className="flex items-center gap-2">
-              <Button tone="quiet" onClick={() => setSettings(true)}>
-                Settings
-              </Button>
+              {!managedConfig && (
+                <Button tone="quiet" onClick={() => setSettings(true)}>
+                  Settings
+                </Button>
+              )}
               <Button onClick={() => setEditing("new")}>Add route</Button>
               <Menu
                 items={[
                   { label: "Re-apply configuration", onClick: reapply },
-                  {
+                  !managedConfig && {
                     label: "Turn ingress off",
                     danger: true,
                     onClick: async () => {
@@ -245,6 +267,7 @@ function Enabled({ hostId, config, onChange }: { hostId: string; config: Ingress
 function Routes({ routes, certs, onEdit, onChange }: { routes: IngressRoute[] | null; certs: Certificate[]; onEdit: (r: IngressRoute) => void; onChange: () => void }) {
   const toast = useToast();
   const confirm = useConfirm();
+  const { find } = useManaged();
   if (!routes) return <Spinner />;
   if (!routes.length) return <Empty title="No routes yet">Add one to publish a container on a hostname such as app.example.com.</Empty>;
   const certFor = (h: string) => certs.find((c) => c.hostname === h);
@@ -254,6 +277,7 @@ function Routes({ routes, certs, onEdit, onChange }: { routes: IngressRoute[] | 
         const cert = certFor(r.hostname);
         const https = r.tlsMode !== "NONE" && cert?.status === "ACTIVE";
         const url = `${https ? "https" : "http"}://${r.hostname}${r.pathPrefix === "/" ? "" : r.pathPrefix}`;
+        const managed = find("ingress.routes", r.id);
         return (
           <li key={r.id} className={`flex items-center gap-3 px-4 py-3 ${r.enabled ? "" : "opacity-60"}`}>
             <div className="flex-1 min-w-0 grid gap-x-6 gap-y-1 sm:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,1fr)] items-center">
@@ -271,6 +295,7 @@ function Routes({ routes, certs, onEdit, onChange }: { routes: IngressRoute[] | 
                       managed by a rollout
                     </Link>
                   )}
+                  {managed && <ManagedBadge entry={managed.key && `ingress.${managed.key.replace("/", ".routes.")}`} />}
                 </div>
               </div>
               <div className="text-[13px] truncate" title={routeTarget(r)}>
@@ -296,6 +321,7 @@ function Routes({ routes, certs, onEdit, onChange }: { routes: IngressRoute[] | 
                 )}
               </div>
             </div>
+            {!managed && (
             <Menu
               items={[
                 { label: "Edit", onClick: () => onEdit(r) },
@@ -325,6 +351,7 @@ function Routes({ routes, certs, onEdit, onChange }: { routes: IngressRoute[] | 
                 },
               ]}
             />
+            )}
           </li>
         );
       })}
@@ -679,6 +706,7 @@ function Certificates({ certs, onChange }: { certs: Certificate[] | null; onChan
   const toast = useToast();
   const confirm = useConfirm();
   const [uploading, setUploading] = useState<Certificate | null>(null);
+  const { find } = useManaged();
   if (!certs) return <Spinner />;
   if (!certs.length) return <Empty title="No certificates">Routes with HTTPS get one automatically.</Empty>;
   const call = async (path: string, msg: string, body?: unknown) => {
@@ -694,7 +722,9 @@ function Certificates({ certs, onChange }: { certs: Certificate[] | null; onChan
   return (
     <>
       <ul className="rounded-2xl border border-line bg-paper divide-y divide-line">
-        {certs.map((c) => (
+        {certs.map((c) => {
+          const managed = find("ingress.certificates", c.id);
+          return (
           <li key={c.id} className="flex items-start gap-3 px-4 py-3">
             <div className="flex-1 min-w-0">
               <div className="flex flex-wrap items-center gap-2">
@@ -707,20 +737,22 @@ function Certificates({ certs, onChange }: { certs: Certificate[] | null; onChan
                   <Badge tone="live">{c.status === "RENEWAL_PENDING" ? "renewing" : "pending"}</Badge>
                 )}
                 <Badge>{c.source === "LETS_ENCRYPT" ? "Let's Encrypt" : "uploaded"}</Badge>
+                {managed && <ManagedBadge entry={managed.key && `ingress.${managed.key.replace("/", ".certificates.")}`} />}
               </div>
               {c.statusMessage && <p className={`text-[13px] mt-1 break-words ${c.status === "ERROR" ? "text-danger" : "text-slate"}`}>{c.statusMessage}</p>}
               {c.expiresAt && <p className="text-[12.5px] text-slate mt-0.5">Expires {dateTime(c.expiresAt)}</p>}
             </div>
+            {!managed && (
             <Menu
               items={[
                 c.source === "LETS_ENCRYPT" && c.status === "ERROR" && { label: "Try again", onClick: () => call(`/api/ingress/certificates/${c.id}/retry`, "Requesting a certificate") },
                 c.source === "LETS_ENCRYPT" && c.status === "ACTIVE" && { label: "Renew now", onClick: () => call(`/api/ingress/certificates/${c.id}/renew`, "Renewing") },
-                c.source === "LETS_ENCRYPT" && {
+                c.source === "LETS_ENCRYPT" && !managed && {
                   label: c.autoRenew ? "Turn off automatic renewal" : "Turn on automatic renewal",
                   onClick: () => call(`/api/ingress/certificates/${c.id}/auto-renew`, "Saved", { autoRenew: !c.autoRenew }),
                 },
-                c.source !== "LETS_ENCRYPT" && { label: "Upload certificate", onClick: () => setUploading(c) },
-                {
+                c.source !== "LETS_ENCRYPT" && !managed && { label: "Upload certificate", onClick: () => setUploading(c) },
+                !managed && {
                   label: "Delete",
                   danger: true,
                   onClick: async () => {
@@ -735,8 +767,10 @@ function Certificates({ certs, onChange }: { certs: Certificate[] | null; onChan
                 },
               ]}
             />
+            )}
           </li>
-        ))}
+          );
+        })}
       </ul>
       {uploading && <UploadDialog cert={uploading} onClose={() => setUploading(null)} onSaved={() => (setUploading(null), onChange())} />}
     </>

@@ -6,6 +6,7 @@ import { Suspense, useMemo, useRef, useState, type ReactNode } from "react";
 import { Play } from "lucide-react";
 import { useHost, useSession } from "@/components/app";
 import { ReachPicker, validPort, type Reach } from "@/components/databases";
+import { ManagedBadge, ManagedNote } from "@/components/managed";
 import {
   Badge,
   Button,
@@ -48,6 +49,7 @@ import {
 } from "@/lib/databases";
 import { ago, bytes, dateTime, plural } from "@/lib/format";
 import { usePoll } from "@/lib/hooks";
+import { useManaged } from "@/lib/managed";
 import type { Container } from "@/lib/types";
 
 type Tab = "overview" | "databases" | "users" | "query" | "backups" | "containers";
@@ -73,6 +75,8 @@ function ServerPage() {
   const { data: view, error, refresh } = usePoll<ServerView>(id && session?.admin ? base : null, 3000);
   const s = view?.server;
   const running = view?.state === "running";
+  const managedEntry = useManaged().find("databases", s?.id);
+  const managed = !!managedEntry;
 
   if (!session?.admin) {
     return (
@@ -92,6 +96,7 @@ function ServerPage() {
           view && (
             <span className="inline-flex flex-wrap items-center gap-x-3 gap-y-1">
               <StateBadge state={view.state} status={view.health === "unhealthy" ? "(unhealthy)" : undefined} />
+              {managedEntry && <ManagedBadge entry={managedEntry.key} />}
               {view.version && <span>PostgreSQL {view.version}</span>}
               {view.containerId && (
                 <Link className="underline underline-offset-2" href={`/containers/view/?id=${view.containerId}`}>
@@ -126,10 +131,11 @@ function ServerPage() {
               { value: "containers", label: "Containers" },
             ]}
           />
-          {tab === "overview" && <Overview view={view} onChange={refresh} />}
+          {tab === "overview" && <Overview view={view} managed={managed} onChange={refresh} />}
           {tab === "databases" && running && (
             <Databases
               server={s}
+              managed={managed}
               onQuery={(db) => {
                 setQueryDb(db);
                 setTab("query");
@@ -138,7 +144,7 @@ function ServerPage() {
           )}
           {tab === "users" && running && <Users server={s} />}
           {tab === "query" && running && <Query server={s} initialDb={queryDb} />}
-          {tab === "backups" && <Backups server={s} running={running} onChange={refresh} />}
+          {tab === "backups" && <Backups server={s} running={running} managed={managed} onChange={refresh} />}
           {tab === "containers" && <Containers server={s} />}
         </>
       )}
@@ -180,7 +186,7 @@ function ActivityBanner({ server, onDismiss }: { server: DatabaseServer; onDismi
 
 // --- overview ------------------------------------------------------------------------------------
 
-function Overview({ view, onChange }: { view: ServerView; onChange: () => void }) {
+function Overview({ view, managed, onChange }: { view: ServerView; managed: boolean; onChange: () => void }) {
   const s = view.server;
   const router = useRouter();
   const toast = useToast();
@@ -210,9 +216,11 @@ function Overview({ view, onChange }: { view: ServerView; onChange: () => void }
                 ) : (
                   <span className="text-slate">No port opened</span>
                 )}
-                <button className="underline underline-offset-2 disabled:opacity-40" disabled={!!s.activity} onClick={() => setChangingPort(true)}>
-                  Change
-                </button>
+                {!managed && (
+                  <button className="underline underline-offset-2 disabled:opacity-40" disabled={!!s.activity} onClick={() => setChangingPort(true)}>
+                    Change
+                  </button>
+                )}
               </span>,
             ],
             ["Administrator", <span key="u" className="font-mono text-[13px]">{s.superuser}</span>],
@@ -243,10 +251,16 @@ function Overview({ view, onChange }: { view: ServerView; onChange: () => void }
           ]}
         />
         <div className="mt-5 pt-4 border-t border-line flex flex-wrap items-center justify-between gap-3">
-          <p className="text-[13px] text-slate">Removing the server keeps its data volume and backups unless you choose otherwise.</p>
-          <Button tone="danger" size="sm" onClick={() => setRemoving(true)}>
-            Remove server
-          </Button>
+          {managed ? (
+            <ManagedNote what="This server's port, backup settings, access and removal" />
+          ) : (
+            <>
+              <p className="text-[13px] text-slate">Removing the server keeps its data volume and backups unless you choose otherwise.</p>
+              <Button tone="danger" size="sm" onClick={() => setRemoving(true)}>
+                Remove server
+              </Button>
+            </>
+          )}
         </div>
       </Panel>
       {removing && <RemoveServer server={s} onClose={() => setRemoving(false)} onRemoved={() => router.push("/databases/")} />}
@@ -374,7 +388,7 @@ function RemoveServer({ server, onClose, onRemoved }: { server: DatabaseServer; 
 
 // --- databases -----------------------------------------------------------------------------------
 
-function Databases({ server, onQuery }: { server: DatabaseServer; onQuery: (db: string) => void }) {
+function Databases({ server, managed, onQuery }: { server: DatabaseServer; managed: boolean; onQuery: (db: string) => void }) {
   const base = `/api/databases/servers/${server.id}`;
   const { data, error, refresh } = usePoll<DatabaseInfo[]>(`${base}/databases`, 15000);
   const confirm = useConfirm();
@@ -426,7 +440,7 @@ function Databases({ server, onQuery }: { server: DatabaseServer; onQuery: (db: 
                   <Menu
                     items={[
                       { label: "Query", onClick: () => onQuery(d.name) },
-                      !system && { label: "Manage access", onClick: () => setAccess(d) },
+                      !system && !managed && { label: "Manage access", onClick: () => setAccess(d) },
                       !system && { label: "Back up this database", onClick: () => backUp(d.name) },
                       !system && {
                         label: "Delete",
@@ -964,7 +978,7 @@ function ResultTable({ r }: { r: { columns: string[]; rows: (string | null)[][];
 
 // --- backups -------------------------------------------------------------------------------------
 
-function Backups({ server, running, onChange }: { server: DatabaseServer; running: boolean; onChange: () => void }) {
+function Backups({ server, running, managed, onChange }: { server: DatabaseServer; running: boolean; managed: boolean; onChange: () => void }) {
   const base = `/api/databases/servers/${server.id}`;
   const { data, error, refresh } = usePoll<Backup[]>(`${base}/backups`, server.activity ? 2500 : 5000);
   const toast = useToast();
@@ -1014,7 +1028,7 @@ function Backups({ server, running, onChange }: { server: DatabaseServer; runnin
           }}
         />
       </div>
-      <BackupSettings server={server} onSaved={onChange} />
+      <BackupSettings server={server} managed={managed} onSaved={onChange} />
       {error && <Notice tone="error">{error}</Notice>}
       {!data && !error && <Spinner />}
       {data && data.length === 0 && <Empty title="No backups yet">Back up now, wait for the first automatic backup, or upload one you made elsewhere (pg_dump or pg_dumpall output).</Empty>}
@@ -1106,7 +1120,7 @@ function Backups({ server, running, onChange }: { server: DatabaseServer; runnin
   );
 }
 
-function BackupSettings({ server, onSaved }: { server: DatabaseServer; onSaved: () => void }) {
+function BackupSettings({ server, managed, onSaved }: { server: DatabaseServer; managed: boolean; onSaved: () => void }) {
   const toast = useToast();
   const [interval, setInterval_] = useState(String(server.backupIntervalHours));
   const [keep, setKeep] = useState(String(server.backupKeep));
@@ -1149,8 +1163,27 @@ function BackupSettings({ server, onSaved }: { server: DatabaseServer; onSaved: 
     }
   };
 
+  const testOnly = async () => {
+    setBusy("test");
+    setError(null);
+    try {
+      await api.post(`/api/databases/servers/${server.id}/settings/s3-test`);
+      toast("Docker Manager wrote and deleted a test file in the bucket.");
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
   return (
     <Panel title="Settings">
+      {managed && (
+        <div className="mb-4">
+          <ManagedNote what="These settings are" />
+        </div>
+      )}
+      <fieldset disabled={managed} className="contents">
       <div className="grid gap-4 sm:grid-cols-2">
         <Field label="Automatic backups" hint="Whole-server backups (every database and user).">
           <Select value={interval} onChange={setInterval_}>
@@ -1190,19 +1223,30 @@ function BackupSettings({ server, onSaved }: { server: DatabaseServer; onSaved: 
           </div>
         )}
       </div>
+      </fieldset>
       {error && (
         <div className="mt-4">
           <Notice tone="error">{error}</Notice>
         </div>
       )}
       <div className="mt-5 flex flex-wrap gap-2">
-        <Button busy={busy === "save"} disabled={!!busy} onClick={() => save(false)}>
-          Save
-        </Button>
-        {s3 && (
-          <Button tone="quiet" busy={busy === "test"} disabled={!!busy} onClick={() => save(true)}>
-            Save and test
-          </Button>
+        {managed ? (
+          server.s3Enabled && (
+            <Button tone="quiet" busy={busy === "test"} disabled={!!busy} onClick={testOnly}>
+              Test S3
+            </Button>
+          )
+        ) : (
+          <>
+            <Button busy={busy === "save"} disabled={!!busy} onClick={() => save(false)}>
+              Save
+            </Button>
+            {s3 && (
+              <Button tone="quiet" busy={busy === "test"} disabled={!!busy} onClick={() => save(true)}>
+                Save and test
+              </Button>
+            )}
+          </>
         )}
       </div>
     </Panel>

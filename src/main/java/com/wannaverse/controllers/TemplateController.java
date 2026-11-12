@@ -1,5 +1,6 @@
 package com.wannaverse.controllers;
 
+import com.wannaverse.iac.ConfigLocked;
 import com.wannaverse.persistence.ContainerTemplate;
 import com.wannaverse.persistence.Resource;
 import com.wannaverse.security.CurrentUser;
@@ -83,6 +84,7 @@ public class TemplateController {
         return ResponseEntity.status(HttpStatus.CREATED).body(created);
     }
 
+    @ConfigLocked(section = "templates", id = "id")
     @PutMapping("/{id}")
     @RequirePermission(resource = Resource.TEMPLATES, action = "update")
     public ResponseEntity<ContainerTemplate> updateTemplate(
@@ -92,6 +94,7 @@ public class TemplateController {
         return ResponseEntity.ok(templateService.updateTemplate(id, template, username));
     }
 
+    @ConfigLocked(section = "templates", id = "id")
     @DeleteMapping("/{id}")
     @RequirePermission(resource = Resource.TEMPLATES, action = "delete")
     public ResponseEntity<Void> deleteTemplate(@PathVariable String id) {
