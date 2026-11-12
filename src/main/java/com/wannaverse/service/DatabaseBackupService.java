@@ -57,6 +57,7 @@ public class DatabaseBackupService {
     private final PostgresService postgres;
     private final DockerHostService dockerHostService;
     private final EncryptionService encryptionService;
+    private final NotificationService notificationService;
     private final Path root;
     private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
     private final Set<String> busy = ConcurrentHashMap.newKeySet();
@@ -67,7 +68,9 @@ public class DatabaseBackupService {
             PostgresService postgres,
             DockerHostService dockerHostService,
             EncryptionService encryptionService,
+            @org.springframework.context.annotation.Lazy NotificationService notificationService,
             @Value("${app.data-dir:database}") String dataDir) {
+        this.notificationService = notificationService;
         this.backups = backups;
         this.servers = servers;
         this.postgres = postgres;
@@ -84,6 +87,7 @@ public class DatabaseBackupService {
             b.setFinishedAt(System.currentTimeMillis());
             backups.save(b);
             deleteQuietly(b);
+            notifyFailed(b, false);
         }
         for (DatabaseServer s : servers.findAll()) {
             if (s.getActivity() != null) {
@@ -239,6 +243,7 @@ public class DatabaseBackupService {
             b.setFinishedAt(System.currentTimeMillis());
             backups.save(b);
             copyToS3(s, b);
+            if ("FAILED".equals(b.getS3Status())) notifyFailed(b, true);
             prune(s);
             return true;
         } catch (Exception e) {
@@ -248,9 +253,19 @@ public class DatabaseBackupService {
             b.setFinishedAt(System.currentTimeMillis());
             backups.save(b);
             deleteQuietly(b);
+            notifyFailed(b, false);
             return false;
         } finally {
             api.execFull(s.getContainerName(), Map.of(), 60, "sh", "-c", "rm -f " + tmp + ".*");
+        }
+    }
+
+    /** Emails administrators who want to hear about failed backups (Settings, Notifications). */
+    private void notifyFailed(DatabaseBackup b, boolean copyOnly) {
+        try {
+            notificationService.notifyDatabaseBackupFailed(b, copyOnly);
+        } catch (Exception e) {
+            log.warn("Could not send the backup failure email: {}", e.getMessage());
         }
     }
 

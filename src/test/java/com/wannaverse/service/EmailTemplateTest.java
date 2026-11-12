@@ -39,6 +39,38 @@ class EmailTemplateTest {
     }
 
     @Test
+    void failedBackupsSayWhatFailedAndLinkToTheBackups() {
+        var failed =
+                Map.<String, Object>of(
+                        "serverName", "main",
+                        "serverId", "s1",
+                        "databaseName", "shop",
+                        "origin", "SCHEDULED",
+                        "copyOnly", false,
+                        "errorMessage", "pg_dump: <connection refused>");
+        var email = templates.render(NotificationEventType.DATABASE_BACKUP_FAILED, failed);
+        assertEquals(
+                "Backup of main failed",
+                templates.getSubject(NotificationEventType.DATABASE_BACKUP_FAILED, failed));
+        assertTrue(
+                email.html()
+                        .contains("https://dm.example.com/databases/view/?id=s1&amp;tab=backups"));
+        assertTrue(email.html().contains("&lt;connection refused&gt;"));
+        assertTrue(email.text().contains("The backup schedule"));
+
+        var copy = new java.util.HashMap<>(failed);
+        copy.put("copyOnly", true);
+        assertEquals(
+                "A backup of main wasn't copied to S3",
+                templates.getSubject(NotificationEventType.DATABASE_BACKUP_FAILED, copy));
+        assertTrue(
+                templates
+                        .render(NotificationEventType.DATABASE_BACKUP_FAILED, copy)
+                        .text()
+                        .contains("The backup itself worked"));
+    }
+
+    @Test
     void valuesAreEscapedAndLinksPointAtTheNewPages() {
         var email =
                 templates.render(

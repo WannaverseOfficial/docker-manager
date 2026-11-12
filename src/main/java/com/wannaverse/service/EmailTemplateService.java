@@ -107,6 +107,14 @@ public class EmailTemplateService {
             case PASSWORD_CHANGED -> "Your Docker Manager password was changed";
             case HOST_DISCONNECTED -> "Lost connection to " + host;
             case HOST_RECONNECTED -> host + " is reachable again";
+            case DATABASE_BACKUP_FAILED ->
+                    Boolean.TRUE.equals(ctx.get("copyOnly"))
+                            ? "A backup of "
+                                    + str(ctx, "serverName", "a database server")
+                                    + " wasn't copied to S3"
+                            : "Backup of "
+                                    + str(ctx, "serverName", "a database server")
+                                    + " failed";
         };
     }
 
@@ -263,7 +271,44 @@ public class EmailTemplateService {
                             null,
                             "Open the host",
                             "/hosts/");
+            case DATABASE_BACKUP_FAILED -> backupFailed(ctx, when);
         };
+    }
+
+    private static Message backupFailed(Map<String, Object> ctx, String when) {
+        String server = str(ctx, "serverName", "Unknown server");
+        boolean copyOnly = Boolean.TRUE.equals(ctx.get("copyOnly"));
+        String path =
+                ctx.get("serverId") != null
+                        ? "/databases/view/?id=" + ctx.get("serverId") + "&tab=backups"
+                        : "/databases/";
+        String origin =
+                switch (str(ctx, "origin", "")) {
+                    case "SCHEDULED" -> "The backup schedule";
+                    case "BEFORE_RESTORE" -> "Safety backup before a restore";
+                    case "MANUAL" -> "Someone in Docker Manager";
+                    default -> "";
+                };
+        return new Message(
+                copyOnly ? Tone.WARN : Tone.DANGER,
+                copyOnly ? "Copy failed" : "Backup failed",
+                copyOnly
+                        ? "A backup of " + server + " wasn't copied to S3"
+                        : "Backup of " + server + " failed",
+                copyOnly
+                        ? "The backup itself worked and is kept on this server, but the copy to"
+                                + " S3-compatible storage failed. Check the storage settings, then"
+                                + " copy it again from the Backups tab."
+                        : "No new backup was saved; earlier backups are untouched. The error is"
+                                + " below.",
+                rows(
+                        "Server", server,
+                        "Database", str(ctx, "databaseName", "All databases"),
+                        "Started by", origin,
+                        "Failed", when),
+                str(ctx, "errorMessage", "No error message was recorded."),
+                "Open the backups",
+                path);
     }
 
     // --- rendering ---------------------------------------------------------------------------

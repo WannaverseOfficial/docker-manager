@@ -232,7 +232,9 @@ no data is ever deleted along with a user.
 are kept; the schedule and retention can be changed. Single databases can be backed up on demand (`pg_dump`
 custom format). Backups are stored in the data volume under `/app/database/db-backups`, can be downloaded, and can
 be copied to S3-compatible storage (AWS S3, Cloudflare R2, Backblaze B2, MinIO, Wasabi and others) as each one
-finishes.
+finishes. When a backup fails, or its copy to S3 does, administrators get an email with the error
+(once an email server is set up); each administrator can turn this off under **Settings**, **Your notifications**,
+**Database Backup Failed**.
 
 **Restoring.** A whole-server backup replaces the databases it contains and leaves the others alone; a
 single-database backup is restored into the database you name, owned by the user you choose. A safety backup of the

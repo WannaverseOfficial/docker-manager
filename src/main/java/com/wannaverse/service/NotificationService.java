@@ -1,5 +1,6 @@
 package com.wannaverse.service;
 
+import com.wannaverse.persistence.DatabaseBackup;
 import com.wannaverse.persistence.DeploymentJob;
 import com.wannaverse.persistence.DockerHost;
 import com.wannaverse.persistence.NotificationEventType;
@@ -303,6 +304,34 @@ public class NotificationService {
 
         notifyForEvent(
                 NotificationEventType.HOST_RECONNECTED, host.getId(), context, NotifyTarget.ADMINS);
+    }
+
+    /**
+     * A database backup failed, or its copy to S3 did. Databases are managed by administrators, so
+     * they are the ones told.
+     */
+    @Async("emailExecutor")
+    public void notifyDatabaseBackupFailed(DatabaseBackup backup, boolean copyOnly) {
+        if (!emailService.isConfigured()) {
+            log.debug("SMTP not configured, skipping database backup failed notification");
+            return;
+        }
+        Map<String, Object> context = new HashMap<>();
+        context.put("serverName", backup.getServerName());
+        context.put("serverId", backup.getServerId());
+        context.put(
+                "databaseName",
+                backup.getDatabaseName() == null ? "All databases" : backup.getDatabaseName());
+        context.put("origin", backup.getOrigin() == null ? "" : backup.getOrigin());
+        context.put("copyOnly", copyOnly);
+        String error = copyOnly ? backup.getS3Error() : backup.getError();
+        context.put("errorMessage", error != null ? error : "No error message was recorded.");
+        context.put("timestamp", Instant.now());
+        notifyForEvent(
+                NotificationEventType.DATABASE_BACKUP_FAILED,
+                backup.getId(),
+                context,
+                NotifyTarget.ADMINS);
     }
 
     private enum NotifyTarget {

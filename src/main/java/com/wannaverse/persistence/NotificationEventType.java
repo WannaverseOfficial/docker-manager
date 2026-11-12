@@ -14,7 +14,9 @@ public enum NotificationEventType {
     PASSWORD_CHANGED("Password Changed", "security"),
 
     HOST_DISCONNECTED("Host Disconnected", "system"),
-    HOST_RECONNECTED("Host Reconnected", "system");
+    HOST_RECONNECTED("Host Reconnected", "system"),
+
+    DATABASE_BACKUP_FAILED("Database Backup Failed", "databases");
 
     private final String displayName;
     private final String category;

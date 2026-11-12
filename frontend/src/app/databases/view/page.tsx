@@ -64,7 +64,10 @@ function ServerPage() {
   const params = useSearchParams();
   const id = params.get("id") ?? "";
   const { session } = useSession();
-  const [tab, setTab] = useState<Tab>("overview");
+  const [tab, setTab] = useState<Tab>(() => {
+    const t = params.get("tab");
+    return t === "databases" || t === "users" || t === "query" || t === "backups" || t === "containers" ? t : "overview";
+  });
   const [queryDb, setQueryDb] = useState<string | null>(null);
   const base = `/api/databases/servers/${id}`;
   const { data: view, error, refresh } = usePoll<ServerView>(id && session?.admin ? base : null, 3000);
