@@ -100,7 +100,7 @@ public class IngressCertificatesHandler
     @Override
     public void validate(Entry<CertificateSpec> entry, ApplyContext ctx) {
         String hostname = hostname(entry);
-        if (!InputValidator.isValidHostname(hostname) || !hostname.contains(".")) {
+        if (!InputValidator.isValidRouteHostname(hostname)) {
             throw new IacException("hostname: give a full hostname, such as app.example.com");
         }
         String cert = entry.spec().getCertificate().value();

@@ -16,7 +16,9 @@ public enum NotificationEventType {
     HOST_DISCONNECTED("Host Disconnected", "system"),
     HOST_RECONNECTED("Host Reconnected", "system"),
 
-    DATABASE_BACKUP_FAILED("Database Backup Failed", "databases");
+    DATABASE_BACKUP_FAILED("Database Backup Failed", "databases"),
+
+    DNS_HEALTH_CHECK_CHANGED("DNS Health Check Changed", "dns");
 
     private final String displayName;
     private final String category;

@@ -7,6 +7,9 @@ export interface Host {
   /** tcp:// with TLS certificates */
   tls?: boolean;
   hasSshKey?: boolean;
+  /** Where the internet reaches this host. DNS records for its ingress routes point here. */
+  publicIpv4?: string | null;
+  publicIpv6?: string | null;
 }
 
 // --- Docker objects ---------------------------------------------------------------------------

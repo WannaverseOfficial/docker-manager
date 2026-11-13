@@ -28,6 +28,7 @@ import com.wannaverse.service.HostConnections;
 import com.wannaverse.service.ImagePolicyService;
 import com.wannaverse.service.OperationTrackingService;
 import com.wannaverse.service.PermissionService;
+import com.wannaverse.service.PublicAddressService;
 import com.wannaverse.service.SelfContainer;
 import com.wannaverse.service.StatsCalculator;
 import com.wannaverse.service.StatsService;
@@ -55,6 +56,7 @@ public class DockerController {
     private final SelfContainer self;
     private final HostConnections hostConnections;
     private final EncryptionService encryptionService;
+    private final PublicAddressService publicAddresses;
 
     public DockerController(
             DockerService dockerService,
@@ -68,7 +70,9 @@ public class DockerController {
             ContainerSpecService specService,
             SelfContainer self,
             HostConnections hostConnections,
-            EncryptionService encryptionService) {
+            EncryptionService encryptionService,
+            PublicAddressService publicAddresses) {
+        this.publicAddresses = publicAddresses;
         this.self = self;
         this.hostConnections = hostConnections;
         this.encryptionService = encryptionService;
@@ -129,7 +133,9 @@ public class DockerController {
             String tlsCaPem,
             String tlsCertPem,
             String tlsKeyPem,
-            String sshPrivateKey) {}
+            String sshPrivateKey,
+            String publicIpv4,
+            String publicIpv6) {}
 
     /**
      * Applies the connection details of a request to a host, encrypted. Also used by the
@@ -182,6 +188,36 @@ public class DockerController {
         host.setTlsCaPem(encryptionService.encrypt(pem(request.tlsCaPem())));
         host.setTlsCertPem(encryptionService.encrypt(pem(request.tlsCertPem())));
         host.setTlsKeyPem(encryptionService.encrypt(pem(request.tlsKeyPem())));
+    }
+
+    /**
+     * The host's public addresses (what DNS records for its ingress routes point at). Null leaves
+     * them as they are; empty text clears them.
+     */
+    public static void applyPublicAddresses(DockerHost host, HostRequest request) {
+        if (request.publicIpv4() != null) {
+            host.setPublicIpv4(com.wannaverse.dns.DnsService.ipv4(request.publicIpv4()));
+        }
+        if (request.publicIpv6() != null) {
+            host.setPublicIpv6(com.wannaverse.dns.DnsService.ipv6(request.publicIpv6()));
+        }
+    }
+
+    /**
+     * Finds the host's public addresses by asking a public what's-my-IP service from the host. Not
+     * saved: the page fills the form with them.
+     */
+    @PostMapping("/hosts/{hostId}/public-address/detect")
+    @RequirePermission(resource = Resource.DOCKER_HOSTS, action = "update", hostIdParam = "hostId")
+    public PublicAddressService.Addresses detectPublicAddress(@PathVariable String hostId) {
+        DockerHost host =
+                hostRepository
+                        .findById(hostId)
+                        .orElseThrow(
+                                () ->
+                                        new ResponseStatusException(
+                                                HttpStatus.NOT_FOUND, "Docker host not found"));
+        return publicAddresses.detect(host);
     }
 
     private static String pem(String text) {
@@ -248,6 +284,7 @@ public class DockerController {
         host.setName(
                 request.name() == null || request.name().isBlank() ? null : request.name().trim());
         applyCredentials(host, request);
+        applyPublicAddresses(host, request);
         testConnection(host);
         return ResponseEntity.status(HttpStatus.CREATED).body(hostRepository.save(host));
     }
@@ -268,6 +305,7 @@ public class DockerController {
         if (request.name() != null) {
             host.setName(request.name().isBlank() ? null : request.name().trim());
         }
+        applyPublicAddresses(host, request);
         boolean newCredentials =
                 notBlank(request.sshPrivateKey())
                         || notBlank(request.tlsCaPem())

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { useHost, useSession } from "@/components/app";
 import { Badge, Button, Empty, Field, Menu, Modal, Notice, PageHeader, Segmented, Spinner, inputClass, useConfirm, useToast } from "@/components/ui";
 import { api } from "@/lib/api";
@@ -14,7 +14,7 @@ export default function HostsPage() {
   const { hosts, loaded, reload, hostId, select } = useHost();
   const { session } = useSession();
   const [adding, setAdding] = useState(false);
-  const [renaming, setRenaming] = useState<Host | null>(null);
+  const [editing, setEditing] = useState<Host | null>(null);
   const toast = useToast();
   const confirm = useConfirm();
 
@@ -37,7 +37,7 @@ export default function HostsPage() {
               host={h}
               current={h.id === hostId}
               onSelect={() => select(h.id)}
-              onRename={() => setRenaming(h)}
+              onEdit={() => setEditing(h)}
               onRemove={async () => {
                 const ok = await confirm({
                   title: `Remove ${hostLabel(h)}?`,
@@ -59,12 +59,12 @@ export default function HostsPage() {
         </ul>
       )}
       <AddHost open={adding} onClose={() => setAdding(false)} onAdded={(h) => (setAdding(false), reload(), select(h.id))} />
-      {renaming && <RenameHost host={renaming} onClose={() => setRenaming(null)} onSaved={() => (setRenaming(null), reload())} />}
+      {editing && <EditHost host={editing} onClose={() => setEditing(null)} onSaved={() => (setEditing(null), reload())} />}
     </>
   );
 }
 
-function HostRow({ host, current, onSelect, onRename, onRemove, canEdit }: { host: Host; current: boolean; onSelect: () => void; onRename: () => void; onRemove: () => void; canEdit: boolean }) {
+function HostRow({ host, current, onSelect, onEdit, onRemove, canEdit }: { host: Host; current: boolean; onSelect: () => void; onEdit: () => void; onRemove: () => void; canEdit: boolean }) {
   const { data: ping } = usePoll<{ connected: boolean }>(`/api/docker/hosts/${host.id}/ping`, 30000);
   const managed = useManaged().find("hosts", host.id);
   const { data: info } = usePoll<{ dockerVersion: string; operatingSystem: string; containersRunning: number; containersTotal: number }>(
@@ -89,6 +89,11 @@ function HostRow({ host, current, onSelect, onRename, onRemove, canEdit }: { hos
             Docker {info.dockerVersion} on {info.operatingSystem}, {info.containersRunning} of {info.containersTotal} containers running
           </div>
         )}
+        {(host.publicIpv4 || host.publicIpv6) && (
+          <div className="text-[12.5px] text-slate">
+            Public address <span className="font-mono">{[host.publicIpv4, host.publicIpv6].filter(Boolean).join(", ")}</span>
+          </div>
+        )}
       </div>
       {!current && (
         <Button tone="quiet" size="sm" onClick={onSelect}>
@@ -98,7 +103,7 @@ function HostRow({ host, current, onSelect, onRename, onRemove, canEdit }: { hos
       {canEdit && !managed && (
         <Menu
           items={[
-            { label: "Rename", onClick: onRename },
+            { label: "Edit", onClick: onEdit },
             { label: "Remove", danger: true, onClick: onRemove },
           ]}
         />
@@ -119,6 +124,8 @@ function AddHost({ open, onClose, onAdded }: { open: boolean; onClose: () => voi
   const [cert, setCert] = useState("");
   const [key, setKey] = useState("");
   const [sshKey, setSshKey] = useState("");
+  const [publicIpv4, setPublicIpv4] = useState("");
+  const [publicIpv6, setPublicIpv6] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -150,6 +157,8 @@ function AddHost({ open, onClose, onAdded }: { open: boolean; onClose: () => voi
               tlsCertPem: kind === "tls" ? cert : null,
               tlsKeyPem: kind === "tls" ? key : null,
               sshPrivateKey: kind === "ssh" ? sshKey : null,
+              publicIpv4: publicIpv4.trim() || null,
+              publicIpv6: publicIpv6.trim() || null,
             });
             onAdded(h);
           } catch (err) {
@@ -243,6 +252,7 @@ function AddHost({ open, onClose, onAdded }: { open: boolean; onClose: () => voi
         <p className="text-[13px] text-slate">
           Address: <code className="font-mono">{address}</code>
         </p>
+        <PublicAddressFields ipv4={publicIpv4} setIpv4={setPublicIpv4} ipv6={publicIpv6} setIpv6={setPublicIpv6} />
         {error && <Notice tone="error">{error}</Notice>}
         <div className="flex justify-end gap-2">
           <Button type="button" tone="quiet" onClick={onClose}>
@@ -257,35 +267,135 @@ function AddHost({ open, onClose, onAdded }: { open: boolean; onClose: () => voi
   );
 }
 
-function RenameHost({ host, onClose, onSaved }: { host: Host; onClose: () => void; onSaved: () => void }) {
+/** The host's public addresses, which DNS records for its ingress routes point at. */
+function PublicAddressFields({
+  ipv4,
+  setIpv4,
+  ipv6,
+  setIpv6,
+  detect,
+}: {
+  ipv4: string;
+  setIpv4: (v: string) => void;
+  ipv6: string;
+  setIpv6: (v: string) => void;
+  detect?: ReactNode;
+}) {
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Field label="Public IPv4" optional>
+          <input
+            className={`${inputClass} font-mono text-[13px]`}
+            value={ipv4}
+            onChange={(e) => setIpv4(e.target.value)}
+            placeholder="203.0.113.10"
+            autoCapitalize="off"
+            spellCheck={false}
+          />
+        </Field>
+        <Field label="Public IPv6" optional>
+          <input
+            className={`${inputClass} font-mono text-[13px]`}
+            value={ipv6}
+            onChange={(e) => setIpv6(e.target.value)}
+            placeholder="2001:db8::10"
+            autoCapitalize="off"
+            spellCheck={false}
+          />
+        </Field>
+      </div>
+      <div className="flex flex-wrap items-center gap-3">
+        <p className="text-[13px] text-slate flex-1 min-w-[14rem]">DNS records for this host&apos;s ingress routes point here.</p>
+        {detect}
+      </div>
+    </div>
+  );
+}
+
+function EditHost({ host, onClose, onSaved }: { host: Host; onClose: () => void; onSaved: () => void }) {
   const [name, setName] = useState(host.name ?? "");
+  const [ipv4, setIpv4] = useState(host.publicIpv4 ?? "");
+  const [ipv6, setIpv6] = useState(host.publicIpv6 ?? "");
   const [busy, setBusy] = useState(false);
+  const [detecting, setDetecting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [found, setFound] = useState<string | null>(null);
+
+  const detect = async () => {
+    setDetecting(true);
+    setError(null);
+    setFound(null);
+    try {
+      const r = await api.post<{ ipv4: string | null; ipv6: string | null }>(`/api/docker/hosts/${host.id}/public-address/detect`);
+      if (r.ipv4) setIpv4(r.ipv4);
+      if (r.ipv6) setIpv6(r.ipv6);
+      setFound(
+        r.ipv4 || r.ipv6
+          ? `Found ${[r.ipv4, r.ipv6].filter(Boolean).join(" and ")}. Save to keep ${r.ipv4 && r.ipv6 ? "them" : "it"}.`
+          : "No public address was found from this host.",
+      );
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setDetecting(false);
+    }
+  };
+
+  const save = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.put(`/api/docker/hosts/${host.id}`, { name, publicIpv4: ipv4.trim(), publicIpv6: ipv6.trim() });
+      onSaved();
+    } catch (e) {
+      setError((e as Error).message);
+      setBusy(false);
+    }
+  };
+
   return (
     <Modal
       open
       onClose={onClose}
-      title="Rename host"
+      title="Edit host"
       footer={
         <>
           <Button tone="quiet" onClick={onClose}>
             Cancel
           </Button>
-          <Button
-            busy={busy}
-            onClick={async () => {
-              setBusy(true);
-              await api.put(`/api/docker/hosts/${host.id}`, { name });
-              onSaved();
-            }}
-          >
+          <Button busy={busy} disabled={detecting} onClick={save}>
             Save
           </Button>
         </>
       }
     >
-      <Field label="Name">
-        <input className={inputClass} value={name} onChange={(e) => setName(e.target.value)} autoFocus />
-      </Field>
+      <form
+        className="flex flex-col gap-4"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (!busy && !detecting) save();
+        }}
+      >
+        <Field label="Name">
+          <input className={inputClass} value={name} onChange={(e) => setName(e.target.value)} autoFocus />
+        </Field>
+        <PublicAddressFields
+          ipv4={ipv4}
+          setIpv4={setIpv4}
+          ipv6={ipv6}
+          setIpv6={setIpv6}
+          detect={
+            <Button type="button" tone="quiet" size="sm" busy={detecting} onClick={detect}>
+              {detecting ? "Detecting" : "Detect"}
+            </Button>
+          }
+        />
+        {detecting && <p className="text-[13px] text-slate">Asking a public service from the host. This can take up to 20 seconds.</p>}
+        {found && <Notice tone="ok">{found}</Notice>}
+        {error && <Notice tone="error">{error}</Notice>}
+        <button type="submit" hidden />
+      </form>
     </Modal>
   );
 }

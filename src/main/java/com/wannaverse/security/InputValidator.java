@@ -120,6 +120,16 @@ public final class InputValidator {
         return HOSTNAME.matcher(hostname).matches();
     }
 
+    /**
+     * A full hostname an ingress route answers: app.example.com, or a wildcard such as
+     * *.example.com (any one name directly under example.com).
+     */
+    public static boolean isValidRouteHostname(String hostname) {
+        if (hostname == null) return false;
+        String h = hostname.startsWith("*.") ? hostname.substring(2) : hostname;
+        return isValidHostname(h) && h.contains(".");
+    }
+
     public static boolean isCommandSafe(String[] command) {
         if (command == null || command.length == 0) {
             return false;

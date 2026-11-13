@@ -32,6 +32,7 @@ import {
   Sun,
   Telescope,
   Users,
+  Waypoints,
   Workflow,
   X,
   type LucideIcon,
@@ -70,6 +71,7 @@ const NAV: { title: string; items: Item[] }[] = [
       { href: "/pipelines/", label: "Pipelines", icon: Workflow },
       { href: "/rollouts/", label: "Rollouts", icon: Split },
       { href: "/ingress/", label: "Ingress", icon: Globe },
+      { href: "/dns/", label: "DNS", icon: Waypoints, admin: true },
       { href: "/history/", label: "History", icon: History },
     ],
   },
@@ -256,7 +258,7 @@ function NoHostGuard({ children }: { children: ReactNode }) {
   const { hosts, loaded } = useHost();
   const { session } = useSession();
   const path = usePathname();
-  const free = ["/hosts", "/users", "/settings", "/account", "/registries", "/policies", "/activity", "/templates"].some((p) =>
+  const free = ["/hosts", "/users", "/settings", "/account", "/registries", "/policies", "/activity", "/templates", "/dns"].some((p) =>
     path.startsWith(p),
   );
   if (!loaded || hosts.length || free) return <>{children}</>;

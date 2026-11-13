@@ -12,6 +12,7 @@ import lombok.NoArgsConstructor;
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
+@EntityListeners(com.wannaverse.dns.DnsInputs.EntityListener.class)
 @Entity
 @Table(name = "docker_hosts_t")
 public class DockerHost {
@@ -37,6 +38,14 @@ public class DockerHost {
     @JsonIgnore
     @Column(columnDefinition = "TEXT")
     private String tlsKeyPem;
+
+    /**
+     * The address the internet reaches this host at. DNS records for its ingress routes point here.
+     * Null when unknown.
+     */
+    private String publicIpv4;
+
+    private String publicIpv6;
 
     /** Private key for ssh:// hosts. Encrypted. */
     @JsonIgnore

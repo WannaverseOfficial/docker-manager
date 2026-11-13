@@ -21,6 +21,7 @@ fees or feature gates.
 - [Configuration as code](#configuration-as-code)
 - [Rollouts: blue/green and canary](#rollouts-bluegreen-and-canary)
 - [Databases](#databases)
+- [DNS](#dns)
 - [Observability](#observability)
 - [Private registry](#private-registry)
 - [Security scanning](#security-scanning)
@@ -46,6 +47,8 @@ fees or feature gates.
   checks, and automatic rollback.
 - Ingress: publish containers on your own domains through a built-in nginx proxy, with Let's Encrypt certificates
   that renew themselves, optional sign-in pages and per-route users.
+- DNS: host your domains' DNS on the server, like Route 53. Ingress routes and rollouts get their records by
+  themselves, with weighted and failover routing, health checks, DNSSEC, and wildcard Let's Encrypt certificates.
 - History of every change, with one-click undo.
 
 **Data**
@@ -286,6 +289,32 @@ or `pg_dump` custom format.
 container on the same host (signing in with that container's own `POSTGRES_USER` and `POSTGRES_PASSWORD`) and
 restores it under a new owner. The source container is only read, so you can switch the app over and remove the old
 container when you're ready.
+
+## DNS
+
+**DNS** (administrators only) turns Docker Manager into the authoritative nameserver for your domains. Add a
+domain, point its nameservers at your server at the registrar, and manage its records in Docker Manager:
+
+- **Records** A, AAAA, CNAME, MX, TXT, SRV, CAA, NS, PTR and DS, checked against DNS rules when you save. Zone files
+  from Route 53, Cloudflare and other hosts can be imported.
+- **Automatic records:** every ingress route under a hosted domain (yours, and those of rollouts, the registry and
+  Grafana) points at its host's public address, set or detected on the **Hosts** page. A record you add yourself
+  wins.
+- **Weighted and failover routing** with HTTP, HTTPS and TCP health checks, as in Route 53, and an email when a
+  check changes.
+- **DNSSEC** with one click: signed answers, and the DS record to give your registrar.
+- **Let's Encrypt through DNS:** certificates no longer need port 80, and wildcard routes (`*.example.com`) get
+  wildcard certificates.
+- **Secondary nameservers** can copy zones (AXFR, with NOTIFY on changes).
+
+The server listens on port 1053 inside the container; publish it as port 53 for UDP and TCP:
+
+```bash
+docker run ... -p 53:1053/udp -p 53:1053/tcp wannaverse/docker-manager:latest
+```
+
+It answers only for its own domains (it is not an open resolver) and limits how fast one address may ask. The
+[DNS guide](docs/dns.md) covers registrar setup, glue records, DNSSEC and secondaries step by step.
 
 ## Observability
 

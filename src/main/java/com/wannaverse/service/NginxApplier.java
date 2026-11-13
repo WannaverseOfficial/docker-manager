@@ -353,7 +353,7 @@ public class NginxApplier {
             Map<String, byte[]> secrets = new LinkedHashMap<>();
             for (IngressCertificate cert : certs.values()) {
                 if (!NginxConfigGenerator.usable(cert)) continue;
-                String dir = NginxConfigGenerator.CERT_DIR + "/" + cert.getHostname();
+                String dir = NginxConfigGenerator.certDir(cert.getHostname());
                 String chain = cert.getCertificatePem().strip() + "\n";
                 if (cert.getChainPem() != null && !cert.getChainPem().isBlank()) {
                     chain += cert.getChainPem().strip() + "\n";

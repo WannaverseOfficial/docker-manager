@@ -158,8 +158,10 @@ public class IngressRoutesHandler implements ResourceHandler<IngressRoutesHandle
     public void validate(Entry<RouteSpec> entry, ApplyContext ctx) {
         RouteSpec s = entry.spec();
         String hostname = hostname(s);
-        if (!InputValidator.isValidHostname(hostname) || !hostname.contains(".")) {
-            throw new IacException("hostname: give a full hostname, such as app.example.com");
+        if (!InputValidator.isValidRouteHostname(hostname)) {
+            throw new IacException(
+                    "hostname: give a full hostname, such as app.example.com, or a wildcard such"
+                            + " as *.example.com");
         }
         int targets =
                 (blank(s.getContainer()) ? 0 : 1)

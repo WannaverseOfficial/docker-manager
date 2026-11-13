@@ -33,6 +33,7 @@ dependencies {
     implementation libs.spring.boot.security
     implementation libs.spring.boot.mail
     implementation libs.bundles.acme4j
+    implementation libs.dnsjava
 
     compileOnly libs.lombok
     annotationProcessor libs.lombok

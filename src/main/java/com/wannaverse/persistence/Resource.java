@@ -30,5 +30,6 @@ public enum Resource {
     ROLLOUTS,
     SECURITY,
     OBSERVABILITY,
-    CONFIGURATION
+    CONFIGURATION,
+    DNS
 }

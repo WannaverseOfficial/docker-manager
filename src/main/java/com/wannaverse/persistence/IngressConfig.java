@@ -9,6 +9,7 @@ import lombok.NoArgsConstructor;
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
+@EntityListeners(com.wannaverse.dns.DnsInputs.EntityListener.class)
 @Entity
 @Table(
         name = "ingress_configs_t",

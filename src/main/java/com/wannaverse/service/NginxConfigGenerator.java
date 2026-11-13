@@ -33,6 +33,12 @@ import java.util.*;
 public class NginxConfigGenerator {
     public static final String ACME_ROOT = "/var/www/acme";
     public static final String CERT_DIR = "/etc/nginx/certs";
+
+    /** Where a hostname's certificate goes in the proxy ("*" is kept out of file names). */
+    public static String certDir(String hostname) {
+        return CERT_DIR + "/" + hostname.replace("*", "_wildcard");
+    }
+
     public static final String AUTH_DIR = "/etc/nginx/auth";
     public static final String NJS_DIR = "/etc/nginx/njs";
     public static final String AUTH_SCRIPT = "dm_auth.js";
@@ -218,14 +224,10 @@ public class NginxConfigGenerator {
             sb.append("        http2 on;\n");
             sb.append("        server_name ").append(hostname).append(";\n");
             sb.append("        ssl_certificate ")
-                    .append(CERT_DIR)
-                    .append('/')
-                    .append(hostname)
+                    .append(certDir(hostname))
                     .append("/fullchain.pem;\n");
             sb.append("        ssl_certificate_key ")
-                    .append(CERT_DIR)
-                    .append('/')
-                    .append(hostname)
+                    .append(certDir(hostname))
                     .append("/privkey.pem;\n");
             sb.append("        ssl_protocols TLSv1.2 TLSv1.3;\n");
             sb.append("        ssl_prefer_server_ciphers off;\n");

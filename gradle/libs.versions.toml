@@ -12,6 +12,7 @@ jasypt = "3.0.5"
 jjwt = "0.12.6"
 caffeine = "3.1.8"
 acme4j = "3.5.0"
+dnsjava = "3.7.1"
 
 [libraries]
 spring-boot = { group = "org.springframework.boot", name = "spring-boot-starter" }
@@ -47,6 +48,7 @@ spring-boot-security = { group = "org.springframework.boot", name = "spring-boot
 spring-boot-mail = { group = "org.springframework.boot", name = "spring-boot-starter-mail" }
 
 acme4j-client = { group = "org.shredzone.acme4j", name = "acme4j-client", version.ref = "acme4j" }
+dnsjava = { group = "dnsjava", name = "dnsjava", version.ref = "dnsjava" }
 
 [bundles]
 jackson = ["jackson-annotations", "jackson-core", "jackson-databind", "jackson-yaml"]

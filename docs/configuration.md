@@ -1,8 +1,8 @@
 # Configuration as code
 
 Docker Manager's whole setup can be described in one YAML file: hosts, users and groups, registries, image rules,
-templates, networks, volumes, containers, stacks, ingress with its routes and certificates, databases,
-observability, rollouts, git repositories and pipelines. Applying the file creates what is missing, updates what
+templates, networks, volumes, containers, stacks, DNS zones and records, ingress with its routes and certificates,
+databases, observability, rollouts, git repositories and pipelines. Applying the file creates what is missing, updates what
 changed and removes what you took out of it, in the right order. Think of it as CloudFormation or Terraform for
 Docker Manager.
 
@@ -132,12 +132,12 @@ becoming `frontend:` with `name: web`) only renames the entry; nothing is re-cre
 network to another host, or renaming a stack or network, is refused, because it would mean making a new one and
 deleting the old one with its data: add a new entry and remove the old one, so the preview shows both.
 
-**Data is kept.** Removing a database server, volume, hosted registry or observability stack from the file only
+**Data is kept.** Removing a database server, volume, hosted registry, observability stack or DNS zone from the file only
 stops managing it, unless its entry said `onRemove: delete` (or `delete-data`, which also removes its data volumes
 and backups) when it was last applied. To delete one: set `onRemove: delete`, apply, then remove the entry.
 
 **Order.** Entries are applied in dependency order: SMTP, hosts, groups, users, registries, image rules, templates,
-networks, volumes, ingress, certificates, databases, containers, stacks, hosted registries, observability,
+networks, volumes, DNS (settings, health checks, zones, records), ingress, certificates, databases, containers, stacks, hosted registries, observability,
 rollouts, git repositories, pipelines, and routes last. Removals run in the reverse order, and only when everything
 else applied without errors, so a typo never deletes half your setup. If a removal fails (a network a container
 still uses, say), the sections below it wait for the next apply, so a host is never removed while something on it
@@ -401,6 +401,8 @@ Written as `hosts: { <name>: { ...settings } }`.
 | `tls.cert` | secret | yes | The client certificate (cert.pem) |
 | `tls.key` | secret | yes | The client key (key.pem) |
 | `sshKey` | secret |  | Private key (without a passphrase) for ssh:// addresses |
+| `publicIpv4` | text |  | The IPv4 address the internet reaches this host at. DNS records for its ingress routes point here. |
+| `publicIpv6` | text |  | The host's public IPv6 address, if it has one |
 
 ### groups
 
@@ -413,7 +415,7 @@ Written as `groups: { <name>: { ...settings } }`.
 | `name` | text |  | The group's name. Defaults to the entry's key. |
 | `description` | text |  | What the group is for |
 | `permissions` | list of map |  | What members may do. Members are set on each user (groups: [...]). |
-| `permissions[].resource` | `docker-hosts` \| `containers` \| `images` \| `volumes` \| `networks` \| `git-repos` \| `deployments` \| `users` \| `user-groups` \| `audit-logs` \| `notifications` \| `docker-operations` \| `state-snapshots` \| `compose-deployments` \| `rollback` \| `image-policies` \| `registries` \| `ingress` \| `ingress-routes` \| `ingress-certificates` \| `templates` \| `pipelines` \| `pipeline-executions` \| `deployment-environments` \| `stacks` \| `databases` \| `rollouts` \| `security` \| `observability` \| `configuration` | yes | The kind of resource, such as containers, stacks or git-repos |
+| `permissions[].resource` | `docker-hosts` \| `containers` \| `images` \| `volumes` \| `networks` \| `git-repos` \| `deployments` \| `users` \| `user-groups` \| `audit-logs` \| `notifications` \| `docker-operations` \| `state-snapshots` \| `compose-deployments` \| `rollback` \| `image-policies` \| `registries` \| `ingress` \| `ingress-routes` \| `ingress-certificates` \| `templates` \| `pipelines` \| `pipeline-executions` \| `deployment-environments` \| `stacks` \| `databases` \| `rollouts` \| `security` \| `observability` | `configuration` | `dns` | yes |\| `configuration` | yes | The kind of resource, such as containers, stacks or git-repos |
 | `permissions[].actions` | list of text | yes | Actions, such as [list, read, start, stop], or ["*"] for all |
 | `permissions[].host` | text |  | Only on this host (a key of hosts:, or a host's name). Default: every host. |
 | `permissions[].id` | text |  | Only on this one resource (its id or name). Default: all of them. |
@@ -434,7 +436,7 @@ Written as `users: { <name>: { ...settings } }`.
 | `enabled` | true/false |  | Can sign in (default true) |
 | `groups` | list of text |  | Groups (keys of groups:, or names of groups made by hand) |
 | `permissions` | list of map |  | Permissions of this user alone, besides those of their groups |
-| `permissions[].resource` | `docker-hosts` \| `containers` \| `images` \| `volumes` \| `networks` \| `git-repos` \| `deployments` \| `users` \| `user-groups` \| `audit-logs` \| `notifications` \| `docker-operations` \| `state-snapshots` \| `compose-deployments` \| `rollback` \| `image-policies` \| `registries` \| `ingress` \| `ingress-routes` \| `ingress-certificates` \| `templates` \| `pipelines` \| `pipeline-executions` \| `deployment-environments` \| `stacks` \| `databases` \| `rollouts` \| `security` \| `observability` \| `configuration` | yes | The kind of resource, such as containers, stacks or git-repos |
+| `permissions[].resource` | `docker-hosts` \| `containers` \| `images` \| `volumes` \| `networks` \| `git-repos` \| `deployments` \| `users` \| `user-groups` \| `audit-logs` \| `notifications` \| `docker-operations` \| `state-snapshots` \| `compose-deployments` \| `rollback` \| `image-policies` \| `registries` \| `ingress` \| `ingress-routes` \| `ingress-certificates` \| `templates` \| `pipelines` \| `pipeline-executions` \| `deployment-environments` \| `stacks` \| `databases` \| `rollouts` \| `security` \| `observability` | `configuration` | `dns` | yes |\| `configuration` | yes | The kind of resource, such as containers, stacks or git-repos |
 | `permissions[].actions` | list of text | yes | Actions, such as [list, read, start, stop], or ["*"] for all |
 | `permissions[].host` | text |  | Only on this host (a key of hosts:, or a host's name). Default: every host. |
 | `permissions[].id` | text |  | Only on this one resource (its id or name). Default: all of them. |
@@ -536,6 +538,74 @@ Written as `volumes: { <name>: { ...settings } }`.
 | `options` | map of text |  | Driver options, such as type: nfs, o: addr=10.0.0.5, device: :/exports/data |
 | `labels` | map of text |  | Labels |
 | `onRemove` | `keep` \| `delete` |  | What removing the entry does: keep (default) leaves the volume and its data in place and stops managing it; delete removes it |
+
+### dns
+
+The built-in DNS server (an authoritative nameserver for your domains).
+
+| Setting | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| `enabled` | true/false |  | Answer DNS queries (default true) |
+| `nameservers` | list of text |  | The nameservers to give your registrar, such as ns1.example.com. Default: ns1 and ns2 of each zone. |
+| `publicIpv4` | text |  | This server's public IPv4 address, for nameserver records. Default: the public address of the host Docker Manager runs on. |
+| `publicIpv6` | text |  | This server's public IPv6 address |
+| `hostmasterEmail` | text |  | The zones' contact address (SOA), such as hostmaster@example.com |
+| `transferAllowed` | list of text |  | Secondary nameservers allowed to copy the zones (AXFR): IP addresses or networks. Single addresses are also told about changes (NOTIFY). |
+| `rateLimit` | whole number |  | Most answers per second to one address over UDP (default 100; 0 turns it off) |
+
+### dnsHealthChecks
+
+Health checks for DNS failover and weighted records, keyed by name.
+
+Written as `dnsHealthChecks: { <name>: { ...settings } }`.
+
+| Setting | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| `type` | text |  | http (default), https or tcp |
+| `address` | text | yes | IP address or hostname to check |
+| `port` | whole number |  | Port (default 80, or 443 for https) |
+| `path` | text |  | http/https: the path requested (default /); 2xx and 3xx answers pass |
+| `hostHeader` | text |  | http/https: the Host header and TLS name to send (default: address) |
+| `interval` | whole number |  | Seconds between checks (default 30, at least 10) |
+| `timeout` | whole number |  | Seconds to wait for an answer (default 5) |
+| `failureThreshold` | whole number |  | Failures in a row before unhealthy, and successes before healthy (default 3) |
+| `notify` | true/false |  | Email administrators when the status changes (default true) |
+| `enabled` | true/false |  | Run the check (default true) |
+
+### dnsZones
+
+Domains the DNS server answers for (hosted zones), keyed by domain name, with their records.
+
+Written as `dnsZones: { <name>: { ...settings } }`.
+
+| Setting | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| `comment` | text |  | A note for people |
+| `defaultTtl` | whole number |  | TTL of records that don't set one, in seconds (default 300) |
+| `negativeTtl` | whole number |  | How long resolvers remember that a name doesn't exist, in seconds (default 300) |
+| `nameservers` | list of text |  | This zone's nameservers, if not the ones of the dns section |
+| `autoRecords` | true/false |  | Ingress routes under this domain get records pointing at their host (default true) |
+| `dnssec` | true/false |  | Sign the zone (DNSSEC, default false). Give the DS record shown on the zone's Setup tab to your registrar. |
+| `onRemove` | `keep` \| `delete` |  | What removing the entry does: keep (default) leaves the zone answering and stops managing it; delete removes it with all its records |
+
+### dnsZones.<domain>.records
+
+Record sets of the zone, keyed by a name of your choice (the record's name by default).
+
+Written as `dnsZones.<domain>.records: { <name>: { ...settings } }`.
+
+| Setting | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| `name` | text |  | The name in the zone: www, @ for the domain itself, *.dev for a wildcard. Default: the entry's key. |
+| `type` | text | yes | A, AAAA, CNAME, MX, TXT, SRV, CAA, NS, PTR or DS |
+| `ttl` | whole number |  | Seconds resolvers may keep the answer (default: the zone's) |
+| `values` | list of text | yes | The values as in a zone file, such as 203.0.113.10 or "10 mail.example.com". Hostnames are always complete. |
+| `routing` | text |  | simple (default), weighted or failover |
+| `setId` | text |  | weighted/failover: tells record sets with the same name and type apart |
+| `weight` | whole number |  | weighted: share of answers, 0 to 255 (default 1) |
+| `failover` | text |  | failover: primary or secondary |
+| `healthCheck` | text |  | Answer with this set only while this health check (a key of dnsHealthChecks) passes |
+| `comment` | text |  | A note for people |
 
 ### ingress
 

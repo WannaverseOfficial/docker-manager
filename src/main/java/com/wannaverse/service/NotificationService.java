@@ -334,6 +334,35 @@ public class NotificationService {
                 NotifyTarget.ADMINS);
     }
 
+    /**
+     * A DNS health check changed status, so DNS answers changed (failover, weighted records).
+     * Administrators manage DNS, so they are the ones told.
+     */
+    @Async("emailExecutor")
+    public void notifyDnsHealthCheckChanged(
+            com.wannaverse.persistence.DnsHealthCheck check, boolean healthy, String detail) {
+        if (!emailService.isConfigured()) return;
+        Map<String, Object> context = new HashMap<>();
+        context.put("checkName", check.getName());
+        context.put("checkId", check.getId());
+        context.put(
+                "target",
+                check.getType()
+                        + " "
+                        + check.getAddress()
+                        + ":"
+                        + check.getPort()
+                        + (check.getType().equals("TCP") ? "" : check.getPath()));
+        context.put("healthy", healthy);
+        context.put("detail", detail == null ? "" : detail);
+        context.put("timestamp", Instant.now());
+        notifyForEvent(
+                NotificationEventType.DNS_HEALTH_CHECK_CHANGED,
+                check.getId(),
+                context,
+                NotifyTarget.ADMINS);
+    }
+
     private enum NotifyTarget {
         ALL,
         ADMINS

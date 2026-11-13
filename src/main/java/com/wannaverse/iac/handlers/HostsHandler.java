@@ -1,6 +1,7 @@
 package com.wannaverse.iac.handlers;
 
 import com.wannaverse.controllers.DockerController;
+import com.wannaverse.dns.DnsService;
 import com.wannaverse.iac.ApplyContext;
 import com.wannaverse.iac.Changes;
 import com.wannaverse.iac.Doc;
@@ -19,6 +20,7 @@ import lombok.Data;
 
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Component;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -47,6 +49,14 @@ public class HostsHandler implements ResourceHandler<HostsHandler.HostSpec> {
 
         @Doc("Private key (without a passphrase) for ssh:// addresses")
         private Secret sshKey;
+
+        @Doc(
+                "The IPv4 address the internet reaches this host at. DNS records for its ingress"
+                        + " routes point here.")
+        private String publicIpv4;
+
+        @Doc("The host's public IPv6 address, if it has one")
+        private String publicIpv6;
     }
 
     @Data
@@ -120,6 +130,16 @@ public class HostsHandler implements ResourceHandler<HostsHandler.HostSpec> {
         if (!HostConnections.isSsh(url) && entry.spec().getSshKey() != null) {
             throw new IacException("sshKey: only used with ssh:// addresses");
         }
+        try {
+            DnsService.ipv4(entry.spec().getPublicIpv4());
+        } catch (ResponseStatusException e) {
+            throw new IacException("publicIpv4: " + e.getReason());
+        }
+        try {
+            DnsService.ipv6(entry.spec().getPublicIpv6());
+        } catch (ResponseStatusException e) {
+            throw new IacException("publicIpv6: " + e.getReason());
+        }
     }
 
     @Override
@@ -157,6 +177,7 @@ public class HostsHandler implements ResourceHandler<HostsHandler.HostSpec> {
         host.setDockerHostUrl(url);
         host.setName(entry.nameOr(spec.getName()));
         docker.applyCredentials(host, request(entry.nameOr(spec.getName()), spec));
+        DockerController.applyPublicAddresses(host, request(entry.nameOr(spec.getName()), spec));
         docker.testConnection(host);
         return target(hosts.save(host));
     }
@@ -190,6 +211,8 @@ public class HostsHandler implements ResourceHandler<HostsHandler.HostSpec> {
             docker.applyCredentials(host, request(host.getName(), spec));
             reconnect = true;
         }
+        // Left out of the file: left as set on the Hosts page.
+        DockerController.applyPublicAddresses(host, request(host.getName(), spec));
         if (reconnect) {
             connections.forget(host);
             dockerService.close(host.getDockerHostUrl());
@@ -225,6 +248,8 @@ public class HostsHandler implements ResourceHandler<HostsHandler.HostSpec> {
                 tls.setKey(ctx.secret("hosts", key, "tls_key", "client key of host " + key));
                 spec.setTls(tls);
             }
+            spec.setPublicIpv4(h.getPublicIpv4());
+            spec.setPublicIpv6(h.getPublicIpv6());
             if (h.hasSshKey()) {
                 spec.setSshKey(
                         ctx.secret("hosts", key, "ssh_key", "SSH private key of host " + key));
@@ -242,7 +267,9 @@ public class HostsHandler implements ResourceHandler<HostsHandler.HostSpec> {
                 tls == null ? null : Secret.valueOf(tls.getCa()),
                 tls == null ? null : Secret.valueOf(tls.getCert()),
                 tls == null ? null : Secret.valueOf(tls.getKey()),
-                Secret.valueOf(spec.getSshKey()));
+                Secret.valueOf(spec.getSshKey()),
+                spec.getPublicIpv4(),
+                spec.getPublicIpv6());
     }
 
     private Target target(DockerHost h) {

@@ -7,6 +7,7 @@ import com.wannaverse.persistence.IngressCertificate.CertificateSource;
 import com.wannaverse.persistence.IngressCertificate.CertificateStatus;
 
 import org.shredzone.acme4j.*;
+import org.shredzone.acme4j.challenge.Dns01Challenge;
 import org.shredzone.acme4j.challenge.Http01Challenge;
 import org.shredzone.acme4j.exception.AcmeException;
 import org.shredzone.acme4j.util.CSRBuilder;
@@ -44,6 +45,7 @@ public class CertificateService {
     private final NginxConfigGenerator nginxConfigGenerator;
     private final NginxApplier applier;
     private final EncryptionService encryptionService;
+    private final com.wannaverse.dns.DnsService dns;
 
     public CertificateService(
             IngressCertificateRepository certificateRepository,
@@ -54,7 +56,9 @@ public class CertificateService {
             DockerService dockerService,
             NginxConfigGenerator nginxConfigGenerator,
             NginxApplier applier,
-            EncryptionService encryptionService) {
+            EncryptionService encryptionService,
+            com.wannaverse.dns.DnsService dns) {
+        this.dns = dns;
         this.applier = applier;
         this.encryptionService = encryptionService;
         this.certificateRepository = certificateRepository;
@@ -292,6 +296,20 @@ public class CertificateService {
         String domain = auth.getIdentifier().getDomain();
         log.info("Processing authorization for domain: {}", domain);
 
+        // Checked through DNS when this server answers DNS for the domain and the registrar
+        // points at it: works for wildcards and when port 80 isn't reachable.
+        if (auth.isWildcard() || dns.canValidate(domain)) {
+            if (!dns.answersFor(domain)) {
+                throw new AcmeException(
+                        "A wildcard certificate (*."
+                                + domain
+                                + ") is checked through DNS. Add the domain under DNS in Docker"
+                                + " Manager and point its nameservers here first.");
+            }
+            processDnsAuthorization(cert, config, auth, userId, username);
+            return;
+        }
+
         Http01Challenge challenge = auth.findChallenge(Http01Challenge.class).orElse(null);
         if (challenge == null) {
             throw new AcmeException("No HTTP-01 challenge available for " + domain);
@@ -373,6 +391,85 @@ public class CertificateService {
                 "HTTP-01 challenge validated for " + domain,
                 userId,
                 username);
+    }
+
+    /** DNS-01: a TXT record at _acme-challenge.<domain>, answered by the built-in DNS server. */
+    private void processDnsAuthorization(
+            IngressCertificate cert,
+            IngressConfig config,
+            Authorization auth,
+            String userId,
+            String username)
+            throws AcmeException, InterruptedException {
+        String domain = auth.getIdentifier().getDomain();
+        Dns01Challenge challenge = auth.findChallenge(Dns01Challenge.class).orElse(null);
+        if (challenge == null) {
+            throw new AcmeException("No DNS-01 challenge available for " + domain);
+        }
+        String recordName = Dns01Challenge.toRRName(auth.getIdentifier());
+        String digest = challenge.getDigest();
+        cert.setAcmeChallengeType(AcmeChallengeType.DNS_01);
+        cert.setAcmeChallengeToken(null);
+        cert.setAcmeChallengeContent(null);
+        certificateRepository.save(cert);
+        dns.addChallenge(recordName, digest);
+        try {
+            auditLog(
+                    config,
+                    IngressAction.CERTIFICATE_REQUESTED,
+                    "DNS-01 challenge published at " + recordName,
+                    userId,
+                    username);
+            updateCertificateStatus(
+                    cert,
+                    CertificateStatus.PENDING,
+                    "Waiting for the other nameservers to have the DNS check record...");
+            String lag = dns.awaitChallenge(recordName, digest, Duration.ofMinutes(3));
+            if (lag != null) {
+                log.warn("DNS-01 for {}: {}", domain, lag);
+            }
+            updateCertificateStatus(
+                    cert, CertificateStatus.PENDING, "Triggering DNS-01 challenge verification...");
+            challenge.trigger();
+            int attempts = 0;
+            while (challenge.getStatus() != Status.VALID && attempts < 40) {
+                if (challenge.getStatus() == Status.INVALID) {
+                    String error =
+                            challenge
+                                    .getError()
+                                    .flatMap(p -> p.getDetail())
+                                    .orElse("Challenge validation failed");
+                    throw new AcmeException(
+                            "Let's Encrypt could not verify "
+                                    + domain
+                                    + " through DNS: "
+                                    + error
+                                    + ". Check that the domain's nameservers point at this server"
+                                    + " (DNS page, Setup) and that port 53 is reachable."
+                                    + (lag == null ? "" : " " + lag));
+                }
+                updateCertificateStatus(
+                        cert,
+                        CertificateStatus.PENDING,
+                        "Waiting for DNS challenge validation (attempt "
+                                + (attempts + 1)
+                                + "/40)...");
+                Thread.sleep(3000);
+                challenge.update();
+                attempts++;
+            }
+            if (challenge.getStatus() != Status.VALID) {
+                throw new AcmeException("Challenge did not pass in time");
+            }
+            auditLog(
+                    config,
+                    IngressAction.CERTIFICATE_REQUESTED,
+                    "DNS-01 challenge validated for " + domain,
+                    userId,
+                    username);
+        } finally {
+            dns.removeChallenge(recordName, digest);
+        }
     }
 
     public Optional<String> getChallengeResponse(String token) {
@@ -501,7 +598,7 @@ public class CertificateService {
                         config.getNginxContainerId(),
                         "rm",
                         "-rf",
-                        NginxConfigGenerator.CERT_DIR + "/" + hostname);
+                        NginxConfigGenerator.certDir(hostname));
             }
         } catch (Exception e) {
             log.warn("Failed to remove certificate files from nginx: {}", e.getMessage());

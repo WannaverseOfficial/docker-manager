@@ -6,6 +6,10 @@ services:
     restart: unless-stopped
     ports:
       - "8080:8080"
+      # DNS for your domains (DNS page): the server listens on 1053 in the container.
+      # On hosts running systemd-resolved, see docs/dns.md if port 53 is already in use.
+      # - "53:1053/udp"
+      # - "53:1053/tcp"
     volumes:
       # Lets Docker Manager control this host's Docker.
       - /var/run/docker.sock:/var/run/docker.sock

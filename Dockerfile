@@ -64,7 +64,8 @@ ENV JAVA_OPTS="-Xms128m -Xmx512m -XX:+UseSerialGC" \
     GIT_CLONE_DIR=/opt/docker-manager/git-repos \
     STACKS_DIR=/opt/docker-manager/stacks
 
-EXPOSE 8080
+# 1053: the DNS server (publish it as port 53, UDP and TCP; DNS_PORT changes it).
+EXPOSE 8080 1053/udp 1053/tcp
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
     CMD curl -fsS http://localhost:8080/api/system/status >/dev/null || exit 1

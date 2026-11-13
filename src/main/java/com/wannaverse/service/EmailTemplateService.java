@@ -107,6 +107,10 @@ public class EmailTemplateService {
             case PASSWORD_CHANGED -> "Your Docker Manager password was changed";
             case HOST_DISCONNECTED -> "Lost connection to " + host;
             case HOST_RECONNECTED -> host + " is reachable again";
+            case DNS_HEALTH_CHECK_CHANGED ->
+                    Boolean.TRUE.equals(ctx.get("healthy"))
+                            ? str(ctx, "checkName", "A DNS health check") + " is healthy again"
+                            : str(ctx, "checkName", "A DNS health check") + " is failing";
             case DATABASE_BACKUP_FAILED ->
                     Boolean.TRUE.equals(ctx.get("copyOnly"))
                             ? "A backup of "
@@ -272,7 +276,27 @@ public class EmailTemplateService {
                             "Open the host",
                             "/hosts/");
             case DATABASE_BACKUP_FAILED -> backupFailed(ctx, when);
+            case DNS_HEALTH_CHECK_CHANGED -> dnsHealth(ctx, when);
         };
+    }
+
+    private static Message dnsHealth(Map<String, Object> ctx, String when) {
+        String name = str(ctx, "checkName", "A health check");
+        boolean healthy = Boolean.TRUE.equals(ctx.get("healthy"));
+        return new Message(
+                healthy ? Tone.OK : Tone.DANGER,
+                healthy ? "Healthy again" : "Unhealthy",
+                healthy ? name + " is healthy again" : name + " is failing",
+                healthy
+                        ? "The health check passes again, so DNS answers with the record sets that"
+                                + " use it again."
+                        : "The health check keeps failing, so DNS no longer answers with the record"
+                                + " sets that use it (failover and weighted records move to the"
+                                + " others).",
+                rows("Health check", name, "Checks", str(ctx, "target", ""), "Changed", when),
+                str(ctx, "detail", ""),
+                "Open DNS",
+                "/dns/?tab=health");
     }
 
     private static Message backupFailed(Map<String, Object> ctx, String when) {

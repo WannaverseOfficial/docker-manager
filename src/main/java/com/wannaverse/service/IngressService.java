@@ -47,6 +47,8 @@ public class IngressService {
     private final CertificateService certificateService;
     private final PermissionService permissionService;
 
+    private final com.wannaverse.dns.DnsService dns;
+
     public IngressService(
             IngressConfigRepository configRepository,
             IngressRouteRepository routeRepository,
@@ -56,7 +58,9 @@ public class IngressService {
             NginxConfigGenerator nginxConfigGenerator,
             NginxApplier applier,
             @Lazy CertificateService certificateService,
-            PermissionService permissionService) {
+            PermissionService permissionService,
+            com.wannaverse.dns.DnsService dns) {
+        this.dns = dns;
         this.configRepository = configRepository;
         this.routeRepository = routeRepository;
         this.certificateRepository = certificateRepository;
@@ -403,15 +407,42 @@ public class IngressService {
                             + " already exists");
         }
         String certStatus = "Not needed";
+        boolean ownDns = dns.answersFor(route.getHostname());
         if (route.getTlsMode() == IngressRoute.TlsMode.LETS_ENCRYPT) {
             certStatus = "Let's Encrypt, requested automatically";
+            if (dns.canValidate(route.getHostname())) {
+                certStatus += " (checked through Docker Manager's DNS)";
+            } else {
+                if (!ownDns) {
+                    warnings.add(
+                            "The DNS record for "
+                                    + route.getHostname()
+                                    + " must point at this server.");
+                }
+                warnings.add(
+                        "Port "
+                                + config.getHttpPort()
+                                + " must be reachable from the internet (Let's Encrypt connects on"
+                                + " port 80).");
+            }
+        }
+        if (ownDns) {
+            String ip =
+                    hostRepository
+                            .findById(config.getDockerHostId())
+                            .map(DockerHost::getPublicIpv4)
+                            .orElse(null);
             warnings.add(
-                    "The DNS record for " + route.getHostname() + " must point at this server.");
-            warnings.add(
-                    "Port "
-                            + config.getHttpPort()
-                            + " must be reachable from the internet (Let's Encrypt connects on port"
-                            + " 80).");
+                    ip == null
+                            ? "Docker Manager answers DNS for "
+                                    + route.getHostname()
+                                    + ", but this host has no public address yet. Set it on the"
+                                    + " Hosts page and the DNS record is added automatically."
+                            : "Docker Manager answers DNS for "
+                                    + route.getHostname()
+                                    + ": a record pointing at "
+                                    + ip
+                                    + " is added automatically.");
         } else if (route.getTlsMode() != IngressRoute.TlsMode.NONE) {
             certStatus = "Upload a certificate after creating the route";
         }
@@ -956,6 +987,19 @@ public class IngressService {
         certificateService.requestLetsEncryptCertificate(cert.getId(), userId, username);
     }
 
+    /** Let's Encrypt only issues wildcard certificates checked through DNS. */
+    private void checkWildcardTls(String hostname, IngressRoute.TlsMode tls) {
+        if (hostname.startsWith("*.")
+                && tls == IngressRoute.TlsMode.LETS_ENCRYPT
+                && !dns.answersFor(hostname)) {
+            throw bad(
+                    "Let's Encrypt checks wildcard certificates through DNS. Add "
+                            + hostname.substring(2)
+                            + " (or its domain) under DNS and turn DNS on first, or upload a"
+                            + " certificate.");
+        }
+    }
+
     /** Validates a route request; everything here ends up inside nginx.conf. */
     private IngressRoute toRoute(
             ExposeAppRequest request, IngressConfig config, String existingAuthConfig) {
@@ -963,8 +1007,10 @@ public class IngressService {
                 request.hostname() == null
                         ? ""
                         : request.hostname().trim().toLowerCase(Locale.ROOT);
-        if (!InputValidator.isValidHostname(hostname) || !hostname.contains(".")) {
-            throw bad("Enter a full hostname, for example app.example.com");
+        if (!InputValidator.isValidRouteHostname(hostname)) {
+            throw bad(
+                    "Enter a full hostname, for example app.example.com, or a wildcard such as"
+                            + " *.example.com");
         }
         String path =
                 request.pathPrefix() == null || request.pathPrefix().isBlank()
@@ -984,7 +1030,9 @@ public class IngressService {
             throw bad("Unknown route type");
         }
         if (kind == IngressRoute.TargetType.REDIRECT) {
-            return toRedirect(request, hostname, path);
+            IngressRoute redirect = toRedirect(request, hostname, path);
+            checkWildcardTls(hostname, redirect.getTlsMode());
+            return redirect;
         }
 
         String container = "";
@@ -1015,6 +1063,7 @@ public class IngressService {
             throw bad("Unknown protocol or TLS mode");
         }
 
+        checkWildcardTls(hostname, tls);
         IngressRoute route = new IngressRoute();
         route.setHostname(hostname);
         route.setPathPrefix(path);
