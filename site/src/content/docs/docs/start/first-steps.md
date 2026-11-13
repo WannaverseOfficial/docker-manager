@@ -25,7 +25,9 @@ Temporary Password: ...
 2. Enter `admin` and the temporary password, and choose **Sign in**.
 3. On **Choose your password**, enter the temporary password again, then your own password twice (at least 8
    characters; a passphrase of a few words is easy to remember and hard to guess).
-4. Choose **Set password and continue**.
+4. If your account has no address that can receive mail, which is the case for `admin` (it starts as
+   `admin@localhost`), you can enter **Your email** here too. Alerts, like a failed backup, go to it.
+5. Choose **Set password and continue**.
 
 ![The sign-in page, with a painting of a harbour beside the username and password fields.](../../../../assets/screens/login.png)
 

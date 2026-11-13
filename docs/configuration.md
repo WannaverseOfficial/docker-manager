@@ -415,7 +415,7 @@ Written as `groups: { <name>: { ...settings } }`.
 | `name` | text |  | The group's name. Defaults to the entry's key. |
 | `description` | text |  | What the group is for |
 | `permissions` | list of map |  | What members may do. Members are set on each user (groups: [...]). |
-| `permissions[].resource` | `docker-hosts` \| `containers` \| `images` \| `volumes` \| `networks` \| `git-repos` \| `deployments` \| `users` \| `user-groups` \| `audit-logs` \| `notifications` \| `docker-operations` \| `state-snapshots` \| `compose-deployments` \| `rollback` \| `image-policies` \| `registries` \| `ingress` \| `ingress-routes` \| `ingress-certificates` \| `templates` \| `pipelines` \| `pipeline-executions` \| `deployment-environments` \| `stacks` \| `databases` \| `rollouts` \| `security` \| `observability` | `configuration` | `dns` | yes |\| `configuration` | yes | The kind of resource, such as containers, stacks or git-repos |
+| `permissions[].resource` | `docker-hosts` \| `containers` \| `images` \| `volumes` \| `networks` \| `git-repos` \| `deployments` \| `users` \| `user-groups` \| `audit-logs` \| `notifications` \| `docker-operations` \| `state-snapshots` \| `compose-deployments` \| `rollback` \| `image-policies` \| `registries` \| `ingress` \| `ingress-routes` \| `ingress-certificates` \| `templates` \| `pipelines` \| `pipeline-executions` \| `deployment-environments` \| `stacks` \| `databases` \| `rollouts` \| `security` \| `observability` \| `configuration` \| `dns` | yes | The kind of resource, such as containers, stacks or git-repos. databases, security, observability, configuration and dns are for administrators only and can't be granted. |
 | `permissions[].actions` | list of text | yes | Actions, such as [list, read, start, stop], or ["*"] for all |
 | `permissions[].host` | text |  | Only on this host (a key of hosts:, or a host's name). Default: every host. |
 | `permissions[].id` | text |  | Only on this one resource (its id or name). Default: all of them. |
@@ -436,7 +436,7 @@ Written as `users: { <name>: { ...settings } }`.
 | `enabled` | true/false |  | Can sign in (default true) |
 | `groups` | list of text |  | Groups (keys of groups:, or names of groups made by hand) |
 | `permissions` | list of map |  | Permissions of this user alone, besides those of their groups |
-| `permissions[].resource` | `docker-hosts` \| `containers` \| `images` \| `volumes` \| `networks` \| `git-repos` \| `deployments` \| `users` \| `user-groups` \| `audit-logs` \| `notifications` \| `docker-operations` \| `state-snapshots` \| `compose-deployments` \| `rollback` \| `image-policies` \| `registries` \| `ingress` \| `ingress-routes` \| `ingress-certificates` \| `templates` \| `pipelines` \| `pipeline-executions` \| `deployment-environments` \| `stacks` \| `databases` \| `rollouts` \| `security` \| `observability` | `configuration` | `dns` | yes |\| `configuration` | yes | The kind of resource, such as containers, stacks or git-repos |
+| `permissions[].resource` | `docker-hosts` \| `containers` \| `images` \| `volumes` \| `networks` \| `git-repos` \| `deployments` \| `users` \| `user-groups` \| `audit-logs` \| `notifications` \| `docker-operations` \| `state-snapshots` \| `compose-deployments` \| `rollback` \| `image-policies` \| `registries` \| `ingress` \| `ingress-routes` \| `ingress-certificates` \| `templates` \| `pipelines` \| `pipeline-executions` \| `deployment-environments` \| `stacks` \| `databases` \| `rollouts` \| `security` \| `observability` \| `configuration` \| `dns` | yes | The kind of resource, such as containers, stacks or git-repos. databases, security, observability, configuration and dns are for administrators only and can't be granted. |
 | `permissions[].actions` | list of text | yes | Actions, such as [list, read, start, stop], or ["*"] for all |
 | `permissions[].host` | text |  | Only on this host (a key of hosts:, or a host's name). Default: every host. |
 | `permissions[].id` | text |  | Only on this one resource (its id or name). Default: all of them. |
@@ -901,9 +901,9 @@ Written as `pipelines: { <name>: { ...settings } }`.
 | `repository` | text |  | The Git repository it checks out (a key of gitRepositories:, or a repository's name) |
 | `enabled` | true/false |  | Runs when triggered (default true) |
 | `webhook` | true/false |  | Run when the Git server calls the pipeline's webhook (default true) |
-| `polling` | true/false |  | Check the repository for new commits regularly (default false) |
-| `pollingInterval` | whole number |  | Seconds between checks (default 300) |
-| `branchFilter` | text |  | Only run for these branches, such as main or release/* |
+| `polling` | true/false |  | Check the repository for new commits regularly and run for each new one (default false). Needs a repository. |
+| `pollingInterval` | whole number |  | Seconds between checks (default 300, at least 60) |
+| `branchFilter` | text |  | Only run for branches this regular expression fully matches, such as main\|release/.*. Polling without it watches only the repository's branch. |
 | `stages` | list of map |  | Stages, run in order unless dependsOn says otherwise |
 | `stages[].name` | text | yes | The stage's name, unique in the pipeline |
 | `stages[].mode` | `sequential` \| `parallel` |  | sequential (default): steps one after another; parallel: all at once |

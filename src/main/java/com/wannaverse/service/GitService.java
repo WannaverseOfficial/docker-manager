@@ -26,7 +26,9 @@ import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.util.Collection;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.regex.Pattern;
 
 /**
@@ -194,6 +196,11 @@ public class GitService {
 
     /** The newest commit on the configured branch, without cloning. */
     public String getLatestCommitSha(GitRepository repository) throws GitAPIException {
+        return branchHeads(repository).get(repository.getBranch());
+    }
+
+    /** Every branch on the remote with its newest commit, without cloning. */
+    public Map<String, String> branchHeads(GitRepository repository) throws GitAPIException {
         try (Auth auth = auth(repository)) {
             var ls =
                     Git.lsRemoteRepository()
@@ -211,13 +218,15 @@ public class GitService {
                                 + " commits can't be detected. Deploying still works; use a"
                                 + " regular git host (GitHub, GitLab, Gitea) for polling.");
             }
-            String targetBranch = "refs/heads/" + repository.getBranch();
+            Map<String, String> heads = new LinkedHashMap<>();
             for (Ref ref : refs) {
-                if (ref.getName().equals(targetBranch)) {
-                    return ref.getObjectId().getName();
+                if (ref.getName().startsWith("refs/heads/") && ref.getObjectId() != null) {
+                    heads.put(
+                            ref.getName().substring("refs/heads/".length()),
+                            ref.getObjectId().getName());
                 }
             }
-            return null;
+            return heads;
         }
     }
 

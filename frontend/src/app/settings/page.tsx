@@ -4,7 +4,9 @@ import { useEffect, useState } from "react";
 import { useSession } from "@/components/app";
 import { Badge, Button, Empty, Field, Notice, PageHeader, Panel, Select, Spinner, Tabs, Toggle, inputClass, useToast } from "@/components/ui";
 import { api, qs } from "@/lib/api";
-import { dateTime } from "@/lib/format";
+import Link from "next/link";
+import { dateTime, emailDeliverable } from "@/lib/format";
+import type { User } from "@/lib/types";
 import { usePoll } from "@/lib/hooks";
 import { useManaged } from "@/lib/managed";
 import { ManagedNote } from "@/components/managed";
@@ -47,6 +49,7 @@ function Notifications() {
   const { data: events } = usePoll<EventInfo[]>("/api/notifications/available-events");
   const { data: prefs, refresh } = usePoll<{ preferences: Record<string, boolean> }>("/api/notifications/preferences");
   const { data: smtp } = usePoll<{ configured: boolean; enabled: boolean }>("/api/admin/smtp/status");
+  const { data: me } = usePoll<User>("/api/auth/me");
   const toast = useToast();
   if (!events || !prefs) return <Spinner />;
   const byCategory = events.reduce<Record<string, EventInfo[]>>((m, e) => ((m[e.category] ??= []).push(e), m), {});
@@ -61,6 +64,15 @@ function Notifications() {
   return (
     <div className="flex flex-col gap-6 max-w-2xl">
       {smtp && !smtp.configured && <Notice tone="warn">No email server is set up yet, so no emails are sent. An administrator can add one under Email server.</Notice>}
+      {me && !emailDeliverable(me.email) && (
+        <Notice tone="warn">
+          {me.email ? `Your email address, ${me.email}, can't receive mail` : "Your account has no email address"}, so these notifications can&apos;t reach you.{" "}
+          <Link href="/account/" className="underline underline-offset-2">
+            Add your address
+          </Link>
+          .
+        </Notice>
+      )}
       {Object.entries(byCategory).map(([cat, list]) => (
         <Panel key={cat} title={cat[0].toUpperCase() + cat.slice(1)}>
           <div className="flex flex-col gap-4">
@@ -104,6 +116,8 @@ function EmailServer() {
   const [testTo, setTestTo] = useState("");
   const toast = useToast();
   const locked = useManaged().sectionManaged("smtp");
+  const { data: users } = usePoll<User[]>("/api/users");
+  const unreachable = (users ?? []).filter((u) => u.admin && u.enabled && !emailDeliverable(u.email));
 
   useEffect(() => {
     api
@@ -118,6 +132,17 @@ function EmailServer() {
 
   return (
     <div className="grid gap-6 lg:grid-cols-[1fr_minmax(0,20rem)]">
+      {unreachable.length > 0 && (
+        <div className="lg:col-span-2">
+          <Notice tone="warn">
+            Alerts go to administrators by email, but {unreachable.map((u) => u.username).join(", ")} {unreachable.length === 1 ? "has" : "have"} no address that can receive mail.{" "}
+            <Link href="/users/" className="underline underline-offset-2">
+              Set it on Users
+            </Link>
+            , or on Your account for yourself.
+          </Notice>
+        </div>
+      )}
       <Panel title="Outgoing email (SMTP)">
         <form
           className="flex flex-col gap-4"

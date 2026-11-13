@@ -138,6 +138,11 @@ on first sign-in:
 docker logs docker-manager
 ```
 
+Add your email address when you choose your password (or later under Your account), so alerts reach you.
+
+Locked out as the only administrator? Set `DM_RESET_PASSWORD=admin` (the user name) in the container's environment,
+recreate the container, and sign in with the temporary password it prints in the logs. Then remove the variable.
+
 ## Configuration
 
 ### Settings
@@ -155,6 +160,7 @@ docker logs docker-manager
 | `LOG_LEVEL` | `INFO` | Server log level |
 | `DM_CONFIG_FILE` | none | A [configuration file](#configuration-as-code) to apply at startup and on every change |
 | `DM_CONFIG_RECONCILE_SECONDS` | `300` | How often managed things removed by other means are put back; `0` turns it off |
+| `DM_RESET_PASSWORD` | none | A user name: at startup that user gets a new temporary password, printed in the logs. For when the only administrator is locked out; remove it afterwards |
 
 ### Secrets
 

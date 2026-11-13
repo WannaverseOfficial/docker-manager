@@ -506,6 +506,8 @@ export interface Pipeline {
   dockerHostName: string | null;
   enabled: boolean;
   webhookEnabled: boolean;
+  pollingEnabled: boolean;
+  pollingIntervalSeconds: number;
   branchFilter: string | null;
   webhookSecret: string | null;
   stages: PipelineStage[];

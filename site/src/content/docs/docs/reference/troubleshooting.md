@@ -21,6 +21,20 @@ attempts, more are refused for a while; the wait doubles with each further failu
 **Someone forgot their password.** An administrator can open **Users**, choose **Reset password** in that person's
 menu, and give them the temporary password it shows.
 
+**The only administrator forgot their password.** Reset it from the server:
+
+1. Add `DM_RESET_PASSWORD=admin` (use the user name) to the container's environment, for example under
+   `environment:` in the compose file.
+2. Recreate the container: `docker compose up -d`.
+3. Find the temporary password in the log: `docker logs docker-manager`, after `PASSWORD RESET (DM_RESET_PASSWORD)`.
+4. Sign in with it and choose a new password.
+5. Remove `DM_RESET_PASSWORD` and run `docker compose up -d` again.
+
+The user is signed out everywhere, and enabled again if they were disabled. If you forget step 5, nothing is reset
+again once they've chosen their new password; the log just reminds you to remove the variable. If the user is
+managed by the [configuration file](/docs/admin/configuration-as-code/) with a `password:`, sign in with that
+password instead.
+
 **Everyone shares one sign-in limit, or the activity log shows the proxy's address for every user.** Docker Manager
 is behind a reverse proxy that it doesn't trust. See [Behind a reverse proxy](/docs/start/install/#behind-a-reverse-proxy).
 

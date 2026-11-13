@@ -19,7 +19,10 @@ public interface PipelineRepository extends JpaRepository<Pipeline, String> {
 
     List<Pipeline> findByGitRepositoryIdOrderByCreatedAtDesc(String gitRepositoryId);
 
-    @Query("SELECT p FROM Pipeline p WHERE p.pollingEnabled = true AND p.enabled = true")
+    // With the repository loaded: the poller reads it outside a transaction.
+    @Query(
+            "SELECT p FROM Pipeline p JOIN FETCH p.gitRepository WHERE p.pollingEnabled = true"
+                    + " AND p.enabled = true")
     List<Pipeline> findEnabledPollingPipelines();
 
     @Query(

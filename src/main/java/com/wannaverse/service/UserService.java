@@ -31,6 +31,8 @@ import org.springframework.web.server.ResponseStatusException;
 import java.security.SecureRandom;
 import java.util.Base64;
 import java.util.List;
+import java.util.Objects;
+import java.util.regex.Pattern;
 
 @Service
 public class UserService {
@@ -103,6 +105,42 @@ public class UserService {
         return UserResponse.fromEntity(userRepository.save(user));
     }
 
+    /**
+     * Sets a user's email address, or removes it when blank. Addresses are unique, so two people
+     * never share one account's notifications.
+     */
+    void setEmail(User user, String email) {
+        String value = email == null || email.isBlank() ? null : email.trim();
+        if (value != null && !EMAIL.matcher(value).matches()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid email format");
+        }
+        if (Objects.equals(value, user.getEmail())) return;
+        if (value != null && userRepository.existsByEmail(value)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Email already exists");
+        }
+        user.setEmail(value);
+    }
+
+    /** A user changes their own email, confirming it with their password. */
+    @Transactional
+    public UserResponse changeOwnEmail(String userId, String email, String currentPassword) {
+        User user =
+                userRepository
+                        .findById(userId)
+                        .orElseThrow(
+                                () ->
+                                        new ResponseStatusException(
+                                                HttpStatus.NOT_FOUND, "User not found"));
+        if (currentPassword == null
+                || !passwordEncoder.matches(currentPassword, user.getPasswordHash())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Password is incorrect");
+        }
+        setEmail(user, email);
+        return UserResponse.fromEntity(userRepository.save(user));
+    }
+
+    private static final Pattern EMAIL = Pattern.compile("^[^@\\s]+@[^@\\s]+$");
+
     public String generateTempPassword() {
         SecureRandom random = new SecureRandom();
         byte[] bytes = new byte[24];
@@ -120,18 +158,21 @@ public class UserService {
                                         new ResponseStatusException(
                                                 HttpStatus.NOT_FOUND, "User not found"));
 
-        if (request.getUsername() != null && !request.getUsername().equals(user.getUsername())) {
-            if (userRepository.existsByUsername(request.getUsername())) {
+        String username = request.getUsername() == null ? null : request.getUsername().trim();
+        if (username != null && !username.equals(user.getUsername())) {
+            if (username.length() < 3) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST, "Username must be between 3 and 100 characters");
+            }
+            if (userRepository.existsByUsername(username)) {
                 throw new ResponseStatusException(HttpStatus.CONFLICT, "Username already exists");
             }
-            user.setUsername(request.getUsername());
+            user.setUsername(username);
         }
 
-        if (request.getEmail() != null && !request.getEmail().equals(user.getEmail())) {
-            if (userRepository.existsByEmail(request.getEmail())) {
-                throw new ResponseStatusException(HttpStatus.CONFLICT, "Email already exists");
-            }
-            user.setEmail(request.getEmail());
+        // An empty email removes the address.
+        if (request.getEmail() != null) {
+            setEmail(user, request.getEmail());
         }
 
         boolean self = id.equals(SecurityContextHolder.getCurrentUserId());

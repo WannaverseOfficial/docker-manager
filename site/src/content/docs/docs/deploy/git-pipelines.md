@@ -94,7 +94,16 @@ Open **Pipelines** and press **New pipeline**.
 - **Repository**: checked out into `/workspace` before the first stage. **None** runs without a checkout.
 - **Runs on**: the Docker host the steps run on.
 - **Run on push**: gives you a webhook URL to add to the repository.
+- **Check for new commits regularly** (with a repository): for servers that can't receive webhooks. Choose how
+  often: every minute, 5 minutes, 15 minutes or hour.
 - **Only for branches matching**: a regular expression the whole branch name must match, such as `main|release/.*`.
+
+With **Check for new commits regularly** on, each check lists the repository's branches and starts a run for every
+watched branch that has a new commit since its last run. Without a branch filter, only the repository's branch is
+watched. A branch the pipeline has never run on is only noted the first time it's seen, so turning polling on
+doesn't start a run for every existing branch: runs start with its next commit. A commit a webhook run has already
+built isn't run twice. Polling needs a Git server that speaks the usual (smart) HTTP or SSH protocol, like GitHub,
+GitLab, Gitea or Forgejo.
 
 A pipeline is made of **stages**. In each stage, **Steps run** either **One after another** or **At the same time**.
 A stage can wait for other stages to finish first, and **Stop the pipeline if it fails** decides whether a failed

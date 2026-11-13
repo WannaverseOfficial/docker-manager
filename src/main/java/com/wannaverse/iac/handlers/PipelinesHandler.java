@@ -64,13 +64,17 @@ public class PipelinesHandler implements ResourceHandler<PipelinesHandler.Pipeli
         @Doc("Run when the Git server calls the pipeline's webhook (default true)")
         private Boolean webhook;
 
-        @Doc("Check the repository for new commits regularly (default false)")
+        @Doc(
+                "Check the repository for new commits regularly and run for each new one (default"
+                        + " false). Needs a repository.")
         private Boolean polling;
 
-        @Doc("Seconds between checks (default 300)")
+        @Doc("Seconds between checks (default 300, at least 60)")
         private Integer pollingInterval;
 
-        @Doc("Only run for these branches, such as main or release/*")
+        @Doc(
+                "Only run for branches this regular expression fully matches, such as"
+                    + " main|release/.*. Polling without it watches only the repository's branch.")
         private String branchFilter;
 
         @Doc("Stages, run in order unless dependsOn says otherwise")

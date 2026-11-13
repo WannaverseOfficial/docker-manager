@@ -35,6 +35,7 @@ See [why the folders use the same path on both sides](/docs/start/install/#why-t
 | `ENCRYPTION_KEY` | generated | Encrypts stored credentials (registry passwords, git tokens, SSH keys, the SMTP password). At least 32 characters. |
 | `JWT_ACCESS_EXP` | `900000` (15 minutes) | How long a sign-in token lasts, in milliseconds. |
 | `JWT_REFRESH_EXP` | `604800000` (7 days) | How long you stay signed in without signing in again, in milliseconds. |
+| `DM_RESET_PASSWORD` | none | A user name. At startup that user gets a new temporary password, printed in the log, for when nobody else can reset it. Remove it afterwards. See [Troubleshooting](/docs/reference/troubleshooting/#signing-in). |
 
 The secrets are generated on first start and stored in `/app/database/.secrets.properties`. To manage them
 yourself, set each to a random value, for example from `openssl rand -base64 48`. Weak secrets, and the public

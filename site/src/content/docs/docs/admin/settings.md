@@ -44,7 +44,9 @@ Emails go to the address on each user's account. People who aren't administrator
 have access to, and some notifications, like failed database backups, only go to administrators.
 
 :::note
-The first administrator, `admin`, is created with the address `admin@localhost`, which can't receive mail.
+The first administrator, `admin`, starts with the address `admin@localhost`, which can't receive mail. Add a real
+address on first sign-in, or later under **Your account** > **Email**. While an administrator has no address that
+can receive mail, **Email server** says so, and **Your notifications** tells you when your own address can't.
 :::
 
 ## Health monitoring settings

@@ -598,8 +598,8 @@ Written as `pipelines: { <name>: { ...settings } }`.
 | `repository` | text |  | The Git repository it checks out (a key of gitRepositories:, or a repository's name) |
 | `enabled` | true/false |  | Runs when triggered (default true) |
 | `webhook` | true/false |  | Run when the Git server calls the pipeline's webhook (default true) |
-| `polling` | true/false |  | Saved with the pipeline, but this version doesn't check for new commits by itself: use `webhook`, or a git repository's polling (default false) |
-| `pollingInterval` | whole number |  | Seconds between checks, saved with `polling` (default 300) |
+| `polling` | true/false |  | Check the repository for new commits regularly and run for each new one (default false). Needs a repository. |
+| `pollingInterval` | whole number |  | Seconds between checks (default 300, at least 60) |
 | `branchFilter` | text |  | Only run for branches whose whole name matches this regular expression, such as `main` or `main\|release/.*` |
 | `stages` | list of map |  | Stages, run in order unless dependsOn says otherwise |
 | `stages[].name` | text | yes | The stage's name, unique in the pipeline |

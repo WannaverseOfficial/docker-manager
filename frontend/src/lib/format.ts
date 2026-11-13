@@ -108,3 +108,13 @@ export function titleCase(s: string): string {
     .replace(/_/g, " ")
     .replace(/^\w/, (c) => c.toUpperCase());
 }
+
+/**
+ * Whether mail can reach this address: not empty, and not a local-only domain like the first
+ * administrator's admin@localhost.
+ */
+export function emailDeliverable(email: string | null | undefined): boolean {
+  if (!email || !/^[^@\s]+@[^@\s]+$/.test(email)) return false;
+  const domain = email.slice(email.lastIndexOf("@") + 1).toLowerCase();
+  return domain.includes(".") && !/(^|\.)(localhost|localdomain|invalid)$/.test(domain);
+}

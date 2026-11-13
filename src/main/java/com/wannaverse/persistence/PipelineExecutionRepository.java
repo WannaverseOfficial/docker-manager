@@ -36,4 +36,13 @@ public interface PipelineExecutionRepository extends JpaRepository<PipelineExecu
             @Param("status") PipelineExecution.ExecutionStatus status);
 
     List<PipelineExecution> findTop10ByPipelineIdOrderByCreatedAtDesc(String pipelineId);
+
+    /** The newest run of a branch. */
+    Optional<PipelineExecution> findFirstByPipelineIdAndTriggerBranchOrderByCreatedAtDesc(
+            String pipelineId, String triggerBranch);
+
+    /** The newest run of a branch whose commit is known (set once the checkout is done). */
+    Optional<PipelineExecution>
+            findFirstByPipelineIdAndTriggerBranchAndTriggerCommitIsNotNullOrderByCreatedAtDesc(
+                    String pipelineId, String triggerBranch);
 }

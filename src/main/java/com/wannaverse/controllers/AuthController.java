@@ -1,16 +1,22 @@
 package com.wannaverse.controllers;
 
 import com.wannaverse.dto.AuthResponse;
+import com.wannaverse.dto.ChangeEmailRequest;
 import com.wannaverse.dto.ChangePasswordRequest;
 import com.wannaverse.dto.LoginRequest;
 import com.wannaverse.dto.RefreshTokenRequest;
 import com.wannaverse.dto.UserResponse;
+import com.wannaverse.iac.ConfigLockInterceptor;
+import com.wannaverse.persistence.ManagedResourceRepository;
+import com.wannaverse.persistence.Resource;
 import com.wannaverse.persistence.User;
 import com.wannaverse.persistence.UserRepository;
+import com.wannaverse.security.Auditable;
 import com.wannaverse.security.CurrentUser;
 import com.wannaverse.security.SecurityContext;
 import com.wannaverse.service.AuthService;
 import com.wannaverse.service.JwtService;
+import com.wannaverse.service.UserService;
 
 import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
@@ -42,12 +48,20 @@ public class AuthController {
     private final AuthService authService;
     private final UserRepository userRepository;
     private final JwtService jwtService;
+    private final UserService userService;
+    private final ManagedResourceRepository managed;
 
     public AuthController(
-            AuthService authService, UserRepository userRepository, JwtService jwtService) {
+            AuthService authService,
+            UserRepository userRepository,
+            JwtService jwtService,
+            UserService userService,
+            ManagedResourceRepository managed) {
         this.authService = authService;
         this.userRepository = userRepository;
         this.jwtService = jwtService;
+        this.userService = userService;
+        this.managed = managed;
     }
 
     @PostMapping("/login")
@@ -114,6 +128,23 @@ public class AuthController {
         requireAuth(ctx);
         AuthResponse auth = authService.changePassword(ctx.getUserId(), request);
         return withCookie(auth, httpRequest, httpResponse);
+    }
+
+    /**
+     * Changes the signed-in user's email address (empty removes it), confirmed by their password.
+     */
+    @PutMapping("/email")
+    @Auditable(resource = Resource.USERS, action = "update", captureRequestBody = true)
+    public ResponseEntity<UserResponse> changeEmail(
+            @CurrentUser SecurityContext ctx, @Valid @RequestBody ChangeEmailRequest request) {
+        requireAuth(ctx);
+        // Accounts the configuration file manages are changed in the file, like on the Users page.
+        if (managed.existsBySectionAndTargetId("users", ctx.getUserId())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, ConfigLockInterceptor.MESSAGE);
+        }
+        return ResponseEntity.ok(
+                userService.changeOwnEmail(
+                        ctx.getUserId(), request.getEmail(), request.getCurrentPassword()));
     }
 
     @GetMapping("/me")

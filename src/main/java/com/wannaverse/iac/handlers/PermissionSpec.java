@@ -23,7 +23,12 @@ import java.util.TreeSet;
 @Data
 @Doc("Lets the user or group do these actions on this kind of resource")
 public class PermissionSpec {
-    @Doc(value = "The kind of resource, such as containers, stacks or git-repos", required = true)
+    @Doc(
+            value =
+                    "The kind of resource, such as containers, stacks or git-repos. databases,"
+                            + " security, observability, configuration and dns are for"
+                            + " administrators only and can't be granted.",
+            required = true)
     private Resource resource;
 
     @Doc(value = "Actions, such as [list, read, start, stop], or [\"*\"] for all", required = true)

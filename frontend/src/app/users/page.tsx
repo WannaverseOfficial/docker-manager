@@ -7,7 +7,7 @@ import { Badge, Button, Copyable, Empty, Field, IconButton, Menu, Modal, Notice,
 import { api } from "@/lib/api";
 import { useManaged } from "@/lib/managed";
 import { ManagedBadge } from "@/components/managed";
-import { ago, hostLabel, titleCase } from "@/lib/format";
+import { ago, emailDeliverable, hostLabel, titleCase } from "@/lib/format";
 import { usePoll } from "@/lib/hooks";
 import type { Group, Permission, User } from "@/lib/types";
 
@@ -37,6 +37,7 @@ function Users() {
   const { data: groups } = usePoll<Group[]>("/api/groups");
   const [creating, setCreating] = useState(false);
   const [perms, setPerms] = useState<User | null>(null);
+  const [editing, setEditing] = useState<User | null>(null);
   const [temp, setTemp] = useState<{ username: string; password: string } | null>(null);
   const toast = useToast();
   const confirm = useConfirm();
@@ -76,13 +77,14 @@ function Users() {
                   ))}
                 </div>
                 <div className="text-[13px] text-slate">
-                  {u.email}
+                  {emailDeliverable(u.email) ? u.email : <span className="text-caution">{u.email ? `${u.email} (can't receive mail)` : "No email address"}</span>}
                   {` · last signed in ${ago(u.lastLoginAt)}`}
                 </div>
               </div>
               {!managed.isManaged("users", u.id) && (
               <Menu
                 items={[
+                  { label: "Edit", onClick: () => setEditing(u) },
                   !u.admin && { label: "Permissions", onClick: () => setPerms(u) },
                   u.id !== session?.userId && { label: u.admin ? "Remove administrator" : "Make administrator", onClick: () => update(u, { admin: !u.admin }, "Saved") },
                   u.id !== session?.userId && { label: u.enabled ? "Disable" : "Enable", onClick: () => update(u, { enabled: !u.enabled }, u.enabled ? "Disabled and signed out" : "Enabled") },
@@ -150,8 +152,68 @@ function Users() {
           </div>
         </Modal>
       )}
+      {editing && (
+        <EditUser
+          user={editing}
+          onClose={() => setEditing(null)}
+          onSaved={() => {
+            setEditing(null);
+            toast("Saved");
+            refresh();
+          }}
+        />
+      )}
       {perms && <PermissionsDialog title={`${perms.username}'s permissions`} base={`/api/users/${perms.id}/permissions`} onClose={() => setPerms(null)} />}
     </>
+  );
+}
+
+function EditUser({ user, onClose, onSaved }: { user: User; onClose: () => void; onSaved: () => void }) {
+  const [username, setUsername] = useState(user.username);
+  const [email, setEmail] = useState(user.email ?? "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const changed = username.trim() !== user.username || email.trim() !== (user.email ?? "");
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={`Edit ${user.username}`}
+      footer={
+        <>
+          <Button tone="quiet" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            busy={busy}
+            disabled={!username.trim() || !changed}
+            onClick={async () => {
+              setBusy(true);
+              setError(null);
+              try {
+                await api.put(`/api/users/${user.id}`, { username: username.trim(), email: email.trim() });
+                onSaved();
+              } catch (e) {
+                setError((e as Error).message);
+                setBusy(false);
+              }
+            }}
+          >
+            Save
+          </Button>
+        </>
+      }
+    >
+      <div className="flex flex-col gap-4">
+        <Field label="Username" hint="Used to sign in. Changing it takes effect at their next sign-in.">
+          <input className={inputClass} value={username} onChange={(e) => setUsername(e.target.value)} autoCapitalize="off" autoComplete="off" />
+        </Field>
+        <Field label="Email" optional hint="Where their notifications go. Leave empty for none." error={email.trim() && !emailDeliverable(email.trim()) ? "Mail can't be delivered to this address." : null}>
+          <input className={inputClass} type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
+        </Field>
+        {error && <Notice tone="error">{error}</Notice>}
+      </div>
+    </Modal>
   );
 }
 

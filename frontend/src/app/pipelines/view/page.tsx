@@ -142,6 +142,12 @@ function Runs({ pipeline, onChanged }: { pipeline: Pipeline; onChanged: () => vo
           {pipeline.branchFilter && <span className="text-slate">· branches matching {pipeline.branchFilter}</span>}
         </div>
       )}
+      {pipeline.pollingEnabled && pipeline.gitRepositoryId && (
+        <div className="mb-6 rounded-xl bg-well px-4 py-3 text-[13px] text-slate">
+          Checks {pipeline.gitRepositoryName ?? "the repository"} for new commits every {pollLabel(pipeline.pollingIntervalSeconds)}
+          {pipeline.branchFilter ? `, on branches matching ${pipeline.branchFilter}` : ""}.
+        </div>
+      )}
       {!runs ? (
         <Spinner />
       ) : runs.length === 0 ? (
@@ -300,6 +306,8 @@ function Editor({ pipeline, onSaved }: { pipeline: Pipeline | null; onSaved?: ()
   const [repoId, setRepoId] = useState(pipeline?.gitRepositoryId ?? "");
   const [host, setHost] = useState(pipeline?.dockerHostId ?? hostId ?? "");
   const [webhook, setWebhook] = useState(pipeline?.webhookEnabled ?? false);
+  const [polling, setPolling] = useState(pipeline?.pollingEnabled ?? false);
+  const [pollEvery, setPollEvery] = useState(pipeline?.pollingIntervalSeconds || 300);
   const [branchFilter, setBranchFilter] = useState(pipeline?.branchFilter ?? "");
   const [stages, setStages] = useState<(PipelineStage & { id: string })[]>(
     pipeline?.stages.length
@@ -327,6 +335,8 @@ function Editor({ pipeline, onSaved }: { pipeline: Pipeline | null; onSaved?: ()
       dockerHostId: host,
       enabled: pipeline?.enabled ?? true,
       webhookEnabled: webhook,
+      pollingEnabled: !!repoId && polling,
+      pollingIntervalSeconds: pollEvery,
       branchFilter: branchFilter || null,
       stages: stages.map((s, i) => ({
         id: s.id,
@@ -387,9 +397,28 @@ function Editor({ pipeline, onSaved }: { pipeline: Pipeline | null; onSaved?: ()
             </Field>
           </div>
           <div className="mt-4 grid gap-4 sm:grid-cols-2 items-start">
-            <Toggle checked={webhook} onChange={setWebhook} label="Run on push" hint="Gives you a webhook URL to add to the repository." />
-            {webhook && (
-              <Field label="Only for branches matching" optional hint="A regular expression, e.g. main|release/.*">
+            <div className="flex flex-col gap-4">
+              <Toggle checked={webhook} onChange={setWebhook} label="Run on push" hint="Gives you a webhook URL to add to the repository." />
+              {repoId && (
+                <Toggle checked={polling} onChange={setPolling} label="Check for new commits regularly" hint="For servers that can't receive webhooks. Runs when a watched branch gets a new commit." />
+              )}
+              {repoId && polling && (
+                <Field label="Check every">
+                  <Select value={String(pollEvery)} onChange={(x) => setPollEvery(Number(x))} className="sm:max-w-xs">
+                    <option value="60">Minute</option>
+                    <option value="300">5 minutes</option>
+                    <option value="900">15 minutes</option>
+                    <option value="3600">Hour</option>
+                  </Select>
+                </Field>
+              )}
+            </div>
+            {(webhook || (repoId && polling)) && (
+              <Field
+                label="Only for branches matching"
+                optional
+                hint={`A regular expression that must match the whole branch name, e.g. main|release/.*${polling ? ". Left empty, checks only the repository's branch." : ""}`}
+              >
                 <input className={`${inputClass} font-mono`} value={branchFilter} onChange={(e) => setBranchFilter(e.target.value)} />
               </Field>
             )}
@@ -609,4 +638,11 @@ function Editor({ pipeline, onSaved }: { pipeline: Pipeline | null; onSaved?: ()
       </div>
     </>
   );
+}
+
+function pollLabel(seconds: number) {
+  const s = Math.max(seconds || 300, 60);
+  if (s % 3600 === 0) return s === 3600 ? "hour" : `${s / 3600} hours`;
+  if (s % 60 === 0) return s === 60 ? "minute" : `${s / 60} minutes`;
+  return `${s} seconds`;
 }

@@ -54,6 +54,9 @@ its members had through it.
 
 Each user's menu has:
 
+- **Edit**: change their **Username** (used at their next sign-in) or **Email** (where their notifications go;
+  leave it empty for none). Two users can't share an address. An address that can't receive mail, like
+  `admin@localhost`, is shown in the list.
 - **Permissions** (not for administrators, who can already do everything)
 - **Make administrator** or **Remove administrator**
 - **Disable** or **Enable**: a disabled user is signed out and can't sign in until enabled again.
@@ -81,6 +84,7 @@ gain more access:
 Everyone can open **Your account** from their name at the bottom of the sidebar:
 
 - **Password**: change your password (at least 8 characters). Your other sessions are signed out.
+- **Email**: change or remove the address your notifications go to. Enter your password to confirm.
 - **Sessions**: **Sign out everywhere** signs you out on every browser and device, including this one.
 
 Users, groups and their permissions can also be described in the
