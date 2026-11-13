@@ -110,7 +110,7 @@ Settings left out take their defaults. Keys starting with `x-` are ignored, so Y
 
 ```yaml
 x-defaults: &web
-  restartPolicy: unless-stopped
+  restart: unless-stopped
   networks: [web]
 
 containers:

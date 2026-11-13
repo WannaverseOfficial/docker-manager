@@ -57,3 +57,6 @@ frontend/next-env.d.ts
 
 # Runtime data
 stacks/
+
+# Website (built and published separately to GitHub Pages)
+site/
