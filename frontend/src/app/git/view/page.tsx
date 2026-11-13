@@ -137,7 +137,7 @@ function Repo() {
                 <>
                   <p className="text-[13px] text-slate mb-2">Add this URL to the repository&apos;s webhooks (content type JSON, push events). Keep it private.</p>
                   <div className="rounded-lg bg-well px-3 py-2">
-                    <Copyable text={repo.webhookUrl} display={repo.webhookUrl.replace(/[^/]{12}$/, "…")} />
+                    <Copyable wrap text={repo.webhookUrl} display={repo.webhookUrl.replace(/[^/]{12}$/, "…")} className="w-full justify-between" />
                   </div>
                   <p className="text-[12.5px] text-slate mt-2">Also set the webhook secret to the last part of the URL (GitHub, Gitea). Signed requests are verified and deploy the exact pushed commit; unsigned ones deploy the branch&apos;s latest commit.</p>
                 </>

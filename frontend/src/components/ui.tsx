@@ -861,16 +861,17 @@ export async function copyText(text: string): Promise<boolean> {
   }
 }
 
-export function Copyable({ text, display, className = "" }: { text: string; display?: ReactNode; className?: string }) {
+/** Monospace text with a copy button. `wrap` breaks long values over several lines instead of cutting them off. */
+export function Copyable({ text, display, wrap = false, className = "" }: { text: string; display?: ReactNode; wrap?: boolean; className?: string }) {
   const [copied, setCopied] = useState(false);
   return (
-    <span className={`inline-flex items-center gap-1.5 min-w-0 ${className}`}>
-      <span className="truncate font-mono text-[13px]">{display ?? text}</span>
+    <span className={`inline-flex ${wrap ? "items-start" : "items-center"} gap-1.5 min-w-0 max-w-full ${className}`}>
+      <span className={`min-w-0 font-mono text-[13px] ${wrap ? "break-all" : "truncate"}`}>{display ?? text}</span>
       <button
         type="button"
         aria-label="Copy"
         title="Copy"
-        className="shrink-0 text-slate hover:text-ink"
+        className={`shrink-0 text-slate hover:text-ink ${wrap ? "mt-[3px]" : ""}`}
         onClick={async () => {
           if (await copyText(text)) {
             setCopied(true);
